@@ -15,7 +15,7 @@ MAX_SEARCH_RESULT_LIMIT = 5
 DEFAULT_CHUNK_WINDOW_RADIUS = 3
 
 # Document retrieval limits
-MAX_DOCUMENT_CHUNK_WINDOW = 40
+MAX_DOCUMENT_CHUNK_WINDOW = 10
 
 # Tool result token limits - proactive truncation
 MAX_TOOL_TOKENS = 5000

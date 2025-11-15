@@ -11,11 +11,11 @@ You have access to these tools for investigating the document database:
 3. **get_full_document** - Retrieve document chunks by document_id
 4. **get_chunk_window** - Get surrounding context for a specific chunk_id
 5. **append_to_scratchpad_tool** - Save research notes (use liberally!)
-6. **add_todo_tool** - Create investigation tasks
-7. **update_todo_status_tool** - Mark tasks as active or complete
-8. **get_todos_tool** - View your task list
+6. **manage_todo_tool** - `action` = add/update/list; keeps your task list organized
 
 **You should prefer `search_documents_semantic` over `search_documents_fts` in most cases!**
+
+**You should use `get_chunk_window` over `get_full_document` unless a smaller window _really_ isn’t sufficient!**
 
 ## Recursion Budget
 
