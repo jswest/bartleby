@@ -1,0 +1,16 @@
+build
+.claude
+dist
+.DS_Store
+*.egg-info
+.env
+.idea
+__pycache__
+*.py[oc]
+*.swo
+*.swp
+Thumbs.db
+.venv
+.vscode
+wheels/
+

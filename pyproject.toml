@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bartleby"
+version = "0.1.0"
+description = "An AI-powered scrivener who would definitely prefer not to."
+authors = [
+    {name = "John West", email = "john@beebe-west.com"}
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "apsw>=3.51.0.0",
+    "langchain>=1.0.5",
+    "langchain-anthropic>=0.3.11",
+    "langchain-ollama>=1.0.0",
+    "langchain-openai>=0.3.7",
+    "langchain-text-splitters>=1.0.0",
+    "langgraph>=1.0.3",
+    "loguru>=0.7.3",
+    "numpy>=2.3.4",
+    "pillow>=12.0.0",
+    "pymupdf>=1.26.6",
+    "pytesseract>=0.3.13",
+    "pyyaml>=6.0.3",
+    "rich>=14.2.0",
+    "sentence-transformers>=5.1.2",
+    "sqlite-vec>=0.1.6",
+    "tiktoken>=0.12.0",
+    "tqdm>=4.67.1",
+]
+
+[project.scripts]
+bartleby = "bartleby.cli:main"
+
+[tool.setuptools.package-data]
+bartleby = ["read/schema.sql"]
