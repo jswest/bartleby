@@ -55,6 +55,7 @@ def full_text_search(
     db_path: Path,
     query: str,
     limit: int = 10,
+    document_id: Optional[str] = None,
 ) -> List[SearchResult]:
     """
     Perform full-text search using SQLite FTS5.
@@ -90,13 +91,20 @@ def full_text_search(
         LEFT JOIN pages sp ON s.page_id = sp.page_id
         LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
         WHERE fts_chunks MATCH ?
+    """
+    params = [sanitized_query]
+    if document_id:
+        sql += "\n          AND d.document_id = ?"
+        params.append(document_id)
+    sql += """
         ORDER BY rank
         LIMIT ?
     """
 
     results = []
     try:
-        for row in cursor.execute(sql, (sanitized_query, limit)):
+        params.append(limit)
+        for row in cursor.execute(sql, params):
             results.append(SearchResult(
                 chunk_id=row[0],
                 body=row[1],
@@ -119,6 +127,7 @@ def semantic_search(
     query: str,
     embedding_model: SentenceTransformer,
     limit: int = 10,
+    document_id: Optional[str] = None,
 ) -> List[SearchResult]:
     """
     Perform semantic search using vector similarity.
@@ -156,11 +165,17 @@ def semantic_search(
         LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
         WHERE vc.embedding MATCH ?
           AND k = ?
+    """
+    params = [query_bytes, query_bytes, limit]
+    if document_id:
+        sql += "\n          AND d.document_id = ?"
+        params.append(document_id)
+    sql += """
         ORDER BY distance
     """
 
     results = []
-    for row in cursor.execute(sql, (query_bytes, query_bytes, limit)):
+    for row in cursor.execute(sql, params):
         # Convert distance to similarity score (1 - distance)
         similarity = 1.0 - row[2]
         results.append(SearchResult(

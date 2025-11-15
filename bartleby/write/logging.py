@@ -287,7 +287,7 @@ class StreamingLogger:
         else:
             self.current_phase = "Synthesis"
 
-    def _write_log(self, tool_info: Dict[str, Any], result: str, short: str, long: str):
+    def _write_log(self, tool_info: Dict[str, Any], result: Any, short: str, long: str):
         """
         Write entry to log.json with all context.
 
@@ -303,7 +303,7 @@ class StreamingLogger:
             "phase": self.current_phase,
             "tool_name": tool_info['name'],
             "inputs": tool_info['args'],
-            "outputs_summary": str(result)[:500],
+            "outputs_summary": self._prepare_output_for_log(result),
             "summary_short": short,
             "summary_long": long,
             "tokens_at_entry": {
@@ -315,3 +315,51 @@ class StreamingLogger:
 
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry, indent=2) + "\n")
+
+    def _prepare_output_for_log(self, output: Any) -> Any:
+        """
+        Format tool output for log consumption.
+
+        Attempts to keep structured data as JSON when possible.
+        """
+        if isinstance(output, (dict, list)):
+            return self._truncate_structured_output(output)
+
+        if isinstance(output, str):
+            parsed = None
+            try:
+                parsed = json.loads(output)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                return self._truncate_structured_output(parsed)
+            return output[:500]
+
+        return str(output)[:500]
+
+    def _truncate_structured_output(self, data: Any) -> Any:
+        """
+        Avoid logging extremely large payloads by returning previews.
+        """
+        if isinstance(data, list):
+            if len(data) > 5:
+                return {
+                    "preview": data[:5],
+                    "truncated": True,
+                    "total_items": len(data)
+                }
+            return data
+
+        if isinstance(data, dict):
+            if len(data) <= 10:
+                return data
+            truncated = {}
+            for idx, (key, value) in enumerate(data.items()):
+                if idx >= 10:
+                    truncated["__truncated__"] = True
+                    truncated["__total_keys__"] = len(data)
+                    break
+                truncated[key] = value
+            return truncated
+
+        return data

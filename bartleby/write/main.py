@@ -24,6 +24,7 @@ from bartleby.lib.consts import (
     DEFAULT_MAX_RECURSIONS,
     DEFAULT_AGENT_CONTEXT_TOKENS,
     DEFAULT_AGENT_RETRY_ATTEMPTS,
+    DEFAULT_MAX_TOTAL_TOKENS,
     EMBEDDING_MODEL,
 )
 from bartleby.lib.utils import load_config, load_llm_from_config
@@ -47,7 +48,7 @@ def format_display(display_data: dict) -> Text:
 
     # Line 1: Phase and recursion
     lines.append(Text(
-        f"PHASE: {display_data['phase']} | RECURSION: {display_data['recursion']}/{display_data['max_recursions']}"
+        f"({display_data['recursion']}/{display_data['max_recursions']} iterations used)"
     ))
 
     # Blank line
@@ -125,6 +126,15 @@ def main(db_path: Path):
         except (TypeError, ValueError):
             return default
 
+    def _coerce_non_negative_optional(value):
+        try:
+            if value is None:
+                return None
+            parsed = int(value)
+            return parsed if parsed >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
     # Set up the bartleby folder.
     bartleby_dir_path = db_path.parent / ".bartleby"
     bartleby_dir_path.mkdir(parents=True, exist_ok=True)
@@ -187,6 +197,9 @@ def main(db_path: Path):
     agent_retry_attempts = _coerce_non_negative_int(
         config.get("agent_retry_attempts"), DEFAULT_AGENT_RETRY_ATTEMPTS
     )
+    token_budget_limit = _coerce_non_negative_optional(
+        config.get("token_budget", DEFAULT_MAX_TOTAL_TOKENS)
+    )
 
     # Create console and logger (pass search_tools for todo list access)
     console = Console()
@@ -197,6 +210,17 @@ def main(db_path: Path):
         max_recursions=max_recursions,
         search_tools=search_tools
     )
+
+    def _budget_status():
+        data = {
+            "recursions_used": logger.recursion,
+            "recursion_limit": max_recursions,
+            "tokens_used": token_counter.total_tokens,
+        }
+        if token_budget_limit is not None:
+            data["token_budget"] = token_budget_limit
+            data["tokens_remaining_estimate"] = max(token_budget_limit - token_counter.total_tokens, 0)
+        return data
 
     try:
         with Live(format_display(logger.get_display_data()), console=console, refresh_per_second=4) as live:
@@ -209,6 +233,8 @@ def main(db_path: Path):
                 max_recursions=max_recursions,
                 context_token_limit=context_token_limit,
                 model_retry_attempts=agent_retry_attempts,
+                token_budget_limit=token_budget_limit,
+                budget_status_getter=_budget_status,
             ):
                 # Handle debug events (recursion steps) if present
                 if "debug" in result:

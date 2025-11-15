@@ -132,7 +132,6 @@ class TodoList:
             "pending": pending,
             "active": active,
             "complete": complete,
-            "all_todos": self.todos,
         }
 
     def clear_todos(self) -> Dict[str, str]:

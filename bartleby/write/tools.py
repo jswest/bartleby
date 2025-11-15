@@ -90,7 +90,7 @@ class DocumentSearchTools:
             return [r.to_metadata_dict() for r in results]
 
         @tool
-        def search_documents_fts(query: str, limit: int = DEFAULT_SEARCH_RESULT_LIMIT) -> List[Dict[str, Any]]:
+        def search_documents_fts(query: str, limit: int = DEFAULT_SEARCH_RESULT_LIMIT, document_id: str | None = None) -> List[Dict[str, Any]]:
             """
             Search documents using full-text search (keyword matching).
 
@@ -105,12 +105,12 @@ class DocumentSearchTools:
                 List of matching document chunks with metadata
             """
             limit = sanitize_limit(limit)
-            results = full_text_search(db_path, query, limit)
+            results = full_text_search(db_path, query, limit, document_id=document_id)
             data = result_metadata(results)
             return truncate_result(data, max_tokens=MAX_TOOL_TOKENS)
 
         @tool
-        def search_documents_semantic(query: str, limit: int = DEFAULT_SEARCH_RESULT_LIMIT) -> List[Dict[str, Any]]:
+        def search_documents_semantic(query: str, limit: int = DEFAULT_SEARCH_RESULT_LIMIT, document_id: str | None = None) -> List[Dict[str, Any]]:
             """
             Search documents using semantic similarity (meaning-based).
 
@@ -126,7 +126,7 @@ class DocumentSearchTools:
             """
             limit = sanitize_limit(limit)
             with embedding_lock:
-                results = semantic_search(db_path, query, embedding_model_getter(), limit)
+                results = semantic_search(db_path, query, embedding_model_getter(), limit, document_id=document_id)
             data = result_metadata(results)
             return truncate_result(data, max_tokens=MAX_TOOL_TOKENS)
 
