@@ -104,9 +104,7 @@ class StreamingLogger:
         "get_full_document": "(reading document)",
         "get_chunk_window": "(reading passage)",
         "append_to_scratchpad_tool": "(taking notes)",
-        "add_todo_tool": "(adding to-do item)",
-        "update_todo_status_tool": "(updating to-do item)",
-        "get_todos_tool": "(checking to-do items)",
+        "manage_todo_tool": "(managing to-dos)",
     }
 
     def __init__(
@@ -241,7 +239,7 @@ class StreamingLogger:
         Returns:
             Friendly name with emoji (e.g., "🔍 Full-text search")
         """
-        return self.TOOL_MESSAGES.get(tool_name, f"⚙️ {tool_name}")
+        return self.TOOL_MESSAGES.get(tool_name, tool_name)
 
     def get_display_data(self) -> Dict[str, Any]:
         """

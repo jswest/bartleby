@@ -236,48 +236,38 @@ class DocumentSearchTools:
             return append_to_scratchpad(db_path, content)
 
         @tool
-        def add_todo_tool(task: str) -> Dict[str, Any]:
+        def manage_todo_tool(action: str, task: str = "", status: str = "") -> Dict[str, Any]:
             """
-            Add a new task to your todo list.
-
-            Use this to track tasks you need to complete. All todos start with
-            'pending' status.
+            Manage your todo list in one place.
 
             Args:
-                task: Description of the task
+                action: 'add', 'update', or 'list'
+                task: Description of the task (required for add/update)
+                status: New status when action='update' ('pending', 'active', 'complete')
 
             Returns:
-                Confirmation with the new todo
+                Dictionary with the operation result and current todo info
             """
-            return todo_list.add_todo(task)
+            action_normalized = (action or "").strip().lower()
 
-        @tool
-        def update_todo_status_tool(task: str, status: str) -> Dict[str, Any]:
-            """
-            Update the status of a todo item.
+            if action_normalized == "add":
+                if not task.strip():
+                    return {"error": "Task description is required when action='add'."}
+                result = todo_list.add_todo(task)
+                return {"message": result.get("message"), "todo": result.get("todo"), "total_todos": result.get("total_todos")}
 
-            Use this to mark tasks as active (in progress) or complete.
+            if action_normalized == "update":
+                if not task.strip():
+                    return {"error": "Task description is required when action='update'."}
+                if status.strip().lower() not in {"pending", "active", "complete"}:
+                    return {"error": "Status must be 'pending', 'active', or 'complete' when action='update'."}
+                return todo_list.update_todo_status(task, status.lower())
 
-            Args:
-                task: Part of the task description to match (case-insensitive)
-                status: New status - must be 'pending', 'active', or 'complete'
+            if action_normalized in {"list", "get"}:
+                todos = todo_list.get_todos()
+                return {"todos": todos}
 
-            Returns:
-                Confirmation with updated todo
-            """
-            return todo_list.update_todo_status(task, status)
-
-        @tool
-        def get_todos_tool() -> Dict[str, Any]:
-            """
-            View all your todos organized by status.
-
-            Returns todos grouped into pending, active, and complete categories.
-
-            Returns:
-                Dictionary with todos organized by status
-            """
-            return todo_list.get_todos()
+            return {"error": "Invalid action. Use 'add', 'update', or 'list'."}
 
         return [
             search_documents_fts,
@@ -286,7 +276,5 @@ class DocumentSearchTools:
             get_chunk_window,
             read_scratchpad_tool,
             append_to_scratchpad_tool,
-            add_todo_tool,
-            update_todo_status_tool,
-            get_todos_tool,
+            manage_todo_tool,
         ]
