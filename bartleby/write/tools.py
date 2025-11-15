@@ -233,7 +233,7 @@ class DocumentSearchTools:
             Returns:
                 Confirmation message
             """
-            return append_to_scratchpad(db_path, content)
+            return append_to_scratchpad(scratchpad_path, content)
 
         @tool
         def manage_todo_tool(action: str, task: str = "", status: str = "") -> Dict[str, Any]:
