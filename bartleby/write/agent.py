@@ -152,11 +152,25 @@ def run_agent(
     # Stream agent execution (yield chunks for main.py to process)
     final_response = ""
 
-    for chunk in agent.stream(
+    stream_modes: list[str] = ["values", "debug"]
+
+    for event in agent.stream(
         {"messages": [("user", f"Begin your investigation: {user_direction}")]},
-        stream_mode="values",
+        stream_mode=stream_modes,
         config={"callbacks": [token_counter], "recursion_limit": max_recursions},
     ):
+        mode = None
+        chunk = event
+        if isinstance(event, tuple) and len(event) == 2:
+            mode, payload = event
+            if mode == "debug":
+                yield {"debug": payload}
+                continue
+            if mode == "values":
+                chunk = payload
+            else:
+                chunk = payload
+
         # Yield chunk for main.py to handle display
         yield {"chunk": chunk}
 

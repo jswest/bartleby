@@ -210,16 +210,26 @@ def main(db_path: Path):
                 context_token_limit=context_token_limit,
                 model_retry_attempts=agent_retry_attempts,
             ):
+                # Handle debug events (recursion steps) if present
+                if "debug" in result:
+                    debug_event = result["debug"]
+                    step = debug_event.get("step")
+                    if isinstance(step, int):
+                        logger.sync_recursion(step)
+                    continue
+
                 # Handle streaming chunks
                 if "chunk" in result:
                     chunk = result["chunk"]
 
                     if "messages" in chunk and len(chunk["messages"]) > 0:
                         last_message = chunk["messages"][-1]
-
-                        # Detect tool calls (start of new recursion)
-                        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                        # Treat every new AI reasoning step as a recursion start
+                        if getattr(last_message, "type", None) == "ai":
                             logger.on_recursion_start()
+
+                        # Detect tool calls (start of tool execution)
+                        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
                             for tool_call in last_message.tool_calls:
                                 tool_name = tool_call.get('name', '')
                                 tool_call_id = tool_call.get('id', '')

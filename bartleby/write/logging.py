@@ -155,6 +155,12 @@ class StreamingLogger:
         self.recursion += 1
         self._update_phase()
 
+    def sync_recursion(self, step: int):
+        """Ensure recursion counter reflects LangGraph's reported step."""
+        if step > self.recursion:
+            self.recursion = step
+            self._update_phase()
+
     def on_tool_call(self, tool_name: str, tool_id: str, args: Dict[str, Any]):
         """
         Store pending tool call.
