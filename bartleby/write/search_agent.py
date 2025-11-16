@@ -1,52 +1,34 @@
 """Search Agent - Focused searcher with 5-search limit per invocation."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Dict, Any
+from typing import Dict, Any
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import before_model
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage
-from langchain_core.messages.utils import trim_messages, count_tokens_approximately
-from langchain.agents.middleware import before_model
+from langchain_core.messages.utils import count_tokens_approximately, trim_messages
+from langgraph.errors import GraphRecursionError
 from loguru import logger
 
-try:  # pragma: no cover - fallback if langgraph isn't available
-    from langgraph.errors import GraphRecursionError
-except ImportError:  # pragma: no cover
-    class GraphRecursionError(RuntimeError):
-        """Placeholder for environments without LangGraph installed."""
-        pass
-
-from bartleby.lib.consts import DEFAULT_AGENT_CONTEXT_TOKENS
-from bartleby.write.tools import DocumentSearchTools
+from bartleby.lib.consts import DEFAULT_AGENT_CONTEXT_TOKENS, MAX_SEARCH_OPERATIONS
+from bartleby.write.findings_schema import SearchFindings, render_findings_to_markdown
 from bartleby.write.token_counter import TokenCounterCallback
+from bartleby.write.tools import get_tools
 
 
-# Maximum tool calls per search agent invocation
-MAX_SEARCH_OPERATIONS = 5
+@dataclass
+class SearchBudget:
+    """Tracks tool usage and produces warnings when the limit approaches."""
 
-
-class SearchBudgetTracker:
-    """Tracks how many tool calls the Search Agent has made in this task."""
-
-    def __init__(self, max_calls: int):
-        self.max_calls = max_calls
-        self.calls_made = 0
-        self.exhausted = False
+    max_calls: int
+    calls_made: int = 0
+    exhausted: bool = False
 
     def before_tool_call(self, tool_name: str) -> Any | None:
-        """
-        Hook executed before any search tool is invoked.
-
-        Returns a short-circuit payload if the budget is exhausted so that the
-        actual expensive tool call never fires.
-        """
         if self.calls_made >= self.max_calls:
             self.exhausted = True
-            logger.warning(
-                f"Search Agent budget exhausted: attempted '{tool_name}' after "
-                f"{self.calls_made}/{self.max_calls} tool calls."
-            )
             return {
                 "error": "SEARCH_LIMIT_REACHED",
                 "message": (
@@ -55,8 +37,36 @@ class SearchBudgetTracker:
                 ),
                 "tool_attempt": tool_name,
             }
-
         self.calls_made += 1
+        return None
+
+    def warning_messages(self) -> list[str]:
+        remaining = self.max_calls - self.calls_made
+        if self.exhausted:
+            return [
+                "🚨 SEARCH BUDGET EXHAUSTED: The Search Agent attempted another tool call "
+                f"after using {self.calls_made}/{self.max_calls} searches. You must summarize now."
+            ]
+        if self.calls_made >= self.max_calls:
+            return [
+                f"🚨 SEARCH BUDGET EXHAUSTED: You have used all {self.max_calls} searches. "
+                "You MUST summarize your findings NOW. No more tool calls are available."
+            ]
+        if remaining == 1:
+            return [
+                f"🚨 FINAL SEARCH: You have used {self.calls_made}/{self.max_calls} searches. "
+                "Only 1 search remaining. Make it count, then summarize."
+            ]
+        if remaining == 2:
+            return [
+                f"⏰ WARNING: You have used {self.calls_made}/{self.max_calls} searches. "
+                "Only 2 searches remaining. Plan carefully."
+            ]
+        return []
+
+    def tools_available(self) -> list[str] | None:
+        if self.exhausted or self.calls_made >= self.max_calls:
+            return []
         return None
 
 
@@ -66,81 +76,29 @@ def _load_search_agent_prompt() -> str:
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
 
-    # Fallback prompt if file doesn't exist yet
-    return """You are a focused research assistant. You have been delegated a specific research task.
-
-Your job:
-1. Execute searches to answer the task question
-2. Read relevant passages using get_chunk_window
-3. Write your findings to the scratchpad with citations
-4. You have a MAXIMUM of 5 tool calls per task
-
-Guidelines:
-- Be efficient: You only get 5 tool calls, so make them count
-- Always write findings to scratchpad immediately after reading
-- Include document IDs, chunk IDs, and specific quotes
-- Prefer get_chunk_window over get_full_document
-- Use semantic search for concepts, FTS for exact terms
-
-After your 5 tool calls, summarize what you learned in your final response."""
-
 
 def build_search_limit_middleware(
     max_calls: int = MAX_SEARCH_OPERATIONS,
-    tracker: SearchBudgetTracker | None = None,
+    tracker: SearchBudget | None = None,
 ):
     """Create middleware that enforces tool call limits."""
 
-    calls_made = {"count": 0}
+    def _count_tool_messages(messages) -> int:
+        return sum(
+            1
+            for msg in messages
+            if hasattr(msg, "type") and msg.type == "tool"
+        )
 
     @before_model(name="search_limit")
     def _limit_searches(state, runtime):
-        # Count tool usage
-        if tracker:
-            tool_count = tracker.calls_made
-        else:
-            tool_count = sum(
-                1 for msg in state["messages"]
-                if hasattr(msg, 'type') and msg.type == 'tool'
-            )
+        tool_usage = tracker.calls_made if tracker else _count_tool_messages(state["messages"])
 
-        calls_made["count"] = tool_count
+        warnings = tracker.warning_messages() if tracker else []
+        if not tracker:
+            temp_tracker = SearchBudget(max_calls, calls_made=tool_usage)
+            warnings = temp_tracker.warning_messages()
 
-        # Build warning messages based on usage
-        warnings = []
-        remaining = max_calls - tool_count
-
-        tools_available = None
-
-        if tracker and tracker.exhausted:
-            warnings.append(
-                "🚨 SEARCH BUDGET EXHAUSTED: The Search Agent attempted to call another tool "
-                f"after using {tracker.calls_made}/{tracker.max_calls} searches. You must summarize now."
-            )
-            tools_available = []
-        elif tool_count >= max_calls:
-            # Budget exhausted - remove tools and force summary
-            logger.info(f"Search Agent: Reached {max_calls} tool call limit. Forcing summary.")
-            warnings.append(
-                f"🚨 SEARCH BUDGET EXHAUSTED: You have used all {max_calls} searches. "
-                "You MUST summarize your findings NOW. No more tool calls are available."
-            )
-            tools_available = []
-
-        elif tool_count == max_calls - 1:
-            # One search remaining
-            warnings.append(
-                f"🚨 FINAL SEARCH: You have used {tool_count}/{max_calls} searches. "
-                f"Only {remaining} search remaining. Make it count, then summarize."
-            )
-        elif tool_count >= max_calls - 2:
-            # Two searches remaining
-            warnings.append(
-                f"⏰ WARNING: You have used {tool_count}/{max_calls} searches. "
-                f"Only {remaining} searches remaining. Plan carefully."
-            )
-
-        # Trim messages
         trimmed = trim_messages(
             state["messages"],
             strategy="last",
@@ -150,12 +108,14 @@ def build_search_limit_middleware(
             end_on=("human", "tool"),
         )
 
-        # Add warning messages if any
         if warnings:
-            constraint_msg = HumanMessage(content=f"[SYSTEM ALERT]\n\n" + "\n\n".join(warnings))
+            constraint_msg = HumanMessage(
+                content="[SYSTEM ALERT]\n\n" + "\n\n".join(warnings)
+            )
             trimmed = list(trimmed) + [constraint_msg]
 
         response = {"llm_input_messages": trimmed}
+        tools_available = tracker.tools_available() if tracker else None
         if tools_available is not None:
             response["tools"] = tools_available
 
@@ -168,71 +128,92 @@ def run_search_agent(
     task: str,
     details: str,
     llm: BaseLanguageModel,
-    search_tools: DocumentSearchTools,
+    db_path: Path,
+    findings_dir: Path,
+    todos_path: Path,
+    embedding_model,
+    run_uuid: str,
+    sequence: int,
     token_counter: TokenCounterCallback | None = None,
     activity_logger=None,
     display_callback=None,
-) -> str:
+) -> Dict[str, Any]:
     """
     Run the search agent for a single task.
 
-    Args:
-        task: The task description from the todo item
-        details: Additional details about what to search for
-        llm: Language model to use
-        search_tools: DocumentSearchTools instance
-        token_counter: Optional token counter
-        activity_logger: Optional StreamingLogger for tracking tool calls
-        display_callback: Optional callback to update display after each tool
-
     Returns:
-        Summary of findings
+        Dictionary with {"summary": str, "findings_file": str}
     """
-    # Get search tools (all search tools + scratchpad)
     allowed_tools = {
         "search_documents_fts",
         "search_documents_semantic",
         "get_chunk_window",
         "get_full_document",
-        "append_to_scratchpad_tool",
-        "read_scratchpad_tool",
     }
-    budget_tracker = SearchBudgetTracker(MAX_SEARCH_OPERATIONS)
-    tools = search_tools.get_tools(
-        allowed_tools,
-        before_tool_call=budget_tracker.before_tool_call,
+    budget_tracker = SearchBudget(MAX_SEARCH_OPERATIONS)
+    tools = get_tools(
+        db_path=db_path,
+        todos_path=todos_path,
+        embedding_model=embedding_model,
+        allowed_tools=allowed_tools,
+        before_hook=budget_tracker.before_tool_call,
     )
 
-    # Build system prompt
     system_prompt = _load_search_agent_prompt()
-    task_prompt = f"""
-Task: {task}
+    detail_block = f"Details: {details}\n\n" if details else ""
+    task_prompt = (
+        f"Task: {task}\n\n"
+        f"{detail_block}"
+        f"You have {MAX_SEARCH_OPERATIONS} tool calls to gather evidence for this task. Make them count."
+    )
 
-{f'Details: {details}' if details else ''}
-
-You have {MAX_SEARCH_OPERATIONS} tool calls to gather evidence for this task. Make them count.
-"""
-
-    # Create agent with search limit middleware
     agent = create_agent(
         model=llm,
         tools=tools,
         system_prompt=system_prompt,
-        middleware=[build_search_limit_middleware(MAX_SEARCH_OPERATIONS, tracker=budget_tracker)],
+        middleware=[
+            build_search_limit_middleware(
+                MAX_SEARCH_OPERATIONS, tracker=budget_tracker
+            )
+        ],
     )
 
-    # Run agent with a strict (but generous) recursion limit.
-    # Each tool call tends to span ~4 recursions once scratchpad operations and budget
-    # warnings are included, so keep a healthy buffer to avoid premature Graph errors.
-    max_recursions = MAX_SEARCH_OPERATIONS * 4 + 10
-
-    config = {}
+    config = {"recursion_limit": MAX_SEARCH_OPERATIONS * 4 + 10}
     if token_counter:
         config["callbacks"] = [token_counter]
 
-    final_response = ""
+    final_response = _stream_agent(
+        agent=agent,
+        task_prompt=task_prompt,
+        config=config,
+        budget_tracker=budget_tracker,
+        token_counter=token_counter,
+        activity_logger=activity_logger,
+        display_callback=display_callback,
+    )
 
-    # Temporarily switch logger context to Search Agent
+    summary = final_response or "Search Agent completed but returned no summary."
+    findings_filename = _write_findings(
+        findings_dir=findings_dir,
+        run_uuid=run_uuid,
+        sequence=sequence,
+        task=task,
+        summary=summary,
+    )
+
+    return {"summary": summary, "findings_file": findings_filename}
+
+
+def _stream_agent(
+    agent,
+    task_prompt: str,
+    config: Dict[str, Any],
+    budget_tracker: SearchBudget,
+    token_counter: TokenCounterCallback | None,
+    activity_logger,
+    display_callback,
+) -> str:
+    final_response = ""
     original_agent_name = None
     if activity_logger:
         original_agent_name = activity_logger.agent_name
@@ -244,48 +225,19 @@ You have {MAX_SEARCH_OPERATIONS} tool calls to gather evidence for this task. Ma
         for event in agent.stream(
             {"messages": [("user", task_prompt)]},
             stream_mode="values",
-            config={**config, "recursion_limit": max_recursions},
+            config=config,
         ):
-            if "messages" in event and len(event["messages"]) > 0:
-                last_message = event["messages"][-1]
-
-                # Log AI messages (for recursion tracking)
-                if hasattr(last_message, 'type') and last_message.type == 'ai':
-                    if activity_logger:
-                        activity_logger.on_ai_message(last_message)
-
-                    # Capture final response
-                    if hasattr(last_message, 'content') and last_message.content:
-                        final_response = last_message.content
-
-                # Log tool calls
-                if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-                    if activity_logger:
-                        for tool_call in last_message.tool_calls:
-                            tool_name = tool_call.get('name', '')
-                            tool_call_id = tool_call.get('id', '')
-                            tool_args = tool_call.get('args', {})
-                            activity_logger.on_tool_call(tool_name, tool_call_id, tool_args)
-
-                # Log tool results
-                if hasattr(last_message, 'type') and last_message.type == 'tool':
-                    if activity_logger:
-                        tool_call_id = getattr(last_message, 'tool_call_id', None)
-                        if tool_call_id and token_counter:
-                            activity_logger.on_tool_result(
-                                tool_call_id,
-                                last_message.content,
-                                token_counter
-                            )
-                            # Increment search count (clamped to budget tracker)
-                            activity_logger.search_count = min(
-                                budget_tracker.calls_made,
-                                MAX_SEARCH_OPERATIONS,
-                            )
-                            # Update display if callback provided
-                            if display_callback:
-                                display_callback()
-
+            if "messages" not in event or not event["messages"]:
+                continue
+            last_message = event["messages"][-1]
+            final_response = _handle_agent_message(
+                last_message,
+                final_response,
+                activity_logger,
+                token_counter,
+                budget_tracker,
+                display_callback,
+            )
     except GraphRecursionError:
         logger.error(
             "Search Agent hit the recursion limit before finishing its task. "
@@ -295,14 +247,72 @@ You have {MAX_SEARCH_OPERATIONS} tool calls to gather evidence for this task. Ma
             "Search Agent stopped after reaching its internal recursion limit. "
             "Try refining the task or increasing the search budget."
         )
-    except Exception as e:
-        logger.error(f"Search Agent error: {e}")
-        final_response = f"Search Agent encountered an error: {e}"
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.error(f"Search Agent error: {exc}")
+        final_response = f"Search Agent encountered an error: {exc}"
     finally:
-        # Restore original agent context
         if activity_logger and original_agent_name is not None:
             activity_logger.agent_name = original_agent_name
             activity_logger.search_count = 0
             activity_logger.max_searches = 0
 
-    return final_response or "Search Agent completed but returned no summary."
+    return final_response
+
+
+def _handle_agent_message(
+    last_message,
+    current_response: str,
+    activity_logger,
+    token_counter: TokenCounterCallback | None,
+    budget_tracker: SearchBudget,
+    display_callback,
+) -> str:
+    if hasattr(last_message, "type") and last_message.type == "ai":
+        if activity_logger:
+            activity_logger.on_ai_message(last_message)
+        if getattr(last_message, "content", None):
+            current_response = last_message.content
+
+    tool_calls = getattr(last_message, "tool_calls", None)
+    if activity_logger and tool_calls:
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name", "")
+            tool_call_id = tool_call.get("id", "")
+            tool_args = tool_call.get("args", {})
+            activity_logger.on_tool_call(tool_name, tool_call_id, tool_args)
+
+    if hasattr(last_message, "type") and last_message.type == "tool":
+        if activity_logger:
+            tool_call_id = getattr(last_message, "tool_call_id", None)
+            if tool_call_id and token_counter:
+                activity_logger.on_tool_result(
+                    tool_call_id, last_message.content, token_counter
+                )
+                activity_logger.search_count = min(
+                    budget_tracker.calls_made, MAX_SEARCH_OPERATIONS
+                )
+                if display_callback:
+                    display_callback()
+
+    return current_response
+
+
+def _write_findings(
+    findings_dir: Path,
+    run_uuid: str,
+    sequence: int,
+    task: str,
+    summary: str,
+) -> str:
+    findings = SearchFindings(
+        task=task,
+        searches_performed=[],
+        key_findings=[summary],
+        documents_cited=[],
+        summary=summary,
+    )
+    findings_md = render_findings_to_markdown(findings)
+    findings_filename = f"{run_uuid}-{sequence:02d}.md"
+    findings_file = findings_dir / findings_filename
+    findings_file.write_text(findings_md, encoding="utf-8")
+    return findings_filename

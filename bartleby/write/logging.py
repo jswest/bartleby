@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Tool logging and display with LLM summarization."""
+"""Tool logging and display for agent activity."""
 
 import json
 from datetime import datetime
@@ -10,91 +10,96 @@ import math
 
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.callbacks.base import BaseCallbackHandler
-from langchain_core.messages import HumanMessage
 from rich.console import Console
 
 from bartleby.lib.consts import DEFAULT_MAX_RECURSIONS
 
 
-def summarize_with_llm(
-    llm: BaseLanguageModel,
-    tool_name: str,
-    inputs: Any,
-    outputs: Any,
-    callbacks: list[BaseCallbackHandler] | None = None,
-) -> tuple[str, str]:
+def _parse_possible_json(value: Any) -> Any:
+    """Attempt to parse string payloads containing JSON."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
+def _count_search_results(outputs: Any) -> int:
+    """Best-effort extraction of a result count from tool outputs."""
+    data = _parse_possible_json(outputs)
+
+    if isinstance(data, list):
+        return len(data)
+
+    if isinstance(data, dict):
+        for key in ("original_count", "total_items", "count"):
+            count = data.get(key)
+            if isinstance(count, int):
+                return count
+
+        for key in ("results", "items", "chunks", "data", "preview"):
+            collection = data.get(key)
+            if isinstance(collection, list):
+                return len(collection)
+
+    return 0
+
+
+def _simple_summary(tool_name: str, inputs: Any, outputs: Any) -> tuple[str, str]:
     """
-    Generate one-sentence and one-paragraph summaries using LLM.
+    Generate simple summary without LLM call.
 
     Args:
-        llm: Language model to use for summarization
         tool_name: Name of the tool that was called
-        inputs: Tool inputs (will be converted to string)
-        outputs: Tool outputs (will be converted to string)
+        inputs: Tool inputs
+        outputs: Tool outputs
 
     Returns:
         Tuple of (short_summary, long_summary)
-        - short_summary: ONE sentence (max 100 chars)
-        - long_summary: ONE to TWO paragraphs (max 400 chars)
     """
-    # Convert inputs/outputs to strings, truncating if too long
-    inputs_str = str(inputs)[:500]
-    outputs_str = str(outputs)[:5000]
-
-    prompt = f"""
-# Summarize the rsults of this tool invocation concisely.
-
-### Tool:
-
-```
-{tool_name}
-```
-
-### Inputs:
-
-```
-{inputs_str}
-```
-
-### Outputs:
-
-```
-{outputs_str}
-```
-
-## Provide
-
-1. A one-sentence summary (max 75 characters) - factual, specific
-2. A one-paragraph summary (max 400 characters) - detailed explanation of what was found
-
-Format your response as:
-SHORT: <one sentence>
-LONG: <one to two paragraphs>
-"""
-
-    try:
-        config = {"callbacks": callbacks} if callbacks else None
-        response = llm.invoke([HumanMessage(content=prompt)], config=config)
-        content = response.content.strip()
-
-        # Parse response
-        lines = content.split('\n')
-        short = ""
-        long = ""
-
-        for line in lines:
-            if line.startswith("SHORT:"):
-                short = line.replace("SHORT:", "").strip()
-            elif line.startswith("LONG:"):
-                long = line.replace("LONG:", "").strip()
-
-        return short or f"Called {tool_name}", long or short
-
-    except Exception as e:
-        # Fallback if LLM fails
-        short = f"Called {tool_name}"
-        long = f"Called {tool_name}, but summarization failed with {e}."
+    # Handle search tools
+    if tool_name == "search_documents_fts":
+        count = _count_search_results(outputs)
+        query = inputs.get("query", "") if isinstance(inputs, dict) else ""
+        short = f"Found {count} results"
+        long = f"Full-text search for '{query}' returned {count} matching chunks"
         return short, long
+
+    elif tool_name == "search_documents_semantic":
+        count = _count_search_results(outputs)
+        query = inputs.get("query", "") if isinstance(inputs, dict) else ""
+        short = f"Found {count} results"
+        long = f"Semantic search for '{query}' returned {count} similar chunks"
+        return short, long
+
+    elif tool_name == "get_chunk_window":
+        chunk_id = inputs.get("chunk_id", "") if isinstance(inputs, dict) else ""
+        short = "Read passage"
+        long = f"Retrieved chunk window for {chunk_id} with surrounding context"
+        return short, long
+
+    elif tool_name == "get_full_document":
+        doc_id = inputs.get("document_id", "") if isinstance(inputs, dict) else ""
+        short = "Read document"
+        long = f"Retrieved chunks from document {doc_id}"
+        return short, long
+
+    elif tool_name == "delegate_search":
+        task = inputs.get("task", "") if isinstance(inputs, dict) else ""
+        short = "Delegated search"
+        long = f"Delegated search task: {task[:100]}"
+        return short, long
+
+    elif tool_name == "read_findings":
+        short = "Read findings"
+        long = "Retrieved all research findings for synthesis"
+        return short, long
+
+    # Default fallback
+    short = f"Called {tool_name}"
+    long = str(outputs)[:200] if outputs else f"Executed {tool_name}"
+    return short, long
 
 
 class StreamingLogger:
@@ -109,22 +114,22 @@ class StreamingLogger:
         "search_documents_semantic": "Searching vectors",
         "get_full_document": "Reading document",
         "get_chunk_window": "Reading passage",
-        "append_to_scratchpad_tool": "Taking notes",
         "manage_todo_tool": "Managing to-dos",
         "delegate_search": "Delegating to Search Agent",
-        "read_scratchpad_tool": "Reading notes",
+        "read_findings": "Reading research findings",
     }
 
     def __init__(
-            self,
-            console: Console,
-            llm: BaseLanguageModel,
-            log_path: Path,
-            max_recursions: int = DEFAULT_MAX_RECURSIONS,
-            search_tools = None,
-            token_callback: BaseCallbackHandler | None = None,
-            agent_name: str = "Agent",
-        ):
+        self,
+        console: Console,
+        llm: BaseLanguageModel,
+        log_path: Path,
+        max_recursions: int = DEFAULT_MAX_RECURSIONS,
+        todo_list=None,
+        token_callback: BaseCallbackHandler | None = None,
+        agent_name: str = "Agent",
+        run_uuid: str | None = None,
+    ):
         """
         Initialize streaming logger.
 
@@ -133,15 +138,17 @@ class StreamingLogger:
             llm: Language model for generating summaries
             log_path: Path to log file
             max_recursions: Maximum recursions for the agent
-            search_tools: DocumentSearchTools instance for accessing todo list
+            todo_list: TodoList instance for accessing todo list
             agent_name: Name of the agent being logged (for multi-agent systems)
+            run_uuid: Unique ID for this agent run, stored with each log entry
         """
         self.console = console
         self.llm = llm
         self.log_path = log_path
         self.max_recursions = max_recursions
-        self.search_tools = search_tools
+        self.todo_list = todo_list
         self.agent_name = agent_name
+        self.run_uuid = run_uuid
 
         # State tracking
         self.recursion = 0
@@ -163,7 +170,6 @@ class StreamingLogger:
         # Keep reference to token counter for formatted stats
         self.token_counter = token_callback
         self._last_ai_message_signature = None
-        self._suppress_recursions = False
 
     def on_recursion_start(self):
         """Called when agent starts a new graph recursion (super-step)."""
@@ -176,7 +182,7 @@ class StreamingLogger:
 
     def on_ai_message(self, message):
         """Handle a new AI message, deduplicating repeated streaming updates."""
-        if self._suppress_recursions or self.agent_name != "Primary Agent":
+        if self.agent_name != "Primary Agent":
             return
 
         signature = (
@@ -240,34 +246,23 @@ class StreamingLogger:
         if tool_info['name'] == "manage_todo_tool":
             short, long = self._summarize_todo_tool(tool_info, result)
         else:
-            callbacks = [self.token_counter] if self.token_counter else None
-            self._suppress_recursions = True
-            try:
-                short, long = summarize_with_llm(
-                    self.llm,
-                    tool_info['name'],
-                    tool_info['args'],
-                    result,
-                    callbacks=callbacks,
-                )
-            finally:
-                self._suppress_recursions = False
+            short, long = _simple_summary(
+                tool_info['name'],
+                tool_info['args'],
+                result,
+            )
 
         # Write to log
         self._write_log(tool_info, result, short, long)
 
-        # Update action history
+        # Update action history, keeping most recent items first
         if self.current_summary and self.current_tool_name:
-            # Add current to history
-            self.action_history.append({
+            self.action_history.insert(0, {
                 'tool_name': self.current_tool_name,
                 'summary': self.current_summary
             })
-            # Keep only last 4
-            if len(self.action_history) > 4:
-                self.action_history = self.action_history[-4:]
+            self.action_history = self.action_history[:4]
 
-        # Set new current action
         self.current_tool_name = tool_info['name']
         self.current_summary = short
 
@@ -304,10 +299,10 @@ class StreamingLogger:
         # Get formatted token stats
         token_stats_formatted = self.token_counter.get_stats() if self.token_counter else "[↑0/↓0/+0]"
 
-        # Get todos from search_tools
+        # Get todos from todo_list
         todos = []
-        if self.search_tools:
-            todos = self.search_tools.todo_list.get_all_todos()
+        if self.todo_list:
+            todos = self.todo_list.get_all_todos()
 
         search_count = self.search_count
         max_searches = self.max_searches
@@ -342,6 +337,7 @@ class StreamingLogger:
         """
         log_entry = {
             "timestamp": datetime.now().isoformat(),
+            "run_uuid": self.run_uuid,
             "agent_name": self.agent_name,
             "round": tool_info['recursion'],
             "tool_name": tool_info['name'],

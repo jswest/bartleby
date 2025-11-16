@@ -1,46 +1,7 @@
-"""Memory utilities for agent scratchpad and todo list."""
+"""Memory utilities for agent todo list."""
 
-from datetime import datetime
 import json
-from pathlib import Path
 from typing import List, Dict, Any
-
-
-def read_scratchpad(scratchpad_path: Path) -> str:
-    """
-    Read the full contents of the scratchpad.
-
-    Args:
-        scratchpad_path: Path to the scratchpad file
-
-    Returns:
-        Contents of scratchpad.md or empty string if doesn't exist
-    """
-
-    if not scratchpad_path.exists():
-        return ""
-
-    return scratchpad_path.read_text(encoding="utf-8")
-
-
-def append_to_scratchpad(scratchpad_path: Path, content: str) -> str:
-    """
-    Append content to the scratchpad with a timestamp.
-
-    Args:
-        scratchpad_path: Path to the scratchpad file
-        content: Content to append
-
-    Returns:
-        Success message
-    """
-    timestamp = datetime.now().isoformat()
-    entry = f"\n\n---\n**{timestamp}**\n\n{content}\n"
-
-    with scratchpad_path.open("a", encoding="utf-8") as f:
-        f.write(entry)
-
-    return f"Appended to scratchpad at {timestamp}"
 
 
 class TodoList:
@@ -49,6 +10,16 @@ class TodoList:
     def __init__(self, todos_path: str):
         self.todos_path = todos_path
         self.todos: List[Dict[str, str]] = []
+        self._load_from_file()
+
+    def _load_from_file(self):
+        """Load todos from the JSON file if it exists."""
+        try:
+            with open(self.todos_path, 'r', encoding='utf-8') as in_file:
+                self.todos = json.load(in_file)
+        except (FileNotFoundError, json.JSONDecodeError):
+            # File doesn't exist or is invalid, start with empty list
+            self.todos = []
 
     def write_todo_list(self):
         """Write the current todos to the JSON file."""
@@ -149,5 +120,7 @@ class TodoList:
     def get_all_todos(self) -> List[Dict[str, str]]:
         """
         Return a shallow copy of all todos.
+        Reloads from file to ensure latest state.
         """
+        self._load_from_file()
         return list(self.todos)

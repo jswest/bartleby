@@ -12,14 +12,13 @@ from langchain_core.tools import tool
 from loguru import logger
 
 from bartleby.lib.consts import DEFAULT_AGENT_CONTEXT_TOKENS
-from bartleby.write.tools import DocumentSearchTools
-from bartleby.write.search_agent import run_search_agent
 from bartleby.write.token_counter import TokenCounterCallback
+from bartleby.write.tools import get_tools
 
 
 # Primary Agent constraints
-MAX_TODO_ROUNDS = 10  # Can add todos in rounds 1-10
-MAX_TOTAL_ROUNDS = 15  # Must complete by round 15
+MAX_TODO_ROUNDS = 8
+MAX_TOTAL_ROUNDS = 10
 
 
 def _load_primary_agent_prompt() -> str:
@@ -28,25 +27,14 @@ def _load_primary_agent_prompt() -> str:
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
 
-    # Fallback prompt
-    return """You are a strategic research coordinator and report writer.
-
-You delegate research tasks to a Search Agent and synthesize findings into a final report.
-
-Rounds 1-10: Create todos and delegate searches
-Rounds 11-15: Finalize research and write the report
-
-Tools:
-- manage_todo_tool: Create, update, and list todos
-- delegate_search: Send a task to the Search Agent (gets 5 searches per task)
-- read_scratchpad_tool: Read accumulated evidence
-
-Your final output must be a complete Markdown research report."""
-
 
 def build_primary_agent_tools(
     llm: BaseLanguageModel,
-    search_tools: DocumentSearchTools,
+    db_path: Path,
+    findings_dir: Path,
+    todos_path: Path,
+    embedding_model,
+    run_uuid: str,
     token_counter: TokenCounterCallback | None = None,
     streaming_logger=None,
     display_callback=None,
@@ -55,69 +43,23 @@ def build_primary_agent_tools(
     Build tools for the Primary Agent.
 
     The Primary Agent has:
-    - manage_todo_tool (from search_tools)
-    - read_scratchpad_tool (from search_tools)
-    - delegate_search (custom tool that invokes Search Agent)
+    - manage_todo_tool
+    - delegate_search (invokes Search Agent)
     """
+    allowed_tools = {"manage_todo_tool", "delegate_search"}
 
-    todo_list = getattr(search_tools, "todo_list", None)
-
-    def _mark_todo(task_description: str, status: str) -> str:
-        """Update todo status if a matching todo exists."""
-        if not todo_list:
-            return ""
-        try:
-            result = todo_list.update_todo_status(task_description, status)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Failed to update todo '{task_description}' -> {status}: {exc}")
-            return ""
-        if result.get("error"):
-            return ""
-        return result.get("todo", {}).get("task", task_description)
-
-    @tool
-    def delegate_search(task: str, details: str = "") -> str:
-        """
-        Delegate a research task to the Search Agent.
-
-        The Search Agent will execute up to 5 searches to answer your question,
-        write findings to the scratchpad, and return a summary.
-
-        Args:
-            task: The research question or task description
-            details: Additional context or specific things to look for
-
-        Returns:
-            Summary of what the Search Agent found
-        """
-        activated_todo = _mark_todo(task, "active")
-
-        # Run the search agent
-        summary = run_search_agent(
-            task=task,
-            details=details,
-            llm=llm,
-            search_tools=search_tools,
-            token_counter=token_counter,
-            activity_logger=streaming_logger,
-            display_callback=display_callback,
-        )
-
-        completed_todo = _mark_todo(task, "complete")
-        follow_up_note = ""
-        if activated_todo:
-            follow_up_note += f"\n\n(🗂️ Marked todo '{activated_todo}' as active.)"
-        if completed_todo:
-            follow_up_note += f"\n\n(✅ Marked todo '{completed_todo}' complete.)"
-
-        return summary + follow_up_note if follow_up_note else summary
-
-    # Get todo and scratchpad tools from search_tools
-    allowed_tools = {"manage_todo_tool", "read_scratchpad_tool"}
-    base_tools = search_tools.get_tools(allowed_tools)
-
-    # Add delegation tool
-    return base_tools + [delegate_search]
+    return get_tools(
+        db_path=db_path,
+        findings_dir=findings_dir,
+        todos_path=todos_path,
+        embedding_model=embedding_model,
+        run_uuid=run_uuid,
+        allowed_tools=allowed_tools,
+        llm=llm,
+        token_counter=token_counter,
+        logger=streaming_logger,
+        display_callback=display_callback,
+    )
 
 
 def build_round_limit_middleware(
@@ -125,13 +67,14 @@ def build_round_limit_middleware(
     max_total_rounds: int,
     token_counter: TokenCounterCallback | None = None,
     todo_status_provider: Callable[[], list[Dict[str, str]]] | None = None,
-    round_provider: Callable[[], int] | None = None,
+    round_provider: Callable[[], int] | None = None
 ):
     """
     Create middleware that enforces round-based and token budget constraints.
 
-    - Rounds 1-{max_todo_rounds}: Can use all tools (manage_todos, delegate_search, read_scratchpad)
+    - Rounds 1-{max_todo_rounds}: Can use all tools (manage_todos, delegate_search)
     - Rounds {max_todo_rounds+1}-{max_total_rounds}: Cannot add new todos via manage_todo_tool action='add'
+    - Round ≥ {max_total_rounds}: All tools disabled; agent must immediately produce the report
     - Token budget warnings at 75% and 90%
     """
 
@@ -147,6 +90,7 @@ def build_round_limit_middleware(
         # Build constraint messages
         warnings = []
         tools_override = None
+        final_round = current_round >= max_total_rounds
 
         incomplete_todos: list[str] = []
         if todo_status_provider:
@@ -178,11 +122,11 @@ def build_round_limit_middleware(
                 )
 
         # Check round constraints
-        if current_round > max_total_rounds:
+        if final_round:
             warnings.append(
                 f"🚨 FINAL ROUND ({current_round}/{max_total_rounds}): "
-                "You MUST deliver your complete research report NOW. "
-                "No more searches or planning. Write the report based on your scratchpad."
+                "You have reached the overall round limit. "
+                "Stop using tools and deliver your final research report immediately."
             )
             if incomplete_todos:
                 warnings.append(
@@ -235,7 +179,11 @@ def build_round_limit_middleware(
 def run_primary_agent(
     user_direction: str,
     llm: BaseLanguageModel,
-    search_tools: DocumentSearchTools,
+    db_path: Path,
+    findings_dir: Path,
+    todos_path: Path,
+    embedding_model,
+    run_uuid: str,
     token_counter: TokenCounterCallback | None = None,
     max_todo_rounds: int = MAX_TODO_ROUNDS,
     max_total_rounds: int = MAX_TOTAL_ROUNDS,
@@ -248,7 +196,11 @@ def run_primary_agent(
     Args:
         user_direction: User's research question/direction
         llm: Language model
-        search_tools: DocumentSearchTools instance
+        db_path: Path to document database
+        findings_dir: Directory for findings files
+        todos_path: Path to todos.json
+        embedding_model: SentenceTransformer model
+        run_uuid: UUID of current run
         token_counter: Optional token counter
         max_todo_rounds: Maximum rounds to allow adding todos (default: 10)
         max_total_rounds: Maximum total rounds before forcing report (default: 15)
@@ -259,7 +211,10 @@ def run_primary_agent(
         Agent execution events
     """
     # Build tools
-    tools = build_primary_agent_tools(llm, search_tools, token_counter, logger, display_callback)
+    tools = build_primary_agent_tools(
+        llm, db_path, findings_dir, todos_path, embedding_model, run_uuid,
+        token_counter, logger, display_callback
+    )
 
     # Load system prompt
     system_prompt = _load_primary_agent_prompt()
@@ -274,18 +229,21 @@ def run_primary_agent(
 ## Budget Constraints
 
 - **Rounds 1-{max_todo_rounds}**: You can create todos and delegate searches to the Search Agent
-- **Rounds {max_todo_rounds + 1}-{max_total_rounds}**: You CANNOT add new todos. Finalize research and write the report.
-- **After round {max_total_rounds}**: Session ends. You MUST deliver the complete report.
+- **Round {max_todo_rounds + 1}: Session will end next round. You MUST deliver the complete report.
 
 ## Your Task
 
 1. Break down the investigation into 2-4 focused research questions (todos)
 2. Delegate each todo to the Search Agent
-3. Review the Search Agent's findings in the scratchpad
+3. Review the Search Agent's findings. You may add additional todos.
 4. Synthesize everything into a comprehensive Markdown report
 
 Begin your investigation now.
 """
+
+    # Load TodoList for middleware
+    from bartleby.write.memory import TodoList
+    todo_list = TodoList(str(todos_path))
 
     # Create agent with round limit middleware
     agent = create_agent(
@@ -297,8 +255,8 @@ Begin your investigation now.
                 max_todo_rounds,
                 max_total_rounds,
                 token_counter,
-                todo_status_provider=search_tools.todo_list.get_all_todos,
-                round_provider=(lambda: logger.get_round()) if logger else None,
+                todo_status_provider=todo_list.get_all_todos,
+                round_provider=(lambda: logger.get_round()) if logger else None
             )
         ],
     )

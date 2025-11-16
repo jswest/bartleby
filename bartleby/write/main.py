@@ -1,6 +1,8 @@
 """Main entry point for the write (research agent) command."""
 
 import os
+import time
+import uuid
 from pathlib import Path
 
 from rich.prompt import Prompt
@@ -30,7 +32,6 @@ from bartleby.lib.utils import load_config, load_llm_from_config
 from bartleby.write.primary_agent import run_primary_agent, MAX_TODO_ROUNDS, MAX_TOTAL_ROUNDS
 from bartleby.write.logging import StreamingLogger
 from bartleby.write.token_counter import TokenCounterCallback
-from bartleby.write.tools import DocumentSearchTools
 
 
 def format_display(display_data: dict) -> Text:
@@ -134,15 +135,21 @@ def main(db_path: Path):
         except (TypeError, ValueError):
             return None
 
-    # Set up the bartleby folder.
+    # Generate unique run ID
+    run_uuid = uuid.uuid4().hex[:8]
+
+    # Set up the bartleby folder
     bartleby_dir_path = db_path.parent / ".bartleby"
     bartleby_dir_path.mkdir(parents=True, exist_ok=True)
 
-    # Clean it up.
+    # Create findings directory
+    findings_dir = bartleby_dir_path / "findings"
+    findings_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clean up previous run files
     log_path = bartleby_dir_path / "log.json"
-    scratchpad_path = bartleby_dir_path / "scratchpad.md"
     todos_path = bartleby_dir_path / "todos.json"
-    for p in [log_path, scratchpad_path, todos_path]:
+    for p in [log_path, todos_path]:
         if p.exists():
             p.unlink()
 
@@ -179,9 +186,8 @@ def main(db_path: Path):
 
     send("\n", "EMPTY")
 
-    # Initialize shared tools/resources
+    # Initialize shared resources
     model_name = config.get("model", "")
-    search_tools = DocumentSearchTools(db_path, scratchpad_path, todos_path, embedding_model)
 
     # Load limits with safe defaults
     max_todo_rounds = _coerce_positive_int(
@@ -207,16 +213,19 @@ def main(db_path: Path):
     token_counter.max_recursions = max_total_rounds
     token_counter.token_budget = token_budget_limit
 
-    # Logging setup
-    log_path = bartleby_dir_path / "log.json"
+    # Logging setup - load TodoList for logger to access
+    from bartleby.write.memory import TodoList
+    todo_list = TodoList(str(todos_path))
+
     logger = StreamingLogger(
         console,
         llm,
         log_path,
         max_recursions=max_total_rounds,
-        search_tools=search_tools,
+        todo_list=todo_list,
         token_callback=token_counter,
         agent_name="Primary Agent",
+        run_uuid=run_uuid,
     )
 
     final_report_text = ""
@@ -227,14 +236,21 @@ def main(db_path: Path):
 
         initial_display = format_display(logger.get_display_data())
         last_rendered = {"signature": initial_display.plain}
+        last_render_time = {"time": 0}
 
         def render_display(data: dict):
             rendered = format_display(data)
             signature = rendered.plain
+            current_time = time.time()
+
+            # Only render if content changed AND enough time has passed
             if signature != last_rendered["signature"]:
-                last_rendered["signature"] = signature
-                live.update(rendered)
-                live.refresh()
+                # Debounce: require 100ms between renders
+                if current_time - last_render_time["time"] >= 0.1:
+                    last_rendered["signature"] = signature
+                    last_render_time["time"] = current_time
+                    live.update(rendered)
+                    live.refresh()
 
         with Live(initial_display, console=console, refresh_per_second=4, auto_refresh=False) as live:
             # Define display update callback
@@ -244,7 +260,11 @@ def main(db_path: Path):
             for result in run_primary_agent(
                 user_direction=user_direction,
                 llm=llm,
-                search_tools=search_tools,
+                db_path=db_path,
+                findings_dir=findings_dir,
+                todos_path=todos_path,
+                embedding_model=embedding_model,
+                run_uuid=run_uuid,
                 token_counter=token_counter,
                 max_todo_rounds=max_todo_rounds,
                 max_total_rounds=max_total_rounds,
