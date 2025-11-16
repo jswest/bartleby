@@ -48,6 +48,14 @@ def send(message: str | None = None, message_type: str | None = None):
     elif message_type == "REPORT":
         from rich.markdown import Markdown
         console.print(Markdown(message))
+    elif message_type == "REPORT_BORDER_TOP":
+        console.print("\n" + "=" * 80)
+    elif message_type == "REPORT_BORDER_BOTTOM":
+        console.print("=" * 80 + "\n")
+    elif message_type == "REPORT_TITLE":
+        console.print(message, style="bold blue")
+    elif message_type == "INFO_DIM":
+        console.print(message, style="dim")
     else:
         console.print(message)
     

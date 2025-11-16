@@ -105,14 +105,14 @@ class StreamingLogger:
 
     # Tool display messages for tool calls (shown briefly before result)
     TOOL_MESSAGES = {
-        "search_documents_fts": "(searching text)",
-        "search_documents_semantic": "(searching vectors)",
-        "get_full_document": "(reading document)",
-        "get_chunk_window": "(reading passage)",
-        "append_to_scratchpad_tool": "(taking notes)",
-        "manage_todo_tool": "(managing to-dos)",
-        "delegate_search": "(delegating to Search Agent)",
-        "read_scratchpad_tool": "(reading notes)",
+        "search_documents_fts": "Searching text",
+        "search_documents_semantic": "Searching vectors",
+        "get_full_document": "Reading document",
+        "get_chunk_window": "Reading passage",
+        "append_to_scratchpad_tool": "Taking notes",
+        "manage_todo_tool": "Managing to-dos",
+        "delegate_search": "Delegating to Search Agent",
+        "read_scratchpad_tool": "Reading notes",
     }
 
     def __init__(

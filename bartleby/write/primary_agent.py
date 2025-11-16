@@ -90,8 +90,6 @@ def build_primary_agent_tools(
         Returns:
             Summary of what the Search Agent found
         """
-        logger.info(f"Primary Agent delegating task: {task}")
-
         activated_todo = _mark_todo(task, "active")
 
         # Run the search agent
@@ -104,8 +102,6 @@ def build_primary_agent_tools(
             activity_logger=streaming_logger,
             display_callback=display_callback,
         )
-
-        logger.info(f"Search Agent returned: {summary[:200]}...")
 
         completed_todo = _mark_todo(task, "complete")
         follow_up_note = ""
@@ -264,12 +260,6 @@ def run_primary_agent(
     """
     # Build tools
     tools = build_primary_agent_tools(llm, search_tools, token_counter, logger, display_callback)
-
-    # Debug: Log tool names
-    tool_names = [t.name if hasattr(t, 'name') else str(t) for t in tools]
-    logger_obj = logger if logger else None
-    from loguru import logger as loguru_logger
-    loguru_logger.info(f"Primary Agent tools ({len(tools)}): {tool_names}")
 
     # Load system prompt
     system_prompt = _load_primary_agent_prompt()

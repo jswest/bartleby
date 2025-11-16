@@ -7,7 +7,7 @@ from rich.prompt import Prompt
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
-from rich.markdown import Markdown
+from langchain_core.messages import AIMessage, ToolMessage
 
 # Disable tokenizers parallelism warning (set before importing sentence_transformers)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -45,8 +45,7 @@ def format_display(display_data: dict) -> Text:
     """
     lines: list[Text] = []
 
-    agent_name = display_data.get('agent_name', 'Primary Agent')
-    round_text = f"{agent_name}: round {display_data['round']}/{display_data['max_rounds']}"
+    round_text = f"Primary Agent: round {display_data['round']}/{display_data['max_rounds']}"
     lines.append(Text(round_text, style="bold"))
 
     # Nested Search Agent status when active
@@ -73,22 +72,26 @@ def format_display(display_data: dict) -> Text:
 
             lines.append(Text(f"{symbol} {todo['task']}", style=style))
 
-    # Action history (dim)
-    if display_data['action_history']:
+    # Actions list
+    has_actions = display_data['action_history'] or display_data['current_action']['summary']
+    if has_actions:
         lines.append(Text(""))
+        lines.append(Text("Actions list:", style="bold"))
+
+        # Action history (dim)
         for action in display_data['action_history']:
             lines.append(Text(
-                f"{action['friendly_name']}: {action['summary']}",
+                f"- {action['friendly_name']}: {action['summary']}",
                 style="dim"
             ))
 
-    # Current action
-    current = display_data['current_action']
-    if current['summary']:
-        lines.append(Text(
-            f"{current['friendly_name']}: {current['summary']}",
-            style="bold"
-        ))
+        # Current action (bold)
+        current = display_data['current_action']
+        if current['summary']:
+            lines.append(Text(
+                f"- {current['friendly_name']}: {current['summary']}",
+                style="bold"
+            ))
 
     # Token stats
     lines.append(Text(""))
@@ -222,10 +225,21 @@ def main(db_path: Path):
         """Run the Primary Agent and return final report."""
         nonlocal final_report_text
 
-        with Live(format_display(logger.get_display_data()), console=console, refresh_per_second=4) as live:
+        initial_display = format_display(logger.get_display_data())
+        last_rendered = {"signature": initial_display.plain}
+
+        def render_display(data: dict):
+            rendered = format_display(data)
+            signature = rendered.plain
+            if signature != last_rendered["signature"]:
+                last_rendered["signature"] = signature
+                live.update(rendered)
+                live.refresh()
+
+        with Live(initial_display, console=console, refresh_per_second=4, auto_refresh=False) as live:
             # Define display update callback
             def update_display():
-                live.update(format_display(logger.get_display_data()))
+                render_display(logger.get_display_data())
 
             for result in run_primary_agent(
                 user_direction=user_direction,
@@ -242,17 +256,22 @@ def main(db_path: Path):
 
                     if "messages" in chunk and len(chunk["messages"]) > 0:
                         last_message = chunk["messages"][-1]
-                        if getattr(last_message, "type", None) == "ai":
-                            logger.on_ai_message(last_message)
 
-                        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                        # Handle AI messages (increment round counter)
+                        if isinstance(last_message, AIMessage):
+                            logger.on_ai_message(last_message)
+                            render_display(logger.get_display_data())
+
+                        # Handle tool calls from AI messages
+                        if isinstance(last_message, AIMessage) and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
                             for tool_call in last_message.tool_calls:
                                 tool_name = tool_call.get('name', '')
                                 tool_call_id = tool_call.get('id', '')
                                 tool_args = tool_call.get('args', {})
                                 logger.on_tool_call(tool_name, tool_call_id, tool_args)
 
-                        if hasattr(last_message, 'type') and last_message.type == 'tool':
+                        # Handle tool results
+                        if isinstance(last_message, ToolMessage):
                             tool_call_id = getattr(last_message, 'tool_call_id', None)
                             if tool_call_id:
                                 display_data = logger.on_tool_result(
@@ -260,7 +279,7 @@ def main(db_path: Path):
                                     last_message.content,
                                     token_counter
                                 )
-                                live.update(format_display(display_data))
+                                render_display(display_data)
 
                 if "agent" in result:
                     final_report_text = result["agent"].get("output", "")
@@ -268,33 +287,32 @@ def main(db_path: Path):
                     break
 
     try:
-        send(f"Starting Primary Agent (max {max_total_rounds} rounds)", "BIG")
         _run_agent()
 
         aggregate_stats = token_counter.get_stats()
 
     except KeyboardInterrupt:
         send("\n\nResearch interrupted by user.", "WARN")
-        send(f"Token usage: {token_counter.get_stats()}", "TOKENS")
+        send(f"{token_counter.get_stats()}", "TOKENS")
         return
     except GraphRecursionError:
         send("Agent reached the recursion limit before completing the report.", "ERROR")
-        send(f"Token usage: {token_counter.get_stats()}", "TOKENS")
+        send(f"{token_counter.get_stats()}", "TOKENS")
         return
     except Exception as e:
         send(f"Error during research: {e}", "ERROR")
-        send(f"Token usage: {token_counter.get_stats()}", "TOKENS")
+        send(f"{token_counter.get_stats()}", "TOKENS")
         raise
 
     if not final_report_text:
         send("Agent did not produce a final report.", "ERROR")
-        send(f"Token usage: {aggregate_stats}", "TOKENS")
+        send(f"{aggregate_stats}", "TOKENS")
         return
 
-    console.print("\n" + "=" * 80)
-    console.print("✎ RESEARCH REPORT", style="bold blue")
-    console.print("=" * 80 + "\n")
-    console.print(Markdown(final_report_text))
+    send(message_type="REPORT_BORDER_TOP")
+    send("✎ RESEARCH REPORT", "REPORT_TITLE")
+    send(message_type="REPORT_BORDER_BOTTOM")
+    send(final_report_text, "REPORT")
 
     report_dir = db_path.parent / ".bartleby"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -303,6 +321,5 @@ def main(db_path: Path):
     with report_path.open("w", encoding="utf-8") as f:
         f.write(final_report_text)
 
-    console.print(f"\n☑ Report saved to: {report_path}")
-
-    console.print(f"[dim]Final: {logger.recursion} rounds | {aggregate_stats}[/dim]")
+    send(f"Report saved to: {report_path}", "COMPLETE")
+    send(f"Final: {logger.recursion} rounds | {aggregate_stats}", "INFO_DIM")
