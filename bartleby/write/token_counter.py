@@ -20,6 +20,9 @@ class TokenCounterCallback(BaseCallbackHandler):
         self.total_cost = 0.0
         self.has_unknown_cost_model = False
         self.model_name = model_name
+        self.max_recursions = 0
+        self.recursions_used = 0
+        self.token_budget: int | None = None
 
         # For fallback token estimation (Ollama)
         self._accumulated_prompts = []
@@ -151,3 +154,6 @@ class TokenCounterCallback(BaseCallbackHandler):
         self.has_unknown_cost_model = False
         self._accumulated_prompts = []
         self._accumulated_output = ""
+        self.recursions_used = 0
+        self.max_recursions = 0
+        self.token_budget = None

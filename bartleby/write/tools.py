@@ -1,7 +1,7 @@
 """LangGraph-compatible tools for AI agents to search documents."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from threading import Lock
 
 from langchain_core.language_models import BaseLanguageModel
@@ -65,9 +65,19 @@ class DocumentSearchTools:
             self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
         return self._embedding_model
 
-    def get_tools(self) -> List:
+    def get_tools(
+        self,
+        allowed_names: set[str] | None = None,
+        before_tool_call: Callable[[str], Any] | None = None,
+    ) -> List:
         """
         Get all search tools as a list for LangGraph.
+
+        Args:
+            allowed_names: Optional whitelist of tool names to include.
+            before_tool_call: Optional hook that runs before each tool call. If it
+                returns a non-None value, the tool call is short-circuited and that
+                value is returned instead of executing the tool logic.
 
         Returns:
             List of LangChain tool objects (logging happens via callback handler)
@@ -104,6 +114,11 @@ class DocumentSearchTools:
             Returns:
                 List of matching document chunks with metadata
             """
+            if before_tool_call:
+                preempt = before_tool_call("search_documents_fts")
+                if preempt is not None:
+                    return preempt
+
             limit = sanitize_limit(limit)
             results = full_text_search(db_path, query, limit, document_id=document_id)
             data = result_metadata(results)
@@ -124,6 +139,11 @@ class DocumentSearchTools:
             Returns:
                 List of semantically similar document chunks with metadata
             """
+            if before_tool_call:
+                preempt = before_tool_call("search_documents_semantic")
+                if preempt is not None:
+                    return preempt
+
             limit = sanitize_limit(limit)
             with embedding_lock:
                 results = semantic_search(db_path, query, embedding_model_getter(), limit, document_id=document_id)
@@ -150,6 +170,11 @@ class DocumentSearchTools:
             Returns:
                 Dictionary with metadata, window info, and the requested chunk slice
             """
+            if before_tool_call:
+                preempt = before_tool_call("get_full_document")
+                if preempt is not None:
+                    return preempt
+
             total_chunks = count_document_chunks(db_path, document_id)
             if total_chunks == 0:
                 return {"error": f"Document {document_id} not found"}
@@ -198,6 +223,11 @@ class DocumentSearchTools:
                 chunk_id: Chunk ID returned by a search tool
                 window_radius: Number of chunks to include before/after the anchor (default 3)
             """
+            if before_tool_call:
+                preempt = before_tool_call("get_chunk_window")
+                if preempt is not None:
+                    return preempt
+
             safe_radius = max(0, min(window_radius, MAX_DOCUMENT_CHUNK_WINDOW // 2))
 
             window = get_chunk_window_by_chunk_id(db_path, chunk_id, safe_radius)
@@ -217,6 +247,11 @@ class DocumentSearchTools:
             Returns:
                 Contents of the scratchpad
             """
+            if before_tool_call:
+                preempt = before_tool_call("read_scratchpad_tool")
+                if preempt is not None:
+                    return preempt
+
             return read_scratchpad(scratchpad_path)
 
         @tool
@@ -233,6 +268,11 @@ class DocumentSearchTools:
             Returns:
                 Confirmation message
             """
+            if before_tool_call:
+                preempt = before_tool_call("append_to_scratchpad_tool")
+                if preempt is not None:
+                    return preempt
+
             return append_to_scratchpad(scratchpad_path, content)
 
         @tool
@@ -248,6 +288,11 @@ class DocumentSearchTools:
             Returns:
                 Dictionary with the operation result and current todo info
             """
+            if before_tool_call:
+                preempt = before_tool_call("manage_todo_tool")
+                if preempt is not None:
+                    return preempt
+
             action_normalized = (action or "").strip().lower()
 
             if action_normalized == "add":
@@ -269,7 +314,7 @@ class DocumentSearchTools:
 
             return {"error": "Invalid action. Use 'add', 'update', or 'list'."}
 
-        return [
+        tools = [
             search_documents_fts,
             search_documents_semantic,
             get_full_document,
@@ -278,3 +323,17 @@ class DocumentSearchTools:
             append_to_scratchpad_tool,
             manage_todo_tool,
         ]
+        if not allowed_names:
+            return tools
+
+        filtered_tools: list = []
+        for candidate in tools:
+            if isinstance(candidate, dict):
+                filtered_tools.append(candidate)
+                continue
+
+            tool_name = getattr(candidate, "name", "")
+            if tool_name in allowed_names:
+                filtered_tools.append(candidate)
+
+        return filtered_tools

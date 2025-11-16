@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 """Tool logging and display with LLM summarization."""
 
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
+import math
 
 from langchain_core.language_models import BaseLanguageModel
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
 from rich.console import Console
 
@@ -17,6 +21,7 @@ def summarize_with_llm(
     tool_name: str,
     inputs: Any,
     outputs: Any,
+    callbacks: list[BaseCallbackHandler] | None = None,
 ) -> tuple[str, str]:
     """
     Generate one-sentence and one-paragraph summaries using LLM.
@@ -68,7 +73,8 @@ LONG: <one to two paragraphs>
 """
 
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
+        config = {"callbacks": callbacks} if callbacks else None
+        response = llm.invoke([HumanMessage(content=prompt)], config=config)
         content = response.content.strip()
 
         # Parse response
@@ -105,6 +111,8 @@ class StreamingLogger:
         "get_chunk_window": "(reading passage)",
         "append_to_scratchpad_tool": "(taking notes)",
         "manage_todo_tool": "(managing to-dos)",
+        "delegate_search": "(delegating to Search Agent)",
+        "read_scratchpad_tool": "(reading notes)",
     }
 
     def __init__(
@@ -113,7 +121,9 @@ class StreamingLogger:
             llm: BaseLanguageModel,
             log_path: Path,
             max_recursions: int = DEFAULT_MAX_RECURSIONS,
-            search_tools = None
+            search_tools = None,
+            token_callback: BaseCallbackHandler | None = None,
+            agent_name: str = "Agent",
         ):
         """
         Initialize streaming logger.
@@ -124,19 +134,24 @@ class StreamingLogger:
             log_path: Path to log file
             max_recursions: Maximum recursions for the agent
             search_tools: DocumentSearchTools instance for accessing todo list
+            agent_name: Name of the agent being logged (for multi-agent systems)
         """
         self.console = console
         self.llm = llm
         self.log_path = log_path
         self.max_recursions = max_recursions
         self.search_tools = search_tools
+        self.agent_name = agent_name
 
         # State tracking
         self.recursion = 0
-        self.current_phase = "Discovery"
         self.current_tool_name = ""
         self.current_summary = ""
         self.action_history = []  # List of last 4 actions: [{tool_name, summary}, ...]
+
+        # Search Agent progress tracking
+        self.search_count = 0
+        self.max_searches = 0
 
         # Token tracking (cumulative)
         self.total_input_tokens = 0
@@ -146,18 +161,39 @@ class StreamingLogger:
         self.pending_tools: Dict[str, Dict[str, Any]] = {}
 
         # Keep reference to token counter for formatted stats
-        self.token_counter = None
+        self.token_counter = token_callback
+        self._last_ai_message_signature = None
+        self._suppress_recursions = False
 
     def on_recursion_start(self):
         """Called when agent starts a new graph recursion (super-step)."""
         self.recursion += 1
-        self._update_phase()
 
     def sync_recursion(self, step: int):
         """Ensure recursion counter reflects LangGraph's reported step."""
         if step > self.recursion:
             self.recursion = step
-            self._update_phase()
+
+    def on_ai_message(self, message):
+        """Handle a new AI message, deduplicating repeated streaming updates."""
+        if self._suppress_recursions or self.agent_name != "Primary Agent":
+            return
+
+        signature = (
+            getattr(message, "id", None)
+            or getattr(message, "lc_id", None)
+            or (getattr(message, "type", None), getattr(message, "content", None))
+        )
+
+        if signature == self._last_ai_message_signature:
+            return
+
+        self._last_ai_message_signature = signature
+        self.on_recursion_start()
+
+    def get_round(self) -> int:
+        """Return the current primary agent round count."""
+        return self.recursion
 
     def on_tool_call(self, tool_name: str, tool_id: str, args: Dict[str, Any]):
         """
@@ -201,13 +237,21 @@ class StreamingLogger:
         self.total_output_tokens = token_counter.completion_tokens
         self.token_counter = token_counter  # Keep reference for formatted stats
 
-        # Generate summary ONCE
-        short, long = summarize_with_llm(
-            self.llm,
-            tool_info['name'],
-            tool_info['args'],
-            result
-        )
+        if tool_info['name'] == "manage_todo_tool":
+            short, long = self._summarize_todo_tool(tool_info, result)
+        else:
+            callbacks = [self.token_counter] if self.token_counter else None
+            self._suppress_recursions = True
+            try:
+                short, long = summarize_with_llm(
+                    self.llm,
+                    tool_info['name'],
+                    tool_info['args'],
+                    result,
+                    callbacks=callbacks,
+                )
+            finally:
+                self._suppress_recursions = False
 
         # Write to log
         self._write_log(tool_info, result, short, long)
@@ -246,7 +290,7 @@ class StreamingLogger:
         Return dict for Live widget to render.
 
         Returns:
-            Dict with phase, iteration, tokens, action history, current action
+            Dict with round, tokens, action history, current action, agent info
         """
         # Build action history with friendly names
         history_with_friendly_names = [
@@ -265,10 +309,18 @@ class StreamingLogger:
         if self.search_tools:
             todos = self.search_tools.todo_list.get_all_todos()
 
+        search_count = self.search_count
+        max_searches = self.max_searches
+
+        if max_searches:
+            search_count = min(search_count, max_searches)
+
         return {
-            'phase': self.current_phase,
-            'recursion': self.recursion,
-            'max_recursions': self.max_recursions,
+            'agent_name': self.agent_name,
+            'round': self.recursion,
+            'max_rounds': self.max_recursions,
+            'search_count': search_count,
+            'max_searches': max_searches,
             'action_history': history_with_friendly_names,
             'current_action': {
                 'friendly_name': self.get_friendly_name(self.current_tool_name) if self.current_tool_name else "",
@@ -277,15 +329,6 @@ class StreamingLogger:
             'token_stats_formatted': token_stats_formatted,
             'todos': todos
         }
-
-    def _update_phase(self):
-        """Update phase based on recursion count."""
-        if self.recursion <= 3:
-            self.current_phase = "Discovery"
-        elif self.recursion <= 20:
-            self.current_phase = "Investigation"
-        else:
-            self.current_phase = "Synthesis"
 
     def _write_log(self, tool_info: Dict[str, Any], result: Any, short: str, long: str):
         """
@@ -299,8 +342,8 @@ class StreamingLogger:
         """
         log_entry = {
             "timestamp": datetime.now().isoformat(),
-            "recursion": tool_info['recursion'],
-            "phase": self.current_phase,
+            "agent_name": self.agent_name,
+            "round": tool_info['recursion'],
             "tool_name": tool_info['name'],
             "inputs": tool_info['args'],
             "outputs_summary": self._prepare_output_for_log(result),
@@ -363,3 +406,24 @@ class StreamingLogger:
             return truncated
 
         return data
+
+    def _summarize_todo_tool(self, tool_info: Dict[str, Any], result: Any) -> tuple[str, str]:
+        """Return a lightweight summary for todo list actions without LLM calls."""
+        action = tool_info.get('args', {}).get('action', 'list')
+        short = f"manage_todo_tool ({action})"
+
+        if isinstance(result, dict):
+            message = result.get("message")
+            todo = result.get("todo")
+            if message and todo:
+                long = f"{message}: {todo.get('task', '')} [{todo.get('status', '')}]"
+            elif message:
+                long = message
+            else:
+                long = json.dumps(result)[:200]
+        elif isinstance(result, str):
+            long = result[:200]
+        else:
+            long = str(result)[:200]
+
+        return short, long
