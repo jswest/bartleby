@@ -77,7 +77,7 @@ bartleby read --pdfs path/to/pdfs --db path/to/db
 - `--pdfs` (required): Path to a single PDF file or directory containing PDFs
 - `--db` (required): Path to database directory (created automatically if it doesn't exist)
 
-**`bartleby write`** - Write a report
+**`bartleby write`** - Write a report (includes live Q&A `/search` mode after the report so you can interrogate sources)
 - `--db` (required): Path to a database directory you've created with `bartleby read`.
 
 ---

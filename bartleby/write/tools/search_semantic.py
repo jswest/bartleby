@@ -10,7 +10,12 @@ from sentence_transformers import SentenceTransformer
 from bartleby.lib.consts import DEFAULT_SEARCH_RESULT_LIMIT, MAX_TOOL_TOKENS
 from bartleby.lib.utils import truncate_result
 from bartleby.write.search import semantic_search
-from bartleby.write.tools.common import sanitize_limit, result_metadata, with_hook
+from bartleby.write.tools.common import (
+    sanitize_limit,
+    result_metadata,
+    with_hook,
+    document_exists,
+)
 
 
 def create_search_semantic_tool(
@@ -54,6 +59,15 @@ def create_search_semantic_tool(
             List of semantically similar document chunks with metadata
         """
         safe_limit = sanitize_limit(limit)
+        if document_id and not document_exists(db_path, document_id):
+            return {
+                "error": "DOCUMENT_NOT_FOUND",
+                "message": (
+                    f"Document '{document_id}' was not found. "
+                    "Use a valid document_id from the report/findings or leave this blank."
+                ),
+            }
+
         with embedding_lock:
             results = semantic_search(
                 db_path,

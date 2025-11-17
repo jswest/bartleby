@@ -113,6 +113,7 @@ class StreamingLogger:
         "get_chunk_window": "Reading passage...",
         "manage_todo_tool": "Managing to-dos...",
         "delegate_search": "Delegating to Search Agent...",
+        "delegate_answer_search": "Delegating Q&A research...",
         "read_findings": "Reading research findings...",
     }
 
@@ -146,6 +147,12 @@ class StreamingLogger:
         self.todo_list = todo_list
         self.agent_name = agent_name
         self.run_uuid = run_uuid
+        self.mode = "report"
+        self.qa_question_count = 0
+        self.current_qa_question: str | None = None
+        self.last_qa_question: str | None = None
+        self.qa_spinner_active = False
+        self.qa_answered_count = 0
 
         # State tracking
         self.recursion = 0
@@ -277,6 +284,58 @@ class StreamingLogger:
         """
         return self.TOOL_MESSAGES.get(tool_name, tool_name)
 
+    def switch_to_qa_mode(self):
+        """Switch logger to Q&A mode with different display format."""
+        self.agent_name = "Answer Agent"
+        self.mode = "qa"
+        self.qa_question_count = 0
+        self.current_qa_question = None
+        self.last_qa_question = None
+        self.qa_answered_count = 0
+        # Don't reset round counter - continues from report phase
+
+    def on_qa_question(self, question: str):
+        """Log user question at start of Q&A interaction."""
+        self.current_qa_question = question
+        self.last_qa_question = question
+        self.qa_question_count += 1
+
+        tool_info = {
+            "name": "user_question",
+            "args": {"question": question},
+            "recursion": self.qa_question_count,
+        }
+        short = f"Q{self.qa_question_count}: {question[:50]}..."
+        long = f"User asked: {question}"
+        self._write_log(
+            tool_info,
+            {"question": question},
+            short,
+            long,
+        )
+
+    def on_qa_answer(self, answer: str, delegated: bool = False):
+        """Log final answer to user question."""
+        tool_info = {
+            "name": "answer_provided",
+            "args": {"question": self.current_qa_question},
+            "recursion": self.qa_question_count,
+        }
+        result_preview = answer[:500] + ("..." if len(answer) > 500 else "")
+        short = f"Answered Q{self.qa_question_count}" + (" (with research)" if delegated else "")
+        long = f"Provided answer to: {self.current_qa_question[:100]}..."
+        self.qa_answered_count = self.qa_question_count
+        self._write_log(
+            tool_info,
+            {
+                "question": self.current_qa_question,
+                "answer": result_preview,
+                "delegated": delegated,
+            },
+            short,
+            long,
+        )
+
     def get_display_data(self) -> Dict[str, Any]:
         """
         Return dict for Live widget to render.
@@ -284,6 +343,41 @@ class StreamingLogger:
         Returns:
             Dict with round, tokens, action history, current action, agent info
         """
+        # Check if in Q&A mode
+        if hasattr(self, 'mode') and self.mode == "qa":
+            # Q&A mode display data
+            history_with_friendly_names = [
+                {
+                    'friendly_name': self.get_friendly_name(action['tool_name']),
+                    'summary': action.get('summary', "")
+                }
+                for action in self.action_history[-3:]  # Last 3 actions only
+            ]
+
+            token_stats_formatted = self.token_counter.get_stats() if self.token_counter else "[↑0/↓0/+0]"
+
+            qa_round = self.qa_question_count
+            if qa_round == 0 and self.qa_answered_count:
+                qa_round = self.qa_answered_count
+
+            return {
+                'agent_name': "Q&A Session",
+                'round': qa_round,
+                'max_rounds': None,
+                'search_count': self.search_count,
+                'max_searches': self.max_searches,
+                'current_question': self.current_qa_question or self.last_qa_question,
+                'action_history': history_with_friendly_names,
+                'current_action': {
+                    'friendly_name': self.get_friendly_name(self.current_tool_name) if self.current_tool_name else "",
+                    'summary': self.current_summary
+                },
+                'token_stats_formatted': token_stats_formatted,
+                'spinner_active': getattr(self, "qa_spinner_active", False),
+                'mode': 'qa'
+            }
+
+        # Report mode display data (existing implementation)
         # Build action history with friendly names
         history_with_friendly_names = [
             {

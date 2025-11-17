@@ -26,3 +26,7 @@ EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
 # Primary agent round defaults
 DEFAULT_MAX_TODO_ROUNDS = 10
 DEFAULT_MAX_TOTAL_ROUNDS = DEFAULT_MAX_TODO_ROUNDS + 1
+
+# Q&A mode configuration
+DEFAULT_QA_ENABLED = True
+DEFAULT_QA_SAVE_SESSION = True

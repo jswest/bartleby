@@ -65,6 +65,11 @@ def main():
         type=str,
         help="Path to the database directory (created by 'bartleby read')"
     )
+    write_parser.add_argument(
+        "--qa-only",
+        action="store_true",
+        help="Skip report generation and go directly to Q&A mode (requires existing report.md and findings/)"
+    )
 
     args = parser.parse_args()
 
@@ -110,7 +115,7 @@ def main():
         db_dir = Path(args.db)
         db_path = db_dir / "bartleby.db"
 
-        write_main(db_path=db_path)
+        write_main(db_path=db_path, qa_only=args.qa_only)
 
 
 if __name__ == "__main__":

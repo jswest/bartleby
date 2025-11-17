@@ -141,13 +141,22 @@ def run_search_agent(
     activity_logger=None,
     display_callback=None,
     max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
+    findings_prefix: str | None = None,
 ) -> Dict[str, Any]:
     """
     Run the search agent for a single task.
 
+    Args:
+        findings_prefix: Prefix for findings filename (defaults to run_uuid).
+                        Use "answer" for Q&A phase to create answer-{seq}.md files.
+
     Returns:
         Dictionary with {"summary": str, "findings_file": str}
     """
+    # Default findings_prefix to run_uuid if not provided
+    if findings_prefix is None:
+        findings_prefix = run_uuid
+
     allowed_tools = {
         "search_documents_fts",
         "search_documents_semantic",
@@ -200,7 +209,7 @@ def run_search_agent(
     summary = final_response or "Search Agent completed but returned no summary."
     findings_filename = _write_findings(
         findings_dir=findings_dir,
-        run_uuid=run_uuid,
+        findings_prefix=findings_prefix,
         sequence=sequence,
         task=task,
         summary=summary,
@@ -307,11 +316,17 @@ def _handle_agent_message(
 
 def _write_findings(
     findings_dir: Path,
-    run_uuid: str,
+    findings_prefix: str,
     sequence: int,
     task: str,
     summary: str,
 ) -> str:
+    """
+    Write findings to a Markdown file.
+
+    Args:
+        findings_prefix: Prefix for filename (e.g., run_uuid or "answer")
+    """
     findings = SearchFindings(
         task=task,
         searches_performed=[],
@@ -320,7 +335,7 @@ def _write_findings(
         summary=summary,
     )
     findings_md = render_findings_to_markdown(findings)
-    findings_filename = f"{run_uuid}-{sequence:02d}.md"
+    findings_filename = f"{findings_prefix}-{sequence:02d}.md"
     findings_file = findings_dir / findings_filename
     findings_file.write_text(findings_md, encoding="utf-8")
     return findings_filename
