@@ -1,7 +1,7 @@
 """Memory utilities for agent todo list."""
 
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class TodoList:
@@ -45,6 +45,17 @@ class TodoList:
             "total_todos": len(self.todos),
         }
 
+    def _normalize_task(self, task: str) -> str:
+        return (task or "").strip().lower()
+
+    def find_exact(self, task: str) -> Optional[Dict[str, str]]:
+        """Return the todo whose task matches exactly (case-insensitive)."""
+        normalized = self._normalize_task(task)
+        for todo in self.todos:
+            if self._normalize_task(todo.get("task", "")) == normalized:
+                return todo
+        return None
+
     def update_todo_status(self, task: str, status: str) -> Dict[str, Any]:
         """
         Update the status of a todo item.
@@ -85,6 +96,51 @@ class TodoList:
             "message": f"Updated '{todo['task']}' from {old_status} to {status}",
             "todo": self.todos[idx],
         }
+
+    def update_todo_status_exact(self, task: str, status: str) -> Dict[str, Any]:
+        """Update todo status matching exact task text (case-insensitive)."""
+        todo = self.find_exact(task)
+        if not todo:
+            return {"error": f"No todo found matching exactly: {task}"}
+        idx = self.todos.index(todo)
+        old_status = todo["status"]
+        self.todos[idx]["status"] = status
+        self.write_todo_list()
+        return {
+            "message": f"Updated '{todo['task']}' from {old_status} to {status}",
+            "todo": self.todos[idx],
+        }
+
+    def set_active_task(self, task: str) -> Dict[str, Any]:
+        """
+        Mark the specified todo as active and reset any other active todos to pending.
+        Ensures only one todo is marked active at a time.
+        """
+        todo = self.find_exact(task)
+        if not todo:
+            return {"error": f"No todo found matching exactly: {task}"}
+
+        for existing in self.todos:
+            if existing is todo:
+                continue
+            if existing.get("status") == "active":
+                existing["status"] = "pending"
+
+        old_status = todo["status"]
+        todo["status"] = "active"
+        self.write_todo_list()
+        return {
+            "message": f"Updated '{todo['task']}' from {old_status} to active",
+            "todo": todo,
+        }
+
+    def find_first(self, task: str) -> Dict[str, str] | None:
+        """Return the first todo whose task contains the provided text (case-insensitive)."""
+        task_lower = (task or "").lower()
+        for todo in self.todos:
+            if task_lower and task_lower in todo.get("task", "").lower():
+                return todo
+        return None
 
     def get_todos(self) -> Dict[str, Any]:
         """

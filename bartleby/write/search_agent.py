@@ -12,7 +12,10 @@ from langchain_core.messages.utils import count_tokens_approximately, trim_messa
 from langgraph.errors import GraphRecursionError
 from loguru import logger
 
-from bartleby.lib.consts import DEFAULT_AGENT_CONTEXT_TOKENS, MAX_SEARCH_OPERATIONS
+from bartleby.lib.consts import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
+    DEFAULT_MAX_SEARCH_OPERATIONS,
+)
 from bartleby.write.findings_schema import SearchFindings, render_findings_to_markdown
 from bartleby.write.token_counter import TokenCounterCallback
 from bartleby.write.tools import get_tools
@@ -78,7 +81,7 @@ def _load_search_agent_prompt() -> str:
 
 
 def build_search_limit_middleware(
-    max_calls: int = MAX_SEARCH_OPERATIONS,
+    max_calls: int = DEFAULT_MAX_SEARCH_OPERATIONS,
     tracker: SearchBudget | None = None,
 ):
     """Create middleware that enforces tool call limits."""
@@ -137,6 +140,7 @@ def run_search_agent(
     token_counter: TokenCounterCallback | None = None,
     activity_logger=None,
     display_callback=None,
+    max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
 ) -> Dict[str, Any]:
     """
     Run the search agent for a single task.
@@ -150,7 +154,7 @@ def run_search_agent(
         "get_chunk_window",
         "get_full_document",
     }
-    budget_tracker = SearchBudget(MAX_SEARCH_OPERATIONS)
+    budget_tracker = SearchBudget(max_search_operations)
     tools = get_tools(
         db_path=db_path,
         todos_path=todos_path,
@@ -164,7 +168,7 @@ def run_search_agent(
     task_prompt = (
         f"Task: {task}\n\n"
         f"{detail_block}"
-        f"You have {MAX_SEARCH_OPERATIONS} tool calls to gather evidence for this task. Make them count."
+        f"You have {max_search_operations} tool calls to gather evidence for this task. Make them count."
     )
 
     agent = create_agent(
@@ -173,12 +177,12 @@ def run_search_agent(
         system_prompt=system_prompt,
         middleware=[
             build_search_limit_middleware(
-                MAX_SEARCH_OPERATIONS, tracker=budget_tracker
+                max_search_operations, tracker=budget_tracker
             )
         ],
     )
 
-    config = {"recursion_limit": MAX_SEARCH_OPERATIONS * 4 + 10}
+    config = {"recursion_limit": max_search_operations * 4 + 10}
     if token_counter:
         config["callbacks"] = [token_counter]
 
@@ -190,6 +194,7 @@ def run_search_agent(
         token_counter=token_counter,
         activity_logger=activity_logger,
         display_callback=display_callback,
+        max_search_operations=max_search_operations,
     )
 
     summary = final_response or "Search Agent completed but returned no summary."
@@ -212,6 +217,7 @@ def _stream_agent(
     token_counter: TokenCounterCallback | None,
     activity_logger,
     display_callback,
+    max_search_operations: int,
 ) -> str:
     final_response = ""
     original_agent_name = None
@@ -219,7 +225,7 @@ def _stream_agent(
         original_agent_name = activity_logger.agent_name
         activity_logger.agent_name = "Search Agent"
         activity_logger.search_count = 0
-        activity_logger.max_searches = MAX_SEARCH_OPERATIONS
+        activity_logger.max_searches = max_search_operations
 
     try:
         for event in agent.stream(
@@ -237,11 +243,12 @@ def _stream_agent(
                 token_counter,
                 budget_tracker,
                 display_callback,
+                max_search_operations,
             )
     except GraphRecursionError:
         logger.error(
             "Search Agent hit the recursion limit before finishing its task. "
-            "Increase MAX_SEARCH_OPERATIONS or recursion limit if this persists."
+            "Increase the search budget or recursion limit if this persists."
         )
         final_response = (
             "Search Agent stopped after reaching its internal recursion limit. "
@@ -266,6 +273,7 @@ def _handle_agent_message(
     token_counter: TokenCounterCallback | None,
     budget_tracker: SearchBudget,
     display_callback,
+    max_search_operations: int,
 ) -> str:
     if hasattr(last_message, "type") and last_message.type == "ai":
         if activity_logger:
@@ -289,7 +297,7 @@ def _handle_agent_message(
                     tool_call_id, last_message.content, token_counter
                 )
                 activity_logger.search_count = min(
-                    budget_tracker.calls_made, MAX_SEARCH_OPERATIONS
+                    budget_tracker.calls_made, max_search_operations
                 )
                 if display_callback:
                     display_callback()

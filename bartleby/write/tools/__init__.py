@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Set, Any, Callable, Optional
 from threading import Lock
 
+from bartleby.lib.consts import DEFAULT_MAX_SEARCH_OPERATIONS
 from bartleby.write.memory import TodoList
 
 
@@ -19,6 +20,7 @@ def get_tools(
     logger = None,
     display_callback: Optional[Callable] = None,
     before_hook: Optional[Callable[[str], Any]] = None,
+    max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
 ) -> List:
     """
     Build and return requested tools for agents.
@@ -73,6 +75,7 @@ def get_tools(
             logger=logger,
             display_callback=display_callback,
             todo_list=todo_list,
+            max_search_operations=max_search_operations,
         ),
     }
 

@@ -7,6 +7,7 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from bartleby.lib.consts import DEFAULT_MAX_SEARCH_OPERATIONS
 from bartleby.write.memory import TodoList
 
 
@@ -21,6 +22,7 @@ def create_delegate_search_tool(
     logger=None,
     display_callback: Optional[Callable] = None,
     todo_list: TodoList = None,
+    max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
 ):
     """
     Create delegation tool for Primary Agent.
@@ -49,26 +51,47 @@ def create_delegate_search_tool(
     class DelegateSearchInput(BaseModel):
         task: str = Field(
             ...,
-            description="Research question or task description delegated to the Search Agent.",
+            description="One or more newline-separated todo descriptions to delegate (max 3).",
         )
         details: str = Field(
             default="",
-            description="Optional extra context or specific references for the task.",
+            description="Optional extra context applied to every delegated sub-task.",
         )
 
-    def _mark_todo(task_description: str, status: str) -> str:
-        """Update todo status if a matching todo exists."""
-        if not todo_list:
-            return ""
-        try:
-            result = todo_list.update_todo_status(task_description, status)
-        except Exception:
-            return ""
-        if result.get("error"):
-            return ""
-        return result.get("todo", {}).get("task", task_description)
+    def _parse_tasks(task_block: str) -> list[str]:
+        lines = [line.strip(" •-\t") for line in (task_block or "").splitlines()]
+        tasks = [line for line in lines if line]
+        if not tasks:
+            tasks = [task_block.strip()] if task_block.strip() else []
+        return tasks[:3]
 
-    def _delegate_search(task: str, details: str = "") -> str:
+    def _ensure_todo(task_description: str) -> dict:
+        """Find existing todo (case-insensitive) or create a new pending one."""
+        if not todo_list:
+            return {"task": task_description, "status": "pending"}
+
+        existing = todo_list.find_exact(task_description)
+        if existing:
+            return existing
+
+        result = todo_list.add_todo(task_description)
+        return result.get("todo", {"task": task_description, "status": "pending"})
+
+    def _mark_status(task_description: str, status: str) -> dict:
+        """Update todo status, returning the resulting record."""
+        if not todo_list:
+            return {"task": task_description, "status": status}
+
+        if status == "active":
+            result = todo_list.set_active_task(task_description)
+        else:
+            result = todo_list.update_todo_status_exact(task_description, status)
+
+        if result.get("error"):
+            return {"task": task_description, "status": status, "error": result["error"]}
+        return result.get("todo", {"task": task_description, "status": status})
+
+    def _delegate_search(task: str, details: str = "", _max_search_operations: int = max_search_operations) -> str:
         """
         Delegate a research task to the Search Agent.
 
@@ -77,45 +100,59 @@ def create_delegate_search_tool(
         immediately, and the full findings will be available when you synthesize
         your final report.
         """
-        # Increment sequence
-        sequence_counter["count"] += 1
-        sequence = sequence_counter["count"]
+        tasks = _parse_tasks(task)
+        if not tasks:
+            raise ValueError("At least one todo description is required.")
 
-        activated_todo = _mark_todo(task, "active")
+        summaries = []
 
-        result = run_search_agent(
-            task=task,
-            details=details,
-            llm=llm,
-            db_path=db_path,
-            findings_dir=findings_dir,
-            todos_path=todos_path,
-            embedding_model=embedding_model,
-            run_uuid=run_uuid,
-            sequence=sequence,
-            token_counter=token_counter,
-            activity_logger=logger,
-            display_callback=display_callback,
-        )
+        for subtask in tasks:
+            todo = _ensure_todo(subtask)
+            _mark_status(todo["task"], "active")
 
-        completed_todo = _mark_todo(task, "complete")
+            sequence_counter["count"] += 1
+            sequence = sequence_counter["count"]
 
-        summary = result.get("summary", "Search Agent completed but returned no summary.")
-        findings_file = result.get("findings_file", "")
+            try:
+                result = run_search_agent(
+                    task=subtask,
+                    details=details or task,
+                    llm=llm,
+                    db_path=db_path,
+                    findings_dir=findings_dir,
+                    todos_path=todos_path,
+                    embedding_model=embedding_model,
+                    run_uuid=run_uuid,
+                    sequence=sequence,
+                    token_counter=token_counter,
+                    activity_logger=logger,
+                    display_callback=display_callback,
+                    max_search_operations=_max_search_operations,
+                )
+            except Exception:
+                _mark_status(todo["task"], "pending")
+                raise
 
-        follow_up_note = ""
-        if activated_todo:
-            follow_up_note += f"\n\n(🗂️ Marked todo '{activated_todo}' as active.)"
-        if completed_todo:
-            follow_up_note += f"\n\n(✅ Marked todo '{completed_todo}' complete.)"
-        if findings_file:
-            follow_up_note += f"\n\n(📄 Full findings saved to: {findings_file})"
+            summary = result.get("summary", "Search Agent completed but returned no summary.")
+            findings_file = result.get("findings_file", "")
 
-        return summary + follow_up_note if follow_up_note else summary
+            _mark_status(todo["task"], "complete")
+
+            bullet = f"- **{subtask}**: {summary}"
+            if findings_file:
+                bullet += f" (📄 {findings_file})"
+            summaries.append(bullet)
+
+        header = f"Delegated tasks under '{task}':"
+        body = "\n".join(summaries)
+        return f"{header}\n{body}"
 
     return StructuredTool.from_function(
         func=_delegate_search,
         name="delegate_search",
-        description="Delegate a discrete research task to the Search Agent (up to 5 searches).",
+        description=(
+            f"Delegate 1-3 research subtasks to the Search Agent (each gets up to {max_search_operations} searches). "
+            "Automatically creates and manages the related todos."
+        ),
         args_schema=DelegateSearchInput,
     )

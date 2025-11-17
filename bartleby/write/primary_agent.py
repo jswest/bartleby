@@ -11,14 +11,19 @@ from langchain_core.messages.utils import trim_messages, count_tokens_approximat
 from langchain_core.tools import tool
 from loguru import logger
 
-from bartleby.lib.consts import DEFAULT_AGENT_CONTEXT_TOKENS
+from bartleby.lib.consts import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
+    DEFAULT_MAX_SEARCH_OPERATIONS,
+    DEFAULT_MAX_TODO_ROUNDS,
+    DEFAULT_MAX_TOTAL_ROUNDS,
+)
 from bartleby.write.token_counter import TokenCounterCallback
 from bartleby.write.tools import get_tools
 
 
-# Primary Agent constraints
-MAX_TODO_ROUNDS = 8
-MAX_TOTAL_ROUNDS = 10
+# Primary Agent constraints (defaults, overridable via config)
+MAX_TODO_ROUNDS = DEFAULT_MAX_TODO_ROUNDS
+MAX_TOTAL_ROUNDS = DEFAULT_MAX_TOTAL_ROUNDS
 
 
 def _load_primary_agent_prompt() -> str:
@@ -38,6 +43,7 @@ def build_primary_agent_tools(
     token_counter: TokenCounterCallback | None = None,
     streaming_logger=None,
     display_callback=None,
+    max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
 ) -> list:
     """
     Build tools for the Primary Agent.
@@ -45,8 +51,9 @@ def build_primary_agent_tools(
     The Primary Agent has:
     - manage_todo_tool
     - delegate_search (invokes Search Agent)
+    - read_findings (synthesis phase only)
     """
-    allowed_tools = {"manage_todo_tool", "delegate_search"}
+    allowed_tools = {"manage_todo_tool", "delegate_search", "read_findings"}
 
     return get_tools(
         db_path=db_path,
@@ -59,6 +66,7 @@ def build_primary_agent_tools(
         token_counter=token_counter,
         logger=streaming_logger,
         display_callback=display_callback,
+        max_search_operations=max_search_operations,
     )
 
 
@@ -67,13 +75,14 @@ def build_round_limit_middleware(
     max_total_rounds: int,
     token_counter: TokenCounterCallback | None = None,
     todo_status_provider: Callable[[], list[Dict[str, str]]] | None = None,
-    round_provider: Callable[[], int] | None = None
+    round_provider: Callable[[], int] | None = None,
+    synthesis_tools: list | None = None
 ):
     """
     Create middleware that enforces round-based and token budget constraints.
 
     - Rounds 1-{max_todo_rounds}: Can use all tools (manage_todos, delegate_search)
-    - Rounds {max_todo_rounds+1}-{max_total_rounds}: Cannot add new todos via manage_todo_tool action='add'
+    - Rounds {max_todo_rounds+1}-{max_total_rounds-1}: Synthesis mode (read_findings, manage_todo_tool)
     - Round ≥ {max_total_rounds}: All tools disabled; agent must immediately produce the report
     - Token budget warnings at 75% and 90%
     """
@@ -145,6 +154,9 @@ def build_round_limit_middleware(
                     "Finish these todos immediately: " + "; ".join(incomplete_todos[:3])
                     + ("" if len(incomplete_todos) <= 3 else " …")
                 )
+            # Swap to synthesis tools (read_findings instead of delegate_search)
+            if synthesis_tools is not None:
+                tools_override = synthesis_tools
         elif current_round > max_todo_rounds - 2:
             warnings.append(
                 f"⏰ WARNING (Round {current_round}/{max_total_rounds}): "
@@ -187,6 +199,7 @@ def run_primary_agent(
     token_counter: TokenCounterCallback | None = None,
     max_todo_rounds: int = MAX_TODO_ROUNDS,
     max_total_rounds: int = MAX_TOTAL_ROUNDS,
+    max_search_operations: int = DEFAULT_MAX_SEARCH_OPERATIONS,
     logger=None,
     display_callback=None,
 ) -> Iterator[Dict[str, Any]]:
@@ -204,17 +217,30 @@ def run_primary_agent(
         token_counter: Optional token counter
         max_todo_rounds: Maximum rounds to allow adding todos (default: 10)
         max_total_rounds: Maximum total rounds before forcing report (default: 15)
+        max_search_operations: Maximum number of tool calls per delegated Search Agent task
         logger: Optional StreamingLogger for tracking tool calls
         display_callback: Optional callback to update display
 
     Yields:
         Agent execution events
     """
-    # Build tools
-    tools = build_primary_agent_tools(
-        llm, db_path, findings_dir, todos_path, embedding_model, run_uuid,
-        token_counter, logger, display_callback
+    # Build all tools
+    all_tools = build_primary_agent_tools(
+        llm,
+        db_path,
+        findings_dir,
+        todos_path,
+        embedding_model,
+        run_uuid,
+        token_counter,
+        logger,
+        display_callback,
+        max_search_operations=max_search_operations,
     )
+
+    # Split into research and synthesis tool sets
+    research_tools = [t for t in all_tools if t.name in {"delegate_search"}]
+    synthesis_tools = [t for t in all_tools if t.name in {"read_findings"}]
 
     # Load system prompt
     system_prompt = _load_primary_agent_prompt()
@@ -226,17 +252,18 @@ def run_primary_agent(
 
 {user_direction}
 
-## Budget Constraints
+## Workflow Constraints
 
-- **Rounds 1-{max_todo_rounds}**: You can create todos and delegate searches to the Search Agent
-- **Round {max_todo_rounds + 1}: Session will end next round. You MUST deliver the complete report.
+- Use `delegate_search` to create and execute todos. Provide one todo per call or a newline-separated list (max 3 per call). Do NOT call manage_todo_tool.
+- Rounds 1-{max_todo_rounds}: Explore, delegate searches, and gather findings.
+- Round {max_todo_rounds + 1}: Stop delegating. Session will end next round.
+- Round {max_total_rounds}: Tools are disabled. You MUST deliver the complete report immediately.
 
 ## Your Task
 
-1. Break down the investigation into 2-4 focused research questions (todos)
-2. Delegate each todo to the Search Agent
-3. Review the Search Agent's findings. You may add additional todos.
-4. Synthesize everything into a comprehensive Markdown report
+1. Break the investigation into 2-4 focused research questions (todos).
+2. Delegate each todo via `delegate_search` and review the returned findings.
+3. Once all research is complete (or time is up), synthesize a comprehensive Markdown report.
 
 Begin your investigation now.
 """
@@ -248,7 +275,7 @@ Begin your investigation now.
     # Create agent with round limit middleware
     agent = create_agent(
         model=llm,
-        tools=tools,
+        tools=research_tools,
         system_prompt=full_prompt,
         middleware=[
             build_round_limit_middleware(
@@ -256,7 +283,8 @@ Begin your investigation now.
                 max_total_rounds,
                 token_counter,
                 todo_status_provider=todo_list.get_all_todos,
-                round_provider=(lambda: logger.get_round()) if logger else None
+                round_provider=(lambda: logger.get_round()) if logger else None,
+                synthesis_tools=synthesis_tools
             )
         ],
     )

@@ -5,7 +5,12 @@ from rich.panel import Panel
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 import yaml
 
-from bartleby.lib.consts import DEFAULT_MAX_RECURSIONS
+from bartleby.lib.consts import (
+    DEFAULT_MAX_RECURSIONS,
+    DEFAULT_MAX_SEARCH_OPERATIONS,
+    DEFAULT_MAX_TODO_ROUNDS,
+    DEFAULT_MAX_TOTAL_ROUNDS,
+)
 
 ALLOWED_PROVIDERS = ["anthropic", "openai", "ollama"]
 CONFIG_DIR = Path.home() / ".bartleby"
@@ -143,6 +148,33 @@ def main():
                 break
             else:
                 console.print("[red]Temperature must be between 0 and 1[/red]")
+
+    console.print(f"\n[bold]Agent Round Limits[/bold]")
+    default_todo_rounds = existing_config.get("max_todo_rounds", DEFAULT_MAX_TODO_ROUNDS)
+    config["max_todo_rounds"] = IntPrompt.ask(
+        "Max rounds for creating/delegating todos",
+        default=default_todo_rounds
+    )
+
+    min_total_rounds = config["max_todo_rounds"] + 1
+    default_total_rounds = existing_config.get("max_total_rounds", DEFAULT_MAX_TOTAL_ROUNDS)
+    default_total_rounds = max(default_total_rounds, min_total_rounds)
+
+    while True:
+        total_rounds = IntPrompt.ask(
+            "Total rounds before forcing the final report (must be at least todos + 1)",
+            default=default_total_rounds
+        )
+        if total_rounds >= min_total_rounds:
+            config["max_total_rounds"] = total_rounds
+            break
+        console.print(f"[red]Total rounds must be at least one more than todo rounds ({min_total_rounds}).[/red]")
+
+    default_search_ops = existing_config.get("max_search_operations", DEFAULT_MAX_SEARCH_OPERATIONS)
+    config["max_search_operations"] = IntPrompt.ask(
+        "Max search tool calls per delegated task",
+        default=default_search_ops
+    )
 
     # Save config
     save_config(config)

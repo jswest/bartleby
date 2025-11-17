@@ -18,7 +18,7 @@ Also, I'm using the excellent (but pre-v0) `sqlite-vec` plugin for SQLite, [here
 
 ### The writer — `bartleby write`.
 
-This is an experiment: Can an agent run RAG for you on a prepared corpus? Can I write one that does? The answer to this is complicated. This works reasonably well with paid models, such as `gpt-5-mini`, etc., but I am still getting it to reliably work with open-weights models served from Ollama (which I think is a crucial feature): `qwen3:8b` worked somewhat well; `gpt-oss:20b` failed completely. It's possible with open-weights models bigger than the sort that can run on a laptop you'd have better luck.
+This is an experiment: Can an agent run RAG for you on a prepared corpus? Can I write one that does? The answer to this is complicated. I have tested it, and it works reasonably well with paid models, such as `gpt-5-nano` and `gpt-5-mini` (though it can use ~100,000 tokens or so, so be careful). It also now works relaibly with `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b`--all open-weights models used with Ollama.
 
 Be careful about token costs when using paid models. `gpt-5-nano` produces reports for pennies. `gpt-5-pro` or whatever might cost a good bit more. **The costs the tool shows are estimates!**
 
@@ -100,3 +100,9 @@ bartleby read --pdfs path/to/pdfs --db path/to/db
 ## A note on ~ vibe coding ~.
 
 Yes, I vibe coded a lot of this codebase, though I've made some efforts to clean it up. Sorry.
+
+---
+
+## Other learnings
+
+The open-weights models runnable on my computer have different reqs! `gpt-oss:20b`, for example, wants simpler, post-processed schemas. While paid models want Pydantic modelling everywhere.

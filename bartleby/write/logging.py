@@ -350,7 +350,7 @@ class StreamingLogger:
         }
 
         with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, indent=2) + "\n")
+            f.write(json.dumps(log_entry, separators=(",", ":")) + "\n")
 
     def _prepare_output_for_log(self, output: Any) -> Any:
         """

@@ -25,11 +25,14 @@ except ImportError:  # pragma: no cover - fallback when langgraph not installed
 from bartleby.lib.console import send
 from bartleby.lib.consts import (
     DEFAULT_MAX_RECURSIONS,
+    DEFAULT_MAX_SEARCH_OPERATIONS,
+    DEFAULT_MAX_TODO_ROUNDS,
+    DEFAULT_MAX_TOTAL_ROUNDS,
     DEFAULT_MAX_TOTAL_TOKENS,
     EMBEDDING_MODEL,
 )
 from bartleby.lib.utils import load_config, load_llm_from_config
-from bartleby.write.primary_agent import run_primary_agent, MAX_TODO_ROUNDS, MAX_TOTAL_ROUNDS
+from bartleby.write.primary_agent import run_primary_agent
 from bartleby.write.logging import StreamingLogger
 from bartleby.write.token_counter import TokenCounterCallback
 
@@ -191,10 +194,19 @@ def main(db_path: Path):
 
     # Load limits with safe defaults
     max_todo_rounds = _coerce_positive_int(
-        config.get("max_todo_rounds"), MAX_TODO_ROUNDS
+        config.get("max_todo_rounds"), DEFAULT_MAX_TODO_ROUNDS
     )
     max_total_rounds = _coerce_positive_int(
-        config.get("max_total_rounds"), MAX_TOTAL_ROUNDS
+        config.get("max_total_rounds"), DEFAULT_MAX_TOTAL_ROUNDS
+    )
+    if max_total_rounds < max_todo_rounds + 1:
+        max_total_rounds = max_todo_rounds + 1
+        send(
+            f"Adjusted max_total_rounds to {max_total_rounds} so there is at least one round to write the report.",
+            "WARN"
+        )
+    max_search_operations = _coerce_positive_int(
+        config.get("max_search_operations"), DEFAULT_MAX_SEARCH_OPERATIONS
     )
     token_budget_limit = _coerce_non_negative_optional(
         config.get("token_budget", DEFAULT_MAX_TOTAL_TOKENS)
@@ -268,6 +280,7 @@ def main(db_path: Path):
                 token_counter=token_counter,
                 max_todo_rounds=max_todo_rounds,
                 max_total_rounds=max_total_rounds,
+                max_search_operations=max_search_operations,
                 logger=logger,
                 display_callback=update_display,
             ):
