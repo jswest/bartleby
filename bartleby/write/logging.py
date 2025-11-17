@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-"""Tool logging and display for agent activity."""
-
-import json
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any, Dict, TYPE_CHECKING
-import math
 
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -110,13 +107,13 @@ class StreamingLogger:
 
     # Tool display messages for tool calls (shown briefly before result)
     TOOL_MESSAGES = {
-        "search_documents_fts": "Searching text",
-        "search_documents_semantic": "Searching vectors",
-        "get_full_document": "Reading document",
-        "get_chunk_window": "Reading passage",
-        "manage_todo_tool": "Managing to-dos",
-        "delegate_search": "Delegating to Search Agent",
-        "read_findings": "Reading research findings",
+        "search_documents_fts": "Searching text...",
+        "search_documents_semantic": "Searching vectors...",
+        "get_full_document": "Reading document...",
+        "get_chunk_window": "Reading passage...",
+        "manage_todo_tool": "Managing to-dos...",
+        "delegate_search": "Delegating to Search Agent...",
+        "read_findings": "Reading research findings...",
     }
 
     def __init__(
@@ -291,7 +288,7 @@ class StreamingLogger:
         history_with_friendly_names = [
             {
                 'friendly_name': self.get_friendly_name(action['tool_name']),
-                'summary': action['summary']
+                'summary': ""
             }
             for action in self.action_history
         ]

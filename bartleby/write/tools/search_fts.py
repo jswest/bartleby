@@ -43,7 +43,7 @@ def create_search_fts_tool(
     def search_documents_fts(
         query: str,
         limit: int = DEFAULT_SEARCH_RESULT_LIMIT,
-        document_id: str | None = None
+        document_id: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Search documents using full-text search (keyword matching).
@@ -65,7 +65,9 @@ def create_search_fts_tool(
                 return preempt
 
         limit = sanitize_limit(limit)
-        results = full_text_search(db_path, query, limit, document_id=document_id)
+        results = full_text_search(
+            db_path, query, limit, document_id=document_id or None
+        )
         data = result_metadata(results)
         return truncate_result(data, max_tokens=MAX_TOOL_TOKENS)
 

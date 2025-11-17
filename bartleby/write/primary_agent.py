@@ -112,7 +112,7 @@ def build_round_limit_middleware(
                 warnings.append(
                     f"🚨 TOKEN BUDGET CRITICAL ({token_counter.total_tokens}/{token_counter.token_budget} tokens, {token_ratio:.0%}): "
                     "You MUST deliver your final report in the next 2-3 rounds. "
-                    "Stop ALL delegation and searches. Review scratchpad and write report NOW."
+                    "Stop ALL delegation and searches. Write your report NOW!"
                 )
             elif token_ratio >= 0.75:
                 warnings.append(

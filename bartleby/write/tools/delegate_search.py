@@ -1,10 +1,11 @@
 """Tool for delegating research tasks to the Search Agent."""
 
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 from langchain_core.language_models import BaseLanguageModel
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 from bartleby.write.memory import TodoList
 
@@ -45,6 +46,16 @@ def create_delegate_search_tool(
     # Sequence counter for findings files
     sequence_counter = {"count": 0}
 
+    class DelegateSearchInput(BaseModel):
+        task: str = Field(
+            ...,
+            description="Research question or task description delegated to the Search Agent.",
+        )
+        details: str = Field(
+            default="",
+            description="Optional extra context or specific references for the task.",
+        )
+
     def _mark_todo(task_description: str, status: str) -> str:
         """Update todo status if a matching todo exists."""
         if not todo_list:
@@ -57,8 +68,7 @@ def create_delegate_search_tool(
             return ""
         return result.get("todo", {}).get("task", task_description)
 
-    @tool
-    def delegate_search(task: str, details: str = "") -> str:
+    def _delegate_search(task: str, details: str = "") -> str:
         """
         Delegate a research task to the Search Agent.
 
@@ -66,22 +76,13 @@ def create_delegate_search_tool(
         and write findings to a dedicated file. The summary is returned to you
         immediately, and the full findings will be available when you synthesize
         your final report.
-
-        Args:
-            task: The research question or task description
-            details: Additional context or specific things to look for
-
-        Returns:
-            Summary of what the Search Agent found
         """
         # Increment sequence
         sequence_counter["count"] += 1
         sequence = sequence_counter["count"]
 
-        # Mark todo as active
         activated_todo = _mark_todo(task, "active")
 
-        # Run the search agent
         result = run_search_agent(
             task=task,
             details=details,
@@ -97,10 +98,8 @@ def create_delegate_search_tool(
             display_callback=display_callback,
         )
 
-        # Mark todo as complete
         completed_todo = _mark_todo(task, "complete")
 
-        # Build response
         summary = result.get("summary", "Search Agent completed but returned no summary.")
         findings_file = result.get("findings_file", "")
 
@@ -114,4 +113,9 @@ def create_delegate_search_tool(
 
         return summary + follow_up_note if follow_up_note else summary
 
-    return delegate_search
+    return StructuredTool.from_function(
+        func=_delegate_search,
+        name="delegate_search",
+        description="Delegate a discrete research task to the Search Agent (up to 5 searches).",
+        args_schema=DelegateSearchInput,
+    )

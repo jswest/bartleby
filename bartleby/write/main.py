@@ -82,7 +82,7 @@ def format_display(display_data: dict) -> Text:
         # Action history (dim)
         for action in display_data['action_history']:
             lines.append(Text(
-                f"- {action['friendly_name']}: {action['summary']}",
+                f"- {action['friendly_name']}",
                 style="dim"
             ))
 
@@ -90,7 +90,7 @@ def format_display(display_data: dict) -> Text:
         current = display_data['current_action']
         if current['summary']:
             lines.append(Text(
-                f"- {current['friendly_name']}: {current['summary']}",
+                f"- {current['friendly_name']}",
                 style="bold"
             ))
 

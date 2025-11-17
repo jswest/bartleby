@@ -49,7 +49,7 @@ def create_search_semantic_tool(
     def search_documents_semantic(
         query: str,
         limit: int = DEFAULT_SEARCH_RESULT_LIMIT,
-        document_id: str | None = None
+        document_id: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Search documents using semantic similarity (meaning-based).
@@ -73,7 +73,11 @@ def create_search_semantic_tool(
         limit = sanitize_limit(limit)
         with embedding_lock:
             results = semantic_search(
-                db_path, query, embedding_model, limit, document_id=document_id
+                db_path,
+                query,
+                embedding_model,
+                limit,
+                document_id=document_id or None,
             )
         data = result_metadata(results)
         return truncate_result(data, max_tokens=MAX_TOOL_TOKENS)

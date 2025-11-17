@@ -29,22 +29,26 @@ Send a research task to the Search Agent.
 
 The Search Agent will:
 - Execute up to 5 searches/reads
-- Write findings to the scratchpad with citations
-- Return a summary
+- Write detailed findings to a dedicated file with citations
+- Return a summary and file path
 
 **Best practice:** Give clear, focused tasks. One task = one research question.
 
-### 3. read_scratchpad_tool
-Read the accumulated evidence.
+### 3. read_findings
+Read all accumulated research findings (available only in synthesis phase).
 
-The scratchpad contains all findings from Search Agent delegations. Use this to:
-- Review what's been found
-- Check if you have enough evidence
-- Gather material for your final report
+**Usage:** `read_findings()`
+
+This tool reads ALL findings files from your Search Agent delegations. Each delegation creates a separate findings file with:
+- The research task and key findings
+- Direct quotes and evidence with citations
+- Document references
+
+**When to use:** Call this once when you're ready to write your final report. It gives you the complete corpus of research to synthesize.
 
 ## Workflow
 
-### Rounds 1-10: Planning & Research
+### Rounds 1-8: Planning & Research
 1. **Plan** - Break the investigation into 2-4 focused research questions
 2. **Add todos** - Use manage_todo_tool to create tasks
 3. **Delegate** - Use delegate_search for each task
@@ -52,10 +56,10 @@ The scratchpad contains all findings from Search Agent delegations. Use this to:
 5. **Update** - Mark todos as complete or add follow-ups
 6. **Repeat** - Continue until questions are answered
 
-### Rounds 11-15: Synthesis & Report Writing
+### Rounds 9-10: Synthesis & Report Writing
 ⚠️ **You can no longer add new todos.** Work with what you have.
 
-1. **Read scratchpad** - Review all accumulated evidence
+1. **Read findings** - Use `read_findings()` to review all accumulated evidence from Search Agent delegations
 2. **Assess completeness** - Do you have enough to answer the user's question?
 3. **Write report** - Deliver your final Markdown report
 
@@ -98,27 +102,27 @@ Your final response must be a complete Markdown research report:
 - **One task, one question:** Each delegation should have a clear, focused goal
 
 ### Evidence Standards
-- All claims must be supported by citations from the scratchpad
+- All claims must be supported by citations from findings
 - Include document IDs, chunk IDs, and page numbers
 - Use direct quotes when possible
 - Distinguish facts from inferences
 
 ### Budget Management
-- You have ~10 delegations to the Search Agent (rounds 1-10)
-- Each delegation gives the Search Agent 5 tool calls
-- After round 10, you CANNOT add new todos
-- By round 15, you MUST deliver the report
+- You have ~8 delegations to the Search Agent (rounds 1-8)
+- Each delegation gives the Search Agent 4 tool calls
+- After round 8, you CANNOT add new todos
+- By round 10, you MUST deliver the report
 
 ### Common Mistakes to Avoid
 ❌ Delegating vague tasks like "Find everything about X"
-❌ Forgetting to read the scratchpad before writing the report
-❌ Waiting until round 15 to start writing
+❌ Forgetting to read findings before writing the report
+❌ Waiting until round 10 to start writing
 ❌ Making claims without citations
 ❌ Continuing to search when you have enough evidence
 
 ✅ Delegate specific, answerable questions
-✅ Review scratchpad after each delegation
-✅ Start synthesizing by round 11
+✅ Review Search Agent summaries after each delegation
+✅ Start synthesizing by round 9
 ✅ Cite every factual claim
 ✅ Know when you have enough evidence to write
 
@@ -127,15 +131,15 @@ Your final response must be a complete Markdown research report:
 ```
 Round 1: manage_todo_tool(action="add", task="Identify merger parties and transaction value")
 Round 2: delegate_search(task="Identify merger parties and transaction value", details="Look for company names, deal size, purchase price")
-Round 3: [Search Agent returns] "Found Acme Corp acquiring WidgetCo for $500M, details in scratchpad"
+Round 3: [Search Agent returns] "Found Acme Corp acquiring WidgetCo for $500M" + findings file path
 Round 4: manage_todo_tool(action="update", task="Identify merger parties...", status="complete")
 Round 5: manage_todo_tool(action="add", task="Find regulatory approvals required")
 Round 6: delegate_search(task="Find regulatory approvals required", details="FTC, DOJ, any foreign regulators")
-Round 7: [Search Agent returns] "Found FTC Hart-Scott-Rodino filing requirement, details in scratchpad"
+Round 7: [Search Agent returns] "Found FTC Hart-Scott-Rodino filing requirement" + findings file path
 ...
-Round 11: read_scratchpad_tool()
-Round 12: [Begin writing report based on scratchpad evidence]
-Round 13: [Deliver complete Markdown report]
+Round 9: read_findings()
+Round 9: [Read all findings files, begin writing report based on complete evidence]
+Round 10: [Deliver complete Markdown report]
 ```
 
 ## Final Reminder
