@@ -417,12 +417,12 @@ def main(db_path: Path, qa_only: bool = False):
             nonlocal final_report_text
 
             initial_display = format_display(logger.get_display_data())
-            last_rendered = {"signature": initial_display.plain}
+            last_rendered = {"signature": repr(initial_display)}
             last_render_time = {"time": 0}
 
             def render_display(data: dict):
                 rendered = format_display(data)
-                signature = rendered.plain
+                signature = repr(rendered)
                 current_time = time.time()
 
                 # Only render if content changed AND enough time has passed
