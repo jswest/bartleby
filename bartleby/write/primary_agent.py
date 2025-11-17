@@ -76,7 +76,8 @@ def build_round_limit_middleware(
     token_counter: TokenCounterCallback | None = None,
     todo_status_provider: Callable[[], list[Dict[str, str]]] | None = None,
     round_provider: Callable[[], int] | None = None,
-    synthesis_tools: list | None = None
+    delegate_tool=None,
+    read_tool=None,
 ):
     """
     Create middleware that enforces round-based and token budget constraints.
@@ -154,16 +155,16 @@ def build_round_limit_middleware(
                     "Finish these todos immediately: " + "; ".join(incomplete_todos[:3])
                     + ("" if len(incomplete_todos) <= 3 else " …")
                 )
-            # Swap to synthesis tools (read_findings instead of delegate_search)
-            if synthesis_tools is not None:
-                tools_override = synthesis_tools
+            tools_override = [read_tool] if read_tool else []
         elif current_round > max_todo_rounds - 2:
             warnings.append(
                 f"⏰ WARNING (Round {current_round}/{max_total_rounds}): "
                 f"You have {max_todo_rounds - current_round} rounds left to add todos. "
                 "After that, you must finalize and write the report."
             )
-
+            tools_override = [delegate_tool] if delegate_tool else tools_override
+        else:
+            tools_override = [delegate_tool] if delegate_tool else tools_override
         # Trim messages
         trimmed = trim_messages(
             state["messages"],
@@ -238,9 +239,10 @@ def run_primary_agent(
         max_search_operations=max_search_operations,
     )
 
-    # Split into research and synthesis tool sets
-    research_tools = [t for t in all_tools if t.name in {"delegate_search"}]
-    synthesis_tools = [t for t in all_tools if t.name in {"read_findings"}]
+    tool_lookup = {tool.name: tool for tool in all_tools}
+    delegate_tool = tool_lookup.get("delegate_search")
+    read_tool = tool_lookup.get("read_findings")
+    agent_tools = [tool for tool in (delegate_tool, read_tool) if tool]
 
     # Load system prompt
     system_prompt = _load_primary_agent_prompt()
@@ -275,7 +277,7 @@ Begin your investigation now.
     # Create agent with round limit middleware
     agent = create_agent(
         model=llm,
-        tools=research_tools,
+        tools=agent_tools,
         system_prompt=full_prompt,
         middleware=[
             build_round_limit_middleware(
@@ -284,7 +286,8 @@ Begin your investigation now.
                 token_counter,
                 todo_status_provider=todo_list.get_all_todos,
                 round_provider=(lambda: logger.get_round()) if logger else None,
-                synthesis_tools=synthesis_tools
+                delegate_tool=delegate_tool,
+                read_tool=read_tool,
             )
         ],
     )
