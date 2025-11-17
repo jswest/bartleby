@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from bartleby.lib.consts import DEFAULT_CHUNK_WINDOW_RADIUS, MAX_DOCUMENT_CHUNK_WINDOW
 from bartleby.write.search import get_chunk_window_by_chunk_id
+from bartleby.write.tools.common import with_hook
 
 
 def create_get_chunk_window_tool(
@@ -25,6 +26,7 @@ def create_get_chunk_window_tool(
     """
 
     @tool
+    @with_hook("get_chunk_window", before_hook)
     def get_chunk_window(
         chunk_id: str,
         window_radius: int = DEFAULT_CHUNK_WINDOW_RADIUS,
@@ -43,11 +45,6 @@ def create_get_chunk_window_tool(
         Returns:
             Dictionary with chunk window and metadata
         """
-        if before_hook:
-            preempt = before_hook("get_chunk_window")
-            if preempt is not None:
-                return preempt
-
         safe_radius = max(0, min(window_radius, MAX_DOCUMENT_CHUNK_WINDOW // 2))
 
         window = get_chunk_window_by_chunk_id(db_path, chunk_id, safe_radius)

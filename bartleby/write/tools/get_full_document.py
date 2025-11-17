@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from bartleby.lib.consts import MAX_DOCUMENT_CHUNK_WINDOW
 from bartleby.write.search import get_document_chunks, count_document_chunks
+from bartleby.write.tools.common import with_hook
 
 
 def create_get_full_document_tool(
@@ -25,6 +26,7 @@ def create_get_full_document_tool(
     """
 
     @tool
+    @with_hook("get_full_document", before_hook)
     def get_full_document(
         document_id: str,
         start_chunk: int = 0,
@@ -44,17 +46,12 @@ def create_get_full_document_tool(
         Returns:
             Dictionary with metadata, window info, and the requested chunk slice
         """
-        if before_hook:
-            preempt = before_hook("get_full_document")
-            if preempt is not None:
-                return preempt
-
         total_chunks = count_document_chunks(db_path, document_id)
         if total_chunks == 0:
             return {"error": f"Document {document_id} not found"}
 
-        safe_start = max(0, start_chunk or 0)
-        window_size = max(1, min(max_chunks or MAX_DOCUMENT_CHUNK_WINDOW, MAX_DOCUMENT_CHUNK_WINDOW))
+        safe_start = max(0, start_chunk if start_chunk else 0)
+        window_size = max(1, min(max_chunks if max_chunks else MAX_DOCUMENT_CHUNK_WINDOW, MAX_DOCUMENT_CHUNK_WINDOW))
 
         if safe_start >= total_chunks:
             return {
@@ -69,6 +66,7 @@ def create_get_full_document_tool(
             max_chunks=window_size,
         )
 
+        end_chunk = safe_start + len(chunks)
         return {
             "document_id": document_id,
             "origin_file_path": chunks[0].origin_file_path if chunks else None,
@@ -76,8 +74,8 @@ def create_get_full_document_tool(
             "start_chunk": safe_start,
             "returned_chunks": len(chunks),
             "max_chunks": window_size,
-            "has_more": (safe_start + len(chunks)) < total_chunks,
-            "next_start_chunk": safe_start + len(chunks) if (safe_start + len(chunks)) < total_chunks else None,
+            "has_more": end_chunk < total_chunks,
+            "next_start_chunk": end_chunk if end_chunk < total_chunks else None,
             "chunks": [r.to_dict() for r in chunks],
         }
 

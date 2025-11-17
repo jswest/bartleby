@@ -1,19 +1,16 @@
 """Semantic search tool for meaning-based document searching."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable
 from threading import Lock
 
 from langchain_core.tools import tool
 from sentence_transformers import SentenceTransformer
 
-from bartleby.lib.consts import (
-    DEFAULT_SEARCH_RESULT_LIMIT,
-    MAX_SEARCH_RESULT_LIMIT,
-    MAX_TOOL_TOKENS,
-)
+from bartleby.lib.consts import DEFAULT_SEARCH_RESULT_LIMIT, MAX_TOOL_TOKENS
 from bartleby.lib.utils import truncate_result
 from bartleby.write.search import semantic_search
+from bartleby.write.tools.common import sanitize_limit, result_metadata, with_hook
 
 
 def create_search_semantic_tool(
@@ -35,22 +32,13 @@ def create_search_semantic_tool(
         LangChain tool instance
     """
 
-    def sanitize_limit(limit: Optional[int]) -> int:
-        """Clamp search limits to keep tool outputs lean."""
-        if limit is None:
-            return DEFAULT_SEARCH_RESULT_LIMIT
-        return max(1, min(limit, MAX_SEARCH_RESULT_LIMIT))
-
-    def result_metadata(results: List) -> List[Dict[str, Any]]:
-        """Strip bulky chunk bodies from search responses."""
-        return [r.to_metadata_dict() for r in results]
-
     @tool
+    @with_hook("search_documents_semantic", before_hook)
     def search_documents_semantic(
         query: str,
         limit: int = DEFAULT_SEARCH_RESULT_LIMIT,
         document_id: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Search documents using semantic similarity (meaning-based).
 
@@ -65,18 +53,13 @@ def create_search_semantic_tool(
         Returns:
             List of semantically similar document chunks with metadata
         """
-        if before_hook:
-            preempt = before_hook("search_documents_semantic")
-            if preempt is not None:
-                return preempt
-
-        limit = sanitize_limit(limit)
+        safe_limit = sanitize_limit(limit)
         with embedding_lock:
             results = semantic_search(
                 db_path,
                 query,
                 embedding_model,
-                limit,
+                safe_limit,
                 document_id=document_id or None,
             )
         data = result_metadata(results)

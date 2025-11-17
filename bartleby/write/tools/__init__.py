@@ -79,12 +79,10 @@ def get_tools(
         ),
     }
 
-    # Build requested tools
-    tools = []
-    for tool_name in allowed_tools:
-        if tool_name in registry:
-            tools.append(registry[tool_name]())
-        else:
-            raise ValueError(f"Unknown tool: {tool_name}")
+    # Validate all tools exist first (fail fast)
+    unknown_tools = allowed_tools - registry.keys()
+    if unknown_tools:
+        raise ValueError(f"Unknown tools: {', '.join(sorted(unknown_tools))}")
 
-    return tools
+    # Build requested tools
+    return [registry[tool_name]() for tool_name in allowed_tools]

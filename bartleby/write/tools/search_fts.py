@@ -1,17 +1,14 @@
 """Full-text search tool for document searching."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable
 
 from langchain_core.tools import tool
 
-from bartleby.lib.consts import (
-    DEFAULT_SEARCH_RESULT_LIMIT,
-    MAX_SEARCH_RESULT_LIMIT,
-    MAX_TOOL_TOKENS,
-)
+from bartleby.lib.consts import DEFAULT_SEARCH_RESULT_LIMIT, MAX_TOOL_TOKENS
 from bartleby.lib.utils import truncate_result
 from bartleby.write.search import full_text_search
+from bartleby.write.tools.common import sanitize_limit, result_metadata, with_hook
 
 
 def create_search_fts_tool(
@@ -29,22 +26,13 @@ def create_search_fts_tool(
         LangChain tool instance
     """
 
-    def sanitize_limit(limit: Optional[int]) -> int:
-        """Clamp search limits to keep tool outputs lean."""
-        if limit is None:
-            return DEFAULT_SEARCH_RESULT_LIMIT
-        return max(1, min(limit, MAX_SEARCH_RESULT_LIMIT))
-
-    def result_metadata(results: List) -> List[Dict[str, Any]]:
-        """Strip bulky chunk bodies from search responses."""
-        return [r.to_metadata_dict() for r in results]
-
     @tool
+    @with_hook("search_documents_fts", before_hook)
     def search_documents_fts(
         query: str,
         limit: int = DEFAULT_SEARCH_RESULT_LIMIT,
         document_id: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Search documents using full-text search (keyword matching).
 
@@ -59,14 +47,9 @@ def create_search_fts_tool(
         Returns:
             List of matching document chunks with metadata
         """
-        if before_hook:
-            preempt = before_hook("search_documents_fts")
-            if preempt is not None:
-                return preempt
-
-        limit = sanitize_limit(limit)
+        safe_limit = sanitize_limit(limit)
         results = full_text_search(
-            db_path, query, limit, document_id=document_id or None
+            db_path, query, safe_limit, document_id=document_id or None
         )
         data = result_metadata(results)
         return truncate_result(data, max_tokens=MAX_TOOL_TOKENS)

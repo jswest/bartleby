@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Callable
 from langchain_core.tools import tool
 
 from bartleby.write.memory import TodoList
+from bartleby.write.tools.common import with_hook
 
 
 def create_manage_todo_tool(
@@ -23,6 +24,7 @@ def create_manage_todo_tool(
     """
 
     @tool
+    @with_hook("manage_todo_tool", before_hook)
     def manage_todo_tool(action: str, task: str = "", status: str = "") -> Dict[str, Any]:
         """
         Manage your todo list in one place.
@@ -35,33 +37,22 @@ def create_manage_todo_tool(
         Returns:
             Dictionary with the operation result and current todo info
         """
-        if before_hook:
-            preempt = before_hook("manage_todo_tool")
-            if preempt is not None:
-                return preempt
-
-        action_normalized = (action or "").strip().lower()
+        action_normalized = action.strip().lower() if action else ""
 
         if action_normalized == "add":
-            if not task.strip():
+            if not task or not task.strip():
                 return {"error": "Task description is required when action='add'."}
-            result = todo_list.add_todo(task)
-            return {
-                "message": result.get("message"),
-                "todo": result.get("todo"),
-                "total_todos": result.get("total_todos")
-            }
+            return todo_list.add_todo(task)
 
         if action_normalized == "update":
-            if not task.strip():
+            if not task or not task.strip():
                 return {"error": "Task description is required when action='update'."}
             if status.strip().lower() not in {"pending", "active", "complete"}:
                 return {"error": "Status must be 'pending', 'active', or 'complete' when action='update'."}
             return todo_list.update_todo_status(task, status.lower())
 
-        if action_normalized in {"list", "get"}:
-            todos = todo_list.get_todos()
-            return {"todos": todos}
+        if action_normalized == "list":
+            return {"todos": todo_list.get_todos()}
 
         return {"error": "Invalid action. Use 'add', 'update', or 'list'."}
 

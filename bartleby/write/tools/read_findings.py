@@ -43,23 +43,24 @@ def create_read_findings_tool(findings_dir: Path, run_uuid: str):
         findings_parts = []
         for i, findings_file in enumerate(findings_files, 1):
             content = findings_file.read_text(encoding="utf-8")
-            findings_parts.append(f"# Research Task {i}")
-            findings_parts.append(f"*Source: {findings_file.name}*")
-            findings_parts.append("")
-            findings_parts.append(content)
-            findings_parts.append("")
-            findings_parts.append("---")
-            findings_parts.append("")
+            findings_parts.append(
+                f"# Research Task {i}\n"
+                f"*Source: {findings_file.name}*\n"
+                f"\n"
+                f"{content}\n"
+                f"\n"
+                f"---\n"
+            )
 
-        summary_header = [
-            f"# Complete Research Findings",
-            f"",
-            f"Total research tasks completed: {len(findings_files)}",
-            f"",
-            f"---",
-            f"",
-        ]
+        summary_header = (
+            "# Complete Research Findings\n"
+            "\n"
+            f"Total research tasks completed: {len(findings_files)}\n"
+            "\n"
+            "---\n"
+            "\n"
+        )
 
-        return "\n".join(summary_header + findings_parts)
+        return summary_header + "".join(findings_parts)
 
     return read_findings

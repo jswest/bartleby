@@ -59,11 +59,10 @@ def create_delegate_search_tool(
         )
 
     def _parse_tasks(task_block: str) -> list[str]:
-        lines = [line.strip(" •-\t") for line in (task_block or "").splitlines()]
-        tasks = [line for line in lines if line]
-        if not tasks:
-            tasks = [task_block.strip()] if task_block.strip() else []
-        return tasks[:3]
+        if not task_block:
+            return []
+        lines = [line.strip(" •-\t") for line in task_block.splitlines() if line.strip()]
+        return lines[:3] if lines else [task_block.strip()][:3]
 
     def _ensure_todo(task_description: str) -> dict:
         """Find existing todo (case-insensitive) or create a new pending one."""
