@@ -19,12 +19,14 @@ def main():
     ready_parser = subparsers.add_parser("ready", help="Configure Bartleby settings")
 
     # Read command
-    read_parser = subparsers.add_parser("read", help="Process PDF documents")
+    read_parser = subparsers.add_parser("read", help="Process PDF and HTML documents")
     read_parser.add_argument(
-        "--pdfs",
+        "--files",
+        "--pdfs",  # Backward compatibility
+        dest="files",
         required=True,
         type=str,
-        help="Path to a PDF file or directory containing PDFs"
+        help="Path to a file or directory containing PDF/HTML files"
     )
     read_parser.add_argument(
         "--db",
@@ -102,7 +104,7 @@ def main():
 
         read_main(
             db_path=db_path,
-            pdf_path=args.pdfs,
+            pdf_path=args.files,
             max_workers=args.max_workers,
             model=args.model,
             provider=args.provider,

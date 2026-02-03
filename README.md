@@ -1,6 +1,6 @@
 # Bartleby, the Scrivener
 
-A powerful PDF processing tool that extracts text, generates embeddings, and optionally creates LLM-powered summaries.
+A powerful document processing tool that extracts text from PDFs and HTML files, generates embeddings, and optionally creates LLM-powered summaries.
 
 ---
 
@@ -10,7 +10,9 @@ I have found it useful to let an AI agent (e.g. Claude Code) run wild in a SQLit
 
 ### The parser — `bartleby read`.
 
-OCR-ing and parsing PDFs into a SQLite database, then paginating, summarizing, chunking, and embedding: These are valueable tasks regardless of your desire to sift through them with an AI agent. In fact, that workflow is something I use frequently, as it enables all sorts of deeper explorations of large corpora. So, I made this a standalone command.
+OCR-ing and parsing PDFs (and converting HTML files) into a SQLite database, then paginating, summarizing, chunking, and embedding: These are valueable tasks regardless of your desire to sift through them with an AI agent. In fact, that workflow is something I use frequently, as it enables all sorts of deeper explorations of large corpora. So, I made this a standalone command.
+
+HTML files are automatically converted to PDF using Playwright/Chromium before processing, allowing you to process web pages alongside traditional PDFs.
 
 Some gotchas with this: If you've set up an LLM to summarize pages for you, it can burn through tokens pretty fast on summarization, but you have a knob: how many pages of each PDF to summarize. You can tell it to only do the first n pages, where n can be zero.
 
@@ -49,6 +51,16 @@ In dev, you might want to run:
 uv tool install --editable .
 ```
 
+### Install Playwright Browsers (for HTML support)
+
+If you want to process HTML files, install the Chromium browser for Playwright:
+
+```bash
+uv run playwright install chromium
+```
+
+This only needs to be done once. You can skip this if you only process PDFs.
+
 ---
 
 ## Usage
@@ -66,15 +78,18 @@ This inits your `bartleby` instance, asking for everything it needs.
 2. **Run anywhere**:
 
 ```bash
-bartleby read --pdfs path/to/pdfs --db path/to/db
+bartleby read --files path/to/files --db path/to/db
 ```
+
+Process both PDFs and HTML files from a directory, or specify a single file.
 
 ### Options
 
 **`bartleby ready`** - Interactive configuration wizard
 
-**`bartleby read`** - Process PDFs
-- `--pdfs` (required): Path to a single PDF file or directory containing PDFs
+**`bartleby read`** - Process PDFs and HTML files
+- `--files` (required): Path to a file or directory containing PDF/HTML files (`.pdf`, `.html`, `.htm`)
+  - Note: `--pdfs` still works for backward compatibility
 - `--db` (required): Path to database directory (created automatically if it doesn't exist)
 
 **`bartleby write`** - Write a report (includes live Q&A `/search` mode after the report so you can interrogate sources)
@@ -84,12 +99,13 @@ bartleby read --pdfs path/to/pdfs --db path/to/db
 
 ## What `read` does
 
-1. **Extracts text** from PDFs using PyMuPDF
-2. **OCR fallback** for image-based pages using Tesseract
-3. **Chunks text** intelligently using LangChain text splitters
-4. **Generates embeddings** using sentence-transformers (BAAI/bge-base-en-v1.5)
-5. **Creates summaries** (optional) for the first N pages using vision-capable LLMs
-6. **Stores everything** in SQLite with full-text search (FTS5) and vector search (vec0)
+1. **Converts HTML to PDF** (if HTML files are provided) using Playwright/Chromium with Letter size (8.5×11")
+2. **Extracts text** from PDFs using PyMuPDF
+3. **OCR fallback** for image-based pages using Tesseract
+4. **Chunks text** intelligently using LangChain text splitters
+5. **Generates embeddings** using sentence-transformers (BAAI/bge-base-en-v1.5)
+6. **Creates summaries** (optional) for the first N pages using vision-capable LLMs
+7. **Stores everything** in SQLite with full-text search (FTS5) and vector search (vec0)
 
 ## What `write` does
 
