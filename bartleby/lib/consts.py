@@ -12,7 +12,7 @@ DEFAULT_CHUNK_WINDOW_RADIUS = 3
 
 # Document retrieval limits
 MAX_DOCUMENT_CHUNK_WINDOW = 100
-MAX_TOOL_TOKENS = 1000
+MAX_TOOL_TOKENS = 10000
 
 # Embedding model
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"

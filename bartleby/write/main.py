@@ -43,8 +43,7 @@ def _load_session_notes(findings_dir: Path, run_uuid: str) -> str:
     if not findings_dir.exists():
         return ""
 
-    pattern = f"{run_uuid}-*.md"
-    note_files = sorted(findings_dir.glob(pattern))
+    note_files = sorted(findings_dir.glob("*.md"))
     if not note_files:
         return ""
 
@@ -75,8 +74,6 @@ def main(db_path: Path, verbose: bool = False):
     findings_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = book_dir / "log.json"
-    if log_path.exists():
-        log_path.unlink()
 
     send(message_type="SPLASH")
     send("Starting Bartleby research agent", "BIG")
