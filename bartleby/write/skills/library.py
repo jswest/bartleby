@@ -17,7 +17,7 @@ from bartleby.write.search import (
     list_all_documents,
     save_document_summary,
 )
-from bartleby.write.skills.base import Skill
+from bartleby.write.skills.base import Skill, load_tool_doc
 
 MAX_FIRST_CHUNKS = 15
 MAX_SUMMARIZE_INPUT_CHARS = 8000
@@ -34,11 +34,7 @@ def _document_exists(connection, document_id: str) -> bool:
 
 class ListDocumentsTool(Tool):
     name = "list_documents"
-    description = (
-        "List all documents in the database with metadata. "
-        "Returns document IDs, filenames, page counts, chunk counts, "
-        "titles, and whether a summary exists."
-    )
+    description = load_tool_doc("list_documents")
     inputs = {}
     output_type = "string"
 
@@ -58,11 +54,7 @@ class ListDocumentsTool(Tool):
 
 class GetDocumentSummaryTool(Tool):
     name = "get_document_summary"
-    description = (
-        "Get a summary of a specific document. Returns the cached summary "
-        "if available, otherwise returns the first chunks as an approximation. "
-        "Check the 'source' field to know which type you received."
-    )
+    description = load_tool_doc("get_document_summary")
     inputs = {
         "document_id": {
             "type": "string",
@@ -134,11 +126,7 @@ class GetDocumentSummaryTool(Tool):
 
 class SummarizeDocumentTool(Tool):
     name = "summarize_document"
-    description = (
-        "Generate and cache a proper LLM summary for a document. "
-        "Use this only when get_document_summary returns a first-chunk "
-        "approximation and you need a better understanding of the document."
-    )
+    description = load_tool_doc("summarize_document")
     inputs = {
         "document_id": {
             "type": "string",

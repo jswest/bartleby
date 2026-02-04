@@ -5,16 +5,12 @@ from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills.base import Skill
+from bartleby.write.skills.base import Skill, load_tool_doc
 
 
 class WriteFileTool(Tool):
     name = "write_file"
-    description = (
-        "Write content to a file in the output directory. "
-        "Use this for saving drafts, code snippets, data exports, etc. "
-        "Filenames must be simple (no path traversal)."
-    )
+    description = load_tool_doc("write_file")
     inputs = {
         "filename": {"type": "string", "description": "Filename to write (e.g., 'draft.md')"},
         "content": {"type": "string", "description": "Content to write to the file"},

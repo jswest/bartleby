@@ -5,16 +5,12 @@ from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills.base import Skill
+from bartleby.write.skills.base import Skill, load_tool_doc
 
 
 class SaveNoteTool(Tool):
     name = "save_note"
-    description = (
-        "Save a markdown note to the findings directory. "
-        "Use this to record research summaries, intermediate findings, "
-        "or any structured notes you want to reference later."
-    )
+    description = load_tool_doc("save_note")
     inputs = {
         "title": {"type": "string", "description": "Title for the note"},
         "content": {"type": "string", "description": "Markdown content of the note"},

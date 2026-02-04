@@ -21,7 +21,7 @@ from bartleby.write.search import (
     get_document_chunks,
     semantic_search,
 )
-from bartleby.write.skills.base import Skill
+from bartleby.write.skills.base import Skill, load_tool_doc
 
 
 def _sanitize_limit(limit: Optional[int]) -> int:
@@ -53,12 +53,7 @@ def _document_exists(connection, document_id: str) -> bool:
 
 class SearchDocumentsFTSTool(Tool):
     name = "search_documents_fts"
-    description = (
-        "Search documents using full-text search (keyword matching). "
-        "Best for: exact phrases, technical terms, specific names. "
-        "Example: 'artificial intelligence', 'quarterly revenue', 'John Smith'. "
-        "Supports FTS5 syntax (AND, OR, NOT)."
-    )
+    description = load_tool_doc("search_documents_fts")
     inputs = {
         "query": {"type": "string", "description": "Search query string"},
         "limit": {
@@ -95,11 +90,7 @@ class SearchDocumentsFTSTool(Tool):
 
 class SearchDocumentsSemanticTool(Tool):
     name = "search_documents_semantic"
-    description = (
-        "Search documents using semantic similarity (meaning-based). "
-        "Best for: conceptual queries, finding related content, paraphrases. "
-        "Example: 'what are the main findings?', 'how does this system work?'"
-    )
+    description = load_tool_doc("search_documents_semantic")
     inputs = {
         "query": {"type": "string", "description": "Natural language query"},
         "limit": {
@@ -143,11 +134,7 @@ class SearchDocumentsSemanticTool(Tool):
 
 class GetChunkWindowTool(Tool):
     name = "get_chunk_window"
-    description = (
-        "Read a small window of chunks around a specific search hit. "
-        "Provide the chunk_id from any search result to grab nearby text "
-        "(default ~3 chunks on either side)."
-    )
+    description = load_tool_doc("get_chunk_window")
     inputs = {
         "chunk_id": {"type": "string", "description": "Chunk ID from a search result"},
         "window_radius": {
@@ -176,11 +163,7 @@ class GetChunkWindowTool(Tool):
 
 class GetFullDocumentTool(Tool):
     name = "get_full_document"
-    description = (
-        "Retrieve a window of chunks from a specific document. "
-        "Use this to page through long documents. Provide the document_id "
-        "from a search result plus optional start_chunk to advance deeper."
-    )
+    description = load_tool_doc("get_full_document")
     inputs = {
         "document_id": {"type": "string", "description": "Document ID from search results"},
         "start_chunk": {
