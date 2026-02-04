@@ -5,13 +5,16 @@ import shutil
 import sys
 import tempfile
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from loguru import logger
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
+from bartleby.lib.config import load_config, setup_provider_env
 from bartleby.lib.console import send
-from bartleby.lib.consts import DEFAULT_MAX_WORKERS, EMBEDDING_MODEL
-from bartleby.lib.utils import load_config
+from bartleby.lib.consts import DEFAULT_MAX_WORKERS, DEFAULT_PDF_PAGES_TO_SUMMARIZE, EMBEDDING_MODEL
+from bartleby.lib.utils import build_model_id, has_vision
 from bartleby.read.converters import convert_html_to_pdf
 from bartleby.read.processor import process_pdf
 from bartleby.read.sqlite import get_connection
@@ -19,49 +22,29 @@ from bartleby.read.sqlite import get_connection
 
 def _process_pdf_worker(args):
     """
-    Worker function for multiprocessing - creates its own connection, embedding model, and LLM.
+    Worker function for multiprocessing - creates its own connection, embedding model, and model_id.
     Must be at module level to be picklable.
 
     Args:
-        args: Tuple of (pdf_file, db_path, archive_path, provider, model, llm_has_vision,
+        args: Tuple of (pdf_file, db_path, archive_path, model_id, llm_has_vision,
                        pdf_pages_to_summarize, config, verbose)
     """
-    pdf_file, db_path, archive_path, provider, model, llm_has_vision, pdf_pages_to_summarize, config, verbose = args
+    pdf_file, db_path, archive_path, model_id, llm_has_vision, pdf_pages_to_summarize, config, verbose = args
 
     # Configure logging in worker process
-    logger.remove()  # Remove default handler
+    logger.remove()
     if verbose:
         logger.add(sys.stderr, level="DEBUG")
     else:
-        logger.add(sys.stderr, level="INFO")
+        logger.add(sys.stderr, level="WARNING")
 
     # Each process gets its own connection and embedding model for isolation
     connection = get_connection(db_path)
     # Create embedding model in the worker process
     process_embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
-    # Create LLM in worker process (can't pickle LLM objects due to thread locks)
-    llm = None
-    if model and provider:
-        # Set API keys from config if present
-        if provider:
-            api_key_field = f"{provider}_api_key"
-            config_api_key = config.get(api_key_field)
-            env_var_name = f"{provider.upper()}_API_KEY"
-
-            if config_api_key and not os.environ.get(env_var_name):
-                os.environ[env_var_name] = config_api_key
-
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-            llm = ChatAnthropic(model=model)
-        elif provider == "openai":
-            from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI(model=model)
-        elif provider == "ollama":
-            from langchain_ollama import ChatOllama
-            base_url = config.get("ollama_base_url", "http://localhost:11434")
-            llm = ChatOllama(model=model, base_url=base_url)
+    # Set API keys from config in worker process
+    setup_provider_env(config)
 
     try:
         process_pdf(
@@ -70,7 +53,7 @@ def _process_pdf_worker(args):
             db_path,
             archive_path,
             process_embedding_model,
-            llm,
+            model_id,
             llm_has_vision,
             pdf_pages_to_summarize
         )
@@ -80,11 +63,11 @@ def _process_pdf_worker(args):
 
 def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider: str = None, verbose: bool = False):
     # Configure logging level
-    logger.remove()  # Remove default handler
+    logger.remove()
     if verbose:
         logger.add(sys.stderr, level="DEBUG")
     else:
-        logger.add(sys.stderr, level="INFO")
+        logger.add(sys.stderr, level="WARNING")
 
     # Load config from ~/.bartleby/config.yaml
     config = load_config()
@@ -98,18 +81,10 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
         provider = config.get("provider")
 
     # Get summarization config
-    from bartleby.lib.consts import DEFAULT_PDF_PAGES_TO_SUMMARIZE
     pdf_pages_to_summarize = config.get("pdf_pages_to_summarize", DEFAULT_PDF_PAGES_TO_SUMMARIZE)
 
-    # Set API keys from config if present and not already in environment
-    if provider:
-        api_key_field = f"{provider}_api_key"
-        config_api_key = config.get(api_key_field)
-        env_var_name = f"{provider.upper()}_API_KEY"
-
-        if config_api_key and not os.environ.get(env_var_name):
-            os.environ[env_var_name] = config_api_key
-            logger.debug(f"Using {provider} API key from config")
+    # Set API keys from config
+    setup_provider_env(config)
 
     db_path = Path(db_path)
     pdf_path = Path(pdf_path)
@@ -118,23 +93,21 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
 
     send(f"Embedding model: {EMBEDDING_MODEL}", "BIG")
 
-    llm = None
+    # Build model_id for litellm
+    model_id = ""
     llm_has_vision = False
     if model and provider:
-        send(f"Loading LLM: {provider}/{model}", "BIG")
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-            llm = ChatAnthropic(model=model)
-            llm_has_vision = "claude-3" in model or "claude-4" in model
-        elif provider == "openai":
-            from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI(model=model)
-            llm_has_vision = "gpt-4" in model and "vision" in model
-        elif provider == "ollama":
-            from langchain_ollama import ChatOllama
-            base_url = config.get("ollama_base_url", "http://localhost:11434")
-            llm = ChatOllama(model=model, base_url=base_url)
-            llm_has_vision = False  # Ollama typically doesn't support vision
+        # Build config dict for build_model_id
+        model_config = {
+            "provider": provider,
+            "model": model,
+            "ollama_base_url": config.get("ollama_base_url", "http://localhost:11434"),
+        }
+        model_id = build_model_id(model_config) or ""
+        llm_has_vision = has_vision(model_config)
+
+        if model_id:
+            send(f"Loading LLM: {model_id}", "BIG")
         else:
             send(f"Unknown provider: {provider}", "WARN")
 
@@ -172,9 +145,9 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
 
     # Use ProcessPoolExecutor instead of ThreadPoolExecutor for SentenceTransformer thread-safety
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Prepare arguments for each worker (must be picklable - can't pass LLM objects)
+        # Prepare arguments for each worker (must be picklable - pass model_id string instead of LLM objects)
         worker_args = [
-            (pdf_file, db_path, archive_path, provider, model, llm_has_vision,
+            (pdf_file, db_path, archive_path, model_id, llm_has_vision,
              pdf_pages_to_summarize, config, verbose)
             for pdf_file in pdf_files
         ]

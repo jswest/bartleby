@@ -12,7 +12,7 @@ import pytesseract
 
 from bartleby.lib.consts import DEFAULT_PDF_PAGES_TO_SUMMARIZE, DEFAULT_PDF_PAGE_IMAGE_DPI
 from bartleby.lib.embeddings import embed_chunk
-from bartleby.read.llm import summarize_pdf_page
+from bartleby.read.llm import summarize_document
 from bartleby.read.nlp import chunk_page_body, clean_block_text, extract_body_from_pdf_page
 
 HASH_ALGORITHM = "sha256"
@@ -37,8 +37,7 @@ def save_chunk(
     cursor,
     body: str,
     index: int,
-    page_id: str | None = None,
-    summary_id: str | None = None,
+    page_id: str,
 ):
     chunk_id = str(uuid.uuid4())
     cursor.execute(
@@ -47,17 +46,10 @@ def save_chunk(
             chunk_id,
             body,
             chunk_index,
-            page_id,
-            summary_id
-        ) VALUES (? , ?, ?, ?, ?)
+            page_id
+        ) VALUES (?, ?, ?, ?)
         """,
-        (
-            chunk_id,
-            body,
-            index,
-            page_id,
-            summary_id,
-        )
+        (chunk_id, body, index, page_id)
     )
 
     chunk_embedding = embed_chunk(embedding_model, body)
@@ -75,7 +67,7 @@ def process_pdf(
     db_path: Path,
     archive_path: Path,
     embedding_model,
-    llm,
+    model_id: str = "",
     llm_has_vision: bool = True,
     pdf_pages_to_summarize: int = DEFAULT_PDF_PAGES_TO_SUMMARIZE
 ):
@@ -112,6 +104,10 @@ def process_pdf(
             (document_id, str(pdf_path), pages_count)
         )
 
+        # Collect page text for document summary
+        summary_page_texts = []
+        first_page_image_bytes = None
+
         for page_index in range(pages_count):
             page = pdf.load_page(page_index)
             page_number = page_index + 1
@@ -119,14 +115,12 @@ def process_pdf(
             body = extract_body_from_pdf_page(page)
 
             needs_ocr = len((body or "").strip()) < OCR_CHARACTER_THRESHOLD
-            needs_summary = page_number <= pdf_pages_to_summarize
-            should_render_image = needs_ocr or (llm_has_vision and needs_summary)
             page_image_bytes = None
-            if should_render_image:
+            if needs_ocr:
                 page_image_bytes = page_to_png_bytes(page)
-                if needs_ocr and page_image_bytes:
-                    raw_page_body = ocr_from_bytes(page_image_bytes)
-                    body = clean_block_text(raw_page_body)
+                raw_page_body = ocr_from_bytes(page_image_bytes)
+                body = clean_block_text(raw_page_body)
+
             cursor.execute(
                 """
                 INSERT INTO pages(
@@ -139,27 +133,34 @@ def process_pdf(
                 (page_id, body, document_id, page_number)
             )
 
-            if needs_summary:
-                summary_body = summarize_pdf_page(
-                    llm,
-                    body,
-                    llm_has_vision=llm_has_vision,
-                    page_image_bytes=page_image_bytes
-                )
-                if summary_body:
-                    summary_id = str(uuid.uuid4())
-                    cursor.execute(
-                        """
-                        INSERT INTO summaries (
-                            summary_id,
-                            body,
-                            page_id
-                        ) VALUES (?, ?, ?)
-                        """,
-                        (summary_id, summary_body, page_id)
-                    )
-                for chunk_index, chunk_body in enumerate(chunk_page_body(summary_body)):
-                    save_chunk(embedding_model, cursor, chunk_body, chunk_index, summary_id=summary_id)
+            # Collect text from first N pages for the document summary
+            if page_number <= pdf_pages_to_summarize:
+                summary_page_texts.append(body or "")
+                # Capture first page image for vision-based summarization
+                if page_number == 1 and llm_has_vision:
+                    first_page_image_bytes = page_image_bytes or page_to_png_bytes(page)
 
             for chunk_index, chunk_body in enumerate(chunk_page_body(body)):
                 save_chunk(embedding_model, cursor, chunk_body, chunk_index, page_id=page_id)
+
+        # Generate document-level summary after processing all pages
+        if pdf_pages_to_summarize > 0 and summary_page_texts:
+            pages_text = "\n\n".join(summary_page_texts)
+            summary = summarize_document(
+                model_id,
+                pages_text,
+                llm_has_vision=llm_has_vision,
+                first_page_image_bytes=first_page_image_bytes,
+            )
+            if summary:
+                cursor.execute(
+                    """
+                    INSERT INTO summaries (
+                        document_id,
+                        title,
+                        subtitle,
+                        body
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (document_id, summary.title, summary.subtitle, summary.body)
+                )
