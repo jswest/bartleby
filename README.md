@@ -1,28 +1,23 @@
 # Bartleby, the Scrivener
 
-A powerful document processing tool that extracts text from PDFs and HTML files, generates embeddings, and optionally creates LLM-powered summaries.
+An AI-powered tool for processing document corpora and researching them with an agentic assistant.
 
 ---
 
 ## Background
 
-I have found it useful to let an AI agent (e.g. Claude Code) run wild in a SQLite database containing the extracted text from a bunch of documents. I've explored giving that agent various tools to explore the SQLite database more effectively, including enabling full-text and semantic searching. This provides a toolkit _and_ agent to generate reports based on caches of PDF documents.
+I have found it useful to let an AI agent run wild in a SQLite database containing the extracted text from a bunch of documents. I've explored giving that agent various tools to explore the database more effectively, including full-text and semantic searching. This provides a toolkit _and_ agent to research and generate reports based on caches of PDF documents.
 
-### The parser — `bartleby read`.
+**`bartleby read`** handles the parsing side: OCR-ing and parsing PDFs (and converting HTML files) into a SQLite database, then paginating, summarizing, chunking, and embedding. This is valuable on its own regardless of your desire to sift through documents with an AI agent, as it enables all sorts of deeper explorations of large corpora.
 
-OCR-ing and parsing PDFs (and converting HTML files) into a SQLite database, then paginating, summarizing, chunking, and embedding: These are valueable tasks regardless of your desire to sift through them with an AI agent. In fact, that workflow is something I use frequently, as it enables all sorts of deeper explorations of large corpora. So, I made this a standalone command.
+**`bartleby write`** is the research agent: an interactive Q&A loop where you ask questions about your corpus and the agent searches, reads, and synthesizes answers with citations. It works well with paid models like `gpt-5-nano` and `gpt-5-mini`, and also with open-weights models like `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b` via Ollama.
 
-HTML files are automatically converted to PDF using Playwright/Chromium before processing, allowing you to process web pages alongside traditional PDFs.
+A couple things to be aware of:
 
-Some gotchas with this: If you've set up an LLM to summarize pages for you, it can burn through tokens pretty fast on summarization, but you have a knob: how many pages of each PDF to summarize. You can tell it to only do the first n pages, where n can be zero.
+- Token costs can add up, especially during document summarization in `read` and during research sessions in `write`. You have knobs for this (e.g., how many pages to summarize per PDF, which can be zero). **The costs the tool shows are estimates.**
+- I'm using the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
 
-Also, I'm using the excellent (but pre-v0) `sqlite-vec` plugin for SQLite, [here](https://github.com/asg017/sqlite-vec). There might be some instability there.
-
-### The writer — `bartleby write`.
-
-This is an experiment: Can an agent run RAG for you on a prepared corpus? Can I write one that does? The answer to this is complicated. I have tested it, and it works reasonably well with paid models, such as `gpt-5-nano` and `gpt-5-mini` (though it can use ~100,000 tokens or so, so be careful). It also now works relaibly with `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b`--all open-weights models used with Ollama.
-
-Be careful about token costs when using paid models. `gpt-5-nano` produces reports for pennies. `gpt-5-pro` or whatever might cost a good bit more. **The costs the tool shows are estimates!**
+---
 
 ## Installation
 
@@ -43,15 +38,15 @@ From the project directory:
 uv tool install .
 ```
 
-This will install `bartleby` as a command-line tool in an isolated environment.
+This installs `bartleby` as a command-line tool in an isolated environment.
 
-In dev, you might want to run:
+For development:
 
 ```bash
 uv tool install --editable .
 ```
 
-### Install Playwright Browsers (for HTML support)
+### Install Playwright browsers (optional, for HTML support)
 
 If you want to process HTML files, install the Chromium browser for Playwright:
 
@@ -59,66 +54,165 @@ If you want to process HTML files, install the Chromium browser for Playwright:
 uv run playwright install chromium
 ```
 
-This only needs to be done once. You can skip this if you only process PDFs.
+This only needs to be done once. Skip this if you only process PDFs.
 
 ---
 
-## Usage
+## Quick start
 
-### Quick Start
+### 1. Configure
 
-1. **Configure once** (saves settings to `~/.bartleby/config.yaml`):
+Run the setup wizard to choose your LLM provider, model, and other settings:
 
 ```bash
 bartleby ready
 ```
 
-This inits your `bartleby` instance, asking for everything it needs.
+This walks you through configuring worker threads, LLM provider/model, API keys, summarization depth, and temperature. Settings are saved to `~/.bartleby/config.yaml`.
 
-2. **Run anywhere**:
+### 2. Create a project
 
 ```bash
-bartleby read --files path/to/files --db path/to/db
+bartleby project create my-research
 ```
 
-Process both PDFs and HTML files from a directory, or specify a single file.
+This creates a project directory and sets it as your active project. All subsequent commands use the active project by default.
 
-### Options
+### 3. Process documents
 
-**`bartleby ready`** - Interactive configuration wizard
+```bash
+bartleby read --files /path/to/your/pdfs
+```
 
-**`bartleby read`** - Process PDFs and HTML files
-- `--files` (required): Path to a file or directory containing PDF/HTML files (`.pdf`, `.html`, `.htm`)
-  - Note: `--pdfs` still works for backward compatibility
-- `--db` (required): Path to database directory (created automatically if it doesn't exist)
+Point this at a directory of PDFs (or HTML files) and Bartleby will extract text, generate embeddings, and optionally create LLM-powered summaries. Everything goes into a SQLite database in your project.
 
-**`bartleby write`** - Write a report (includes live Q&A `/search` mode after the report so you can interrogate sources)
-- `--db` (required): Path to a database directory you've created with `bartleby read`.
+### 4. Ask questions
 
----
+```bash
+bartleby write
+```
 
-## What `read` does
+This starts an interactive research session. Ask questions about your corpus and the agent will search, read, and synthesize answers with source citations:
 
-1. **Converts HTML to PDF** (if HTML files are provided) using Playwright/Chromium with Letter size (8.5×11")
-2. **Extracts text** from PDFs using PyMuPDF
-3. **OCR fallback** for image-based pages using Tesseract
-4. **Chunks text** intelligently using LangChain text splitters
-5. **Generates embeddings** using sentence-transformers (BAAI/bge-base-en-v1.5)
-6. **Creates summaries** (optional) for the first N pages using vision-capable LLMs
-7. **Stores everything** in SQLite with full-text search (FTS5) and vector search (vec0)
+```
+>: What does this corpus have to say about PM2.5 and equity?
+  ✓ Listed documents (3 documents) ................... 0.2s
+  ✓ Read summary (WANG-ET-AL_2024.pdf) ............... 0.3s
+  ✓ Searched text (2 results) ........................ 3.1s
+  ✓ Read passage (7 chunks) .......................... 6.0s
+⠇ Thinking...
 
-## What `write` does
+[Markdown-formatted answer with citations]
 
-- Generates a report on the given SQLite database, derived from your documents.
+↑23.6k/↓5.4k/+29.0k (~$0.00)
+```
 
----
-
-## A note on ~ vibe coding ~.
-
-Yes, I vibe coded a lot of this codebase, though I've made some efforts to clean it up. Sorry.
+Type `/save` to save the last answer as a timestamped report. Press `Ctrl+C` to exit.
 
 ---
 
-## Other learnings
+## Command reference
 
-The open-weights models runnable on my computer have different reqs! `gpt-oss:20b`, for example, wants simpler, post-processed schemas. While paid models want Pydantic modelling everywhere.
+### `bartleby ready`
+
+Interactive configuration wizard. Asks for:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Worker threads | 4 | Parallel processing threads for `read` |
+| LLM provider | anthropic | `anthropic`, `openai`, or `ollama` |
+| Model | varies by provider | Model name (e.g., `claude-3-5-sonnet-20241022`) |
+| API key | — | Required for Anthropic/OpenAI; can also use env vars |
+| Pages to summarize | 10 | Per-PDF page limit for summarization (0 = skip) |
+| Temperature | 0 | 0 = deterministic, 1 = creative |
+
+**API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
+
+Config is saved to `~/.bartleby/config.yaml`.
+
+### `bartleby project`
+
+Manage project workspaces. Each project gets its own database, document archive, and output directory.
+
+```
+bartleby project create <name>    # Create and activate a new project
+bartleby project list             # List all projects
+bartleby project use <name>       # Switch active project
+bartleby project info [name]      # Show project details (defaults to active)
+bartleby project delete <name>    # Delete a project and its data (-y to skip prompt)
+```
+
+**Project directory structure:**
+
+```
+~/.bartleby/projects/<name>/
+├── bartleby.db       # SQLite database (text, embeddings, summaries)
+├── archive/          # Original PDF files (deduplicated by content hash)
+└── book/             # Output artifacts
+    ├── findings/     # Auto-saved Q&A results and research notes
+    ├── report-*.md   # Saved reports (via /save)
+    └── log.json      # Session log with tool calls and token usage
+```
+
+### `bartleby read`
+
+Process PDF and HTML documents into the project database.
+
+```bash
+bartleby read --files <path> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--files <path>` | Path to a file or directory of PDFs/HTML (required) |
+| `--project <name>` | Target project (defaults to active) |
+| `--max-workers <n>` | Worker threads (default: from config) |
+| `--model <name>` | Override LLM model for summarization |
+| `--provider <name>` | Override LLM provider (`anthropic` or `openai`) |
+| `--verbose` | Show debug output |
+
+**Processing pipeline:**
+
+1. Converts HTML to PDF (if applicable) via Playwright/Chromium
+2. Extracts text from PDFs using PyMuPDF
+3. Falls back to OCR (Tesseract) for image-based pages
+4. Chunks text into segments (~400 characters with overlap)
+5. Generates vector embeddings (BAAI/bge-base-en-v1.5)
+6. Creates LLM-powered summaries for the first N pages (if configured)
+7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec)
+
+Supported file types: `.pdf`, `.html`, `.htm`
+
+### `bartleby write`
+
+Interactive research agent for investigating your document corpus.
+
+```bash
+bartleby write [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--project <name>` | Target project (defaults to active) |
+| `--verbose` | Show debug output and full tracebacks |
+
+**In-session commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/save` | Save the last answer as `book/report-YYYYMMDDHHmm.md` |
+| `Ctrl+C` | Exit the session |
+
+The agent has access to search tools (keyword and semantic), document reading tools, summarization, and note-taking. Each question-answer pair is auto-saved to `book/findings/` for continuity across the session. Token usage and estimated costs are displayed after each answer.
+
+---
+
+## Supported LLM providers
+
+| Provider | Default model | Vision support | Notes |
+|----------|--------------|----------------|-------|
+| Anthropic | `claude-3-5-sonnet-20241022` | Claude 3+ models | Requires API key |
+| OpenAI | `gpt-4-turbo` | GPT-4 vision models | Requires API key |
+| Ollama | `llama3.2` | No | Requires local server |
+
+Vision-capable models can use page images during summarization for better results. Non-vision models fall back to text-only.
