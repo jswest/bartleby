@@ -205,6 +205,44 @@ bartleby write [options]
 
 The agent has access to search tools (keyword and semantic), document reading tools, summarization, and note-taking. Each question-answer pair is auto-saved to `book/findings/` for continuity across the session. Token usage and estimated costs are displayed after each answer.
 
+### `bartleby book`
+
+View research activity and findings from your project. Each session gets a memorable name (e.g., "mighty-grove", "sharp-oak") derived from its ID.
+
+```bash
+bartleby book [subcommand] [options]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| *(none)* | Overview: session count, notes, reports, total tokens |
+| `sessions` | List all research sessions with stats |
+| `notes [session]` | Show research notes (filter by session name) |
+| `logs [--session <name>]` | Show tool usage and token breakdown |
+
+| Option | Description |
+|--------|-------------|
+| `--project <name>` | Target project (defaults to active) |
+| `--full` | (notes only) Show full note content instead of titles |
+
+**Example output:**
+
+```
+$ bartleby book sessions
+                      Sessions
+┏━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┓
+┃ Session      ┃ Time    ┃ Tools ┃ Notes ┃  Tokens ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━┩
+│ mighty-grove │ 18m ago │    10 │     3 │ 2196.4k │
+│ sharp-oak    │ 3h ago  │    23 │     5 │ 6877.0k │
+│ tawny-oak    │ 3h ago  │    10 │     2 │  336.2k │
+└──────────────┴─────────┴───────┴───────┴─────────┘
+```
+
+Use `bartleby book logs --session <name>` to see a detailed timeline of tool calls for debugging or understanding agent behavior.
+
 ---
 
 ## Supported LLM providers

@@ -92,6 +92,39 @@ def main():
         help="Enable verbose logging (show DEBUG messages and full tracebacks)"
     )
 
+    # Book command
+    book_parser = subparsers.add_parser("book", help="View research activity and findings")
+    book_parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Project name (defaults to active project)"
+    )
+    book_subparsers = book_parser.add_subparsers(dest="book_command", help="Book commands")
+
+    book_sessions = book_subparsers.add_parser("sessions", help="List research sessions")
+
+    book_notes = book_subparsers.add_parser("notes", help="View research notes and findings")
+    book_notes.add_argument(
+        "--full",
+        action="store_true",
+        help="Show full note content instead of titles only"
+    )
+    book_notes.add_argument(
+        "session",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Filter by session name or uuid"
+    )
+
+    book_logs = book_subparsers.add_parser("logs", help="View tool call logs and token usage")
+    book_logs.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help="Filter by session name or uuid"
+    )
 
     args = parser.parse_args()
 
@@ -148,6 +181,27 @@ def main():
             db_path = resolve_active_db_path()
 
         write_main(db_path=db_path, verbose=args.verbose)
+
+    elif args.command == "book":
+        from bartleby.project import get_project_db_path, resolve_active_db_path
+        from bartleby.book.main import main as book_main
+
+        if args.project:
+            db_path = get_project_db_path(args.project)
+        else:
+            db_path = resolve_active_db_path()
+
+        # Determine subcommand and options
+        subcommand = args.book_command
+        full = getattr(args, "full", False)
+        session_filter = getattr(args, "session", None)
+
+        book_main(
+            db_path=db_path,
+            subcommand=subcommand,
+            full=full,
+            session_filter=session_filter,
+        )
 
 
 def _handle_project(args, project_parser):
