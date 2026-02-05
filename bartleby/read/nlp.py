@@ -3,7 +3,6 @@ import unicodedata
 from typing import List
 
 import fitz
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 
 _LIGATURES = {
@@ -123,18 +122,96 @@ def extract_body_from_pdf_page(page: fitz.Page) -> str:
     return body
 
 
+def _recursive_character_split(
+    text: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    separators: List[str] | None = None,
+) -> List[str]:
+    """
+    Split text recursively using a list of separators, producing chunks
+    up to chunk_size characters with chunk_overlap overlap.
+
+    Mimics LangChain's RecursiveCharacterTextSplitter algorithm:
+    1. Try separators in order until one splits the text.
+    2. Merge small splits into chunks of up to chunk_size.
+    3. Recursively split any chunk that's still too large using the next separator.
+    """
+    if separators is None:
+        separators = ["\n\n", "\n", " ", ""]
+
+    final_chunks: List[str] = []
+
+    # Find the appropriate separator
+    separator = separators[-1]
+    remaining_separators = []
+    for i, sep in enumerate(separators):
+        if sep == "":
+            separator = sep
+            remaining_separators = []
+            break
+        if sep in text:
+            separator = sep
+            remaining_separators = separators[i + 1:]
+            break
+
+    # Split the text
+    if separator:
+        splits = text.split(separator)
+    else:
+        splits = list(text)
+
+    # Merge small splits into chunks
+    current_chunk: List[str] = []
+    current_length = 0
+
+    for piece in splits:
+        piece_len = len(piece)
+        separator_len = len(separator)
+        added_len = piece_len + (separator_len if current_chunk else 0)
+
+        if current_length + added_len > chunk_size and current_chunk:
+            # Flush current chunk
+            merged = separator.join(current_chunk)
+            if len(merged) > chunk_size and remaining_separators:
+                final_chunks.extend(
+                    _recursive_character_split(merged, chunk_size, chunk_overlap, remaining_separators)
+                )
+            elif merged.strip():
+                final_chunks.append(merged.strip())
+
+            # Keep overlap: walk backwards to find overlap content
+            overlap_chunks: List[str] = []
+            overlap_len = 0
+            for prev in reversed(current_chunk):
+                if overlap_len + len(prev) + separator_len > chunk_overlap:
+                    break
+                overlap_chunks.insert(0, prev)
+                overlap_len += len(prev) + separator_len
+
+            current_chunk = overlap_chunks
+            current_length = sum(len(c) for c in current_chunk) + max(0, len(current_chunk) - 1) * separator_len
+
+        current_chunk.append(piece)
+        current_length += added_len
+
+    # Flush remaining
+    if current_chunk:
+        merged = separator.join(current_chunk)
+        if len(merged) > chunk_size and remaining_separators:
+            final_chunks.extend(
+                _recursive_character_split(merged, chunk_size, chunk_overlap, remaining_separators)
+            )
+        elif merged.strip():
+            final_chunks.append(merged.strip())
+
+    return final_chunks
+
+
 def chunk_page_body(body: str) -> List[str]:
     from bartleby.lib.consts import CHUNK_SIZE, CHUNK_OVERLAP
 
     if not body or not body.strip():
         return []
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        length_function=len,
-        is_separator_regex=False,
-    )
-
-    chunks = splitter.split_text(body)
-    return chunks
+    return _recursive_character_split(body, CHUNK_SIZE, CHUNK_OVERLAP)

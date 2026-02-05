@@ -1,12 +1,27 @@
 """Search functions for full-text and semantic retrieval."""
 
-from pathlib import Path
+import os
+import re
 from typing import List, Dict, Any, Optional
 
 from sentence_transformers import SentenceTransformer
 
 from bartleby.lib.embeddings import embed_chunk
-from bartleby.read.sqlite import get_connection
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """Sanitize a query for FTS5. Splits into words, strips special chars.
+
+    If the user already included FTS5 operators (AND, OR, NOT, quotes),
+    the query is passed through unchanged.  Otherwise each word is cleaned
+    of FTS5 special characters and returned as implicit-AND terms.
+    """
+    if re.search(r'\b(AND|OR|NOT)\b|"', query):
+        return query
+    # Quote each term so FTS5's own tokenizer handles punctuation
+    # correctly (e.g. "PM2.5" tokenizes to the phrase "pm2 5").
+    words = query.split()
+    return ' '.join(f'"{w}"' for w in words if w)
 
 
 class SearchResult:
@@ -52,7 +67,7 @@ class SearchResult:
 
 
 def full_text_search(
-    db_path: Path,
+    connection,
     query: str,
     limit: int = 10,
     document_id: Optional[str] = None,
@@ -61,19 +76,17 @@ def full_text_search(
     Perform full-text search using SQLite FTS5.
 
     Args:
-        db_path: Path to the database file
+        connection: APSW database connection
         query: Search query string (supports FTS5 query syntax)
         limit: Maximum number of results to return
+        document_id: Optional filter to search within a specific document
 
     Returns:
         List of SearchResult objects ranked by relevance
     """
-    connection = get_connection(db_path)
     cursor = connection.cursor()
 
-    # Sanitize query for FTS5 - wrap in quotes to handle special characters
-    # FTS5 doesn't like periods, colons, and other special chars in unquoted queries
-    sanitized_query = f'"{query}"'
+    sanitized_query = _sanitize_fts_query(query)
 
     sql = """
         SELECT
@@ -86,10 +99,8 @@ def full_text_search(
             c.chunk_index
         FROM fts_chunks fts
         JOIN chunks c ON fts.chunk_id = c.chunk_id
-        LEFT JOIN pages p ON c.page_id = p.page_id
-        LEFT JOIN summaries s ON c.summary_id = s.summary_id
-        LEFT JOIN pages sp ON s.page_id = sp.page_id
-        LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
+        JOIN pages p ON c.page_id = p.page_id
+        JOIN documents d ON p.document_id = d.document_id
         WHERE fts_chunks MATCH ?
     """
     params = [sanitized_query]
@@ -102,28 +113,23 @@ def full_text_search(
     """
 
     results = []
-    try:
-        params.append(limit)
-        for row in cursor.execute(sql, params):
-            results.append(SearchResult(
-                chunk_id=row[0],
-                body=row[1],
-                score=abs(row[2]), # FTS5 rank is negative, lower is better
-                page_number=row[3],
-                document_id=row[4],
-                origin_file_path=row[5],
-                chunk_index=row[6],
-            ))
-    except Exception:
-        # If FTS5 query fails, return empty results
-        pass
+    params.append(limit)
+    for row in cursor.execute(sql, params):
+        results.append(SearchResult(
+            chunk_id=row[0],
+            body=row[1],
+            score=abs(row[2]),  # FTS5 rank is negative, lower is better
+            page_number=row[3],
+            document_id=row[4],
+            origin_file_path=row[5],
+            chunk_index=row[6],
+        ))
 
-    connection.close()
     return results
 
 
 def semantic_search(
-    db_path: Path,
+    connection,
     query: str,
     embedding_model: SentenceTransformer,
     limit: int = 10,
@@ -133,18 +139,17 @@ def semantic_search(
     Perform semantic search using vector similarity.
 
     Args:
-        db_path: Path to the database file
+        connection: APSW database connection
         query: Search query string
         embedding_model: SentenceTransformer model for generating embeddings
         limit: Maximum number of results to return
+        document_id: Optional filter to search within a specific document
 
     Returns:
         List of SearchResult objects ranked by cosine similarity
     """
-    connection = get_connection(db_path)
     cursor = connection.cursor()
 
-    # Generate query embedding
     query_embedding = embed_chunk(embedding_model, query)
     query_bytes = query_embedding.astype("float32").tobytes()
 
@@ -159,10 +164,8 @@ def semantic_search(
             c.chunk_index
         FROM vec_chunks vc
         JOIN chunks c ON vc.chunk_id = c.chunk_id
-        LEFT JOIN pages p ON c.page_id = p.page_id
-        LEFT JOIN summaries s ON c.summary_id = s.summary_id
-        LEFT JOIN pages sp ON s.page_id = sp.page_id
-        LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
+        JOIN pages p ON c.page_id = p.page_id
+        JOIN documents d ON p.document_id = d.document_id
         WHERE vc.embedding MATCH ?
           AND k = ?
     """
@@ -176,7 +179,6 @@ def semantic_search(
 
     results = []
     for row in cursor.execute(sql, params):
-        # Convert distance to similarity score (1 - distance)
         similarity = 1.0 - row[2]
         results.append(SearchResult(
             chunk_id=row[0],
@@ -188,12 +190,11 @@ def semantic_search(
             chunk_index=row[6],
         ))
 
-    connection.close()
     return results
 
 
 def get_document_chunks(
-    db_path: Path,
+    connection,
     document_id: str,
     start_chunk: int = 0,
     max_chunks: Optional[int] = None,
@@ -202,7 +203,7 @@ def get_document_chunks(
     Retrieve chunks for a specific document.
 
     Args:
-        db_path: Path to the database file
+        connection: APSW database connection
         document_id: Document ID to retrieve chunks for
         start_chunk: Zero-based starting chunk offset within the document
         max_chunks: Maximum number of chunks to return (None = all)
@@ -210,7 +211,6 @@ def get_document_chunks(
     Returns:
         List of SearchResult objects ordered by page and chunk index
     """
-    connection = get_connection(db_path)
     cursor = connection.cursor()
 
     sql = """
@@ -222,12 +222,10 @@ def get_document_chunks(
             d.document_id,
             d.origin_file_path
         FROM chunks c
-        LEFT JOIN pages p ON c.page_id = p.page_id
-        LEFT JOIN summaries s ON c.summary_id = s.summary_id
-        LEFT JOIN pages sp ON s.page_id = sp.page_id
-        LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
+        JOIN pages p ON c.page_id = p.page_id
+        JOIN documents d ON p.document_id = d.document_id
         WHERE d.document_id = ?
-        ORDER BY COALESCE(p.page_number, sp.page_number), c.chunk_index
+        ORDER BY p.page_number, c.chunk_index
     """
 
     params = [document_id]
@@ -249,79 +247,39 @@ def get_document_chunks(
             chunk_index=row[2],
         ))
 
-    connection.close()
     return results
 
 
 def count_document_chunks(
-    db_path: Path,
+    connection,
     document_id: str,
 ) -> int:
     """
     Count total chunks for a specific document.
 
     Args:
-        db_path: Path to the database file
+        connection: APSW database connection
         document_id: Document ID to count chunks for
 
     Returns:
         Total number of chunks for the document
     """
-    connection = get_connection(db_path)
     cursor = connection.cursor()
 
     sql = """
         SELECT COUNT(*)
         FROM chunks c
-        LEFT JOIN pages p ON c.page_id = p.page_id
-        LEFT JOIN summaries s ON c.summary_id = s.summary_id
-        LEFT JOIN pages sp ON s.page_id = sp.page_id
-        LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
-        WHERE d.document_id = ?
+        JOIN pages p ON c.page_id = p.page_id
+        WHERE p.document_id = ?
     """
 
     cursor.execute(sql, (document_id,))
     row = cursor.fetchone()
-    connection.close()
     return row[0] if row else 0
 
 
-def list_documents(db_path: Path) -> List[Dict[str, Any]]:
-    """
-    List all documents in the database.
-
-    Args:
-        db_path: Path to the database file
-
-    Returns:
-        List of dictionaries containing document metadata
-    """
-    connection = get_connection(db_path)
-    cursor = connection.cursor()
-
-    sql = """
-        SELECT
-            document_id,
-            origin_file_path,
-            pages_count
-        FROM documents
-        ORDER BY origin_file_path
-    """
-
-    results = []
-    for row in cursor.execute(sql):
-        results.append({
-            "document_id": row[0],
-            "origin_file_path": row[1],
-            "pages_count": row[2],
-        })
-
-    connection.close()
-    return results
-
-
 def get_chunk_window_by_chunk_id(
-    db_path: Path,
+    connection,
     chunk_id: str,
     window_radius: int,
 ) -> Optional[Dict[str, Any]]:
@@ -329,14 +287,13 @@ def get_chunk_window_by_chunk_id(
     Retrieve a small window of chunks around a specific chunk ID.
 
     Args:
-        db_path: Path to the database file
+        connection: APSW database connection
         chunk_id: Anchor chunk ID
         window_radius: Number of chunks to include before/after the anchor
 
     Returns:
         Dictionary with window metadata and chunk data, or None if chunk not found
     """
-    connection = get_connection(db_path)
     cursor = connection.cursor()
 
     sql = """
@@ -345,16 +302,13 @@ def get_chunk_window_by_chunk_id(
             d.document_id,
             d.origin_file_path
         FROM chunks c
-        LEFT JOIN pages p ON c.page_id = p.page_id
-        LEFT JOIN summaries s ON c.summary_id = s.summary_id
-        LEFT JOIN pages sp ON s.page_id = sp.page_id
-        LEFT JOIN documents d ON COALESCE(p.document_id, sp.document_id) = d.document_id
+        JOIN pages p ON c.page_id = p.page_id
+        JOIN documents d ON p.document_id = d.document_id
         WHERE c.chunk_id = ?
     """
 
     cursor.execute(sql, (chunk_id,))
     row = cursor.fetchone()
-    connection.close()
 
     if not row:
         return None
@@ -365,7 +319,7 @@ def get_chunk_window_by_chunk_id(
 
     start_chunk = max(0, chunk_index - window_radius)
     max_chunks = window_radius * 2 + 1
-    chunks = get_document_chunks(db_path, document_id, start_chunk=start_chunk, max_chunks=max_chunks)
+    chunks = get_document_chunks(connection, document_id, start_chunk=start_chunk, max_chunks=max_chunks)
 
     return {
         "document_id": document_id,
@@ -376,3 +330,80 @@ def get_chunk_window_by_chunk_id(
         "max_chunks": max_chunks,
         "chunks": [c.to_dict() for c in chunks],
     }
+
+
+# --- Library query functions ---
+
+
+def list_all_documents(connection) -> List[Dict[str, Any]]:
+    """List all documents with metadata and summary info."""
+    cursor = connection.cursor()
+
+    sql = """
+        SELECT
+            d.document_id,
+            d.origin_file_path,
+            d.pages_count,
+            COUNT(DISTINCT c.chunk_id) as chunk_count,
+            s.title,
+            s.subtitle,
+            CASE WHEN s.document_id IS NOT NULL THEN 1 ELSE 0 END as has_summary
+        FROM documents d
+        LEFT JOIN pages p ON p.document_id = d.document_id
+        LEFT JOIN chunks c ON c.page_id = p.page_id
+        LEFT JOIN summaries s ON s.document_id = d.document_id
+        GROUP BY d.document_id
+        ORDER BY d.origin_file_path
+    """
+
+    results = []
+    for row in cursor.execute(sql):
+        origin = row[1] or ""
+        filename = os.path.splitext(os.path.basename(origin))[0] if origin else ""
+        results.append({
+            "document_id": row[0],
+            "filename": filename,
+            "origin_file_path": origin,
+            "pages_count": row[2],
+            "chunk_count": row[3],
+            "title": row[4],
+            "subtitle": row[5],
+            "has_summary": bool(row[6]),
+        })
+
+    return results
+
+
+def get_document_summary(connection, document_id: str) -> Optional[Dict[str, Any]]:
+    """Get a document's summary from the summaries table.
+
+    Returns:
+        Dict with title, subtitle, body or None if no summary exists.
+    """
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT title, subtitle, body FROM summaries WHERE document_id = ?",
+        (document_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return {"title": row[0], "subtitle": row[1], "body": row[2]}
+
+
+def save_document_summary(
+    connection,
+    document_id: str,
+    title: str,
+    subtitle: Optional[str],
+    body: str,
+):
+    """Insert or replace a document summary."""
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO summaries (document_id, title, subtitle, body)
+        VALUES (?, ?, ?, ?)
+        """,
+        (document_id, title, subtitle, body),
+    )

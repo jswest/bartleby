@@ -18,19 +18,40 @@ def main():
     # Ready command
     ready_parser = subparsers.add_parser("ready", help="Configure Bartleby settings")
 
+    # Project command
+    project_parser = subparsers.add_parser("project", help="Manage projects")
+    project_subparsers = project_parser.add_subparsers(dest="project_command", help="Project commands")
+
+    project_create = project_subparsers.add_parser("create", help="Create a new project")
+    project_create.add_argument("name", type=str, help="Project name")
+
+    project_list = project_subparsers.add_parser("list", help="List all projects")
+
+    project_use = project_subparsers.add_parser("use", help="Switch to an existing project")
+    project_use.add_argument("name", type=str, help="Project name")
+
+    project_info = project_subparsers.add_parser("info", help="Show project details")
+    project_info.add_argument("name", type=str, nargs="?", default=None, help="Project name (defaults to active)")
+
+    project_delete = project_subparsers.add_parser("delete", help="Delete a project")
+    project_delete.add_argument("name", type=str, help="Project name")
+    project_delete.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+
     # Read command
-    read_parser = subparsers.add_parser("read", help="Process PDF documents")
+    read_parser = subparsers.add_parser("read", help="Process PDF and HTML documents")
     read_parser.add_argument(
-        "--pdfs",
+        "--files",
+        "--pdfs",  # Backward compatibility
+        dest="files",
         required=True,
         type=str,
-        help="Path to a PDF file or directory containing PDFs"
+        help="Path to a file or directory containing PDF/HTML files"
     )
     read_parser.add_argument(
-        "--db",
-        required=True,
+        "--project",
         type=str,
-        help="Path to the database directory (will be created if it doesn't exist)"
+        default=None,
+        help="Project name (defaults to active project)"
     )
     read_parser.add_argument(
         "--max-workers",
@@ -60,15 +81,49 @@ def main():
     # Write command
     write_parser = subparsers.add_parser("write", help="Research agent for document investigation")
     write_parser.add_argument(
-        "--db",
-        required=True,
+        "--project",
         type=str,
-        help="Path to the database directory (created by 'bartleby read')"
+        default=None,
+        help="Project name (defaults to active project)"
     )
     write_parser.add_argument(
-        "--qa-only",
+        "--verbose",
         action="store_true",
-        help="Skip report generation and go directly to Q&A mode (requires existing report.md and findings/)"
+        help="Enable verbose logging (show DEBUG messages and full tracebacks)"
+    )
+
+    # Book command
+    book_parser = subparsers.add_parser("book", help="View research activity and findings")
+    book_parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Project name (defaults to active project)"
+    )
+    book_subparsers = book_parser.add_subparsers(dest="book_command", help="Book commands")
+
+    book_sessions = book_subparsers.add_parser("sessions", help="List research sessions")
+
+    book_notes = book_subparsers.add_parser("notes", help="View research notes and findings")
+    book_notes.add_argument(
+        "--full",
+        action="store_true",
+        help="Show full note content instead of titles only"
+    )
+    book_notes.add_argument(
+        "session",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Filter by session name or uuid"
+    )
+
+    book_logs = book_subparsers.add_parser("logs", help="View tool call logs and token usage")
+    book_logs.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help="Filter by session name or uuid"
     )
 
     args = parser.parse_args()
@@ -84,15 +139,22 @@ def main():
         send(message_type="SPLASH")
         ready_main()
 
+    elif args.command == "project":
+        _handle_project(args, project_parser)
+
     elif args.command == "read":
         from bartleby.lib.console import send
+        from bartleby.project import get_project_db_path, resolve_active_db_path
         from bartleby.read.main import main as read_main
 
         send(message_type="SPLASH")
 
-        db_dir = Path(args.db)
-        db_dir.mkdir(parents=True, exist_ok=True)
-        db_path = db_dir / "bartleby.db"
+        if args.project:
+            db_path = get_project_db_path(args.project)
+        else:
+            db_path = resolve_active_db_path()
+
+        db_dir = db_path.parent
 
         # Create database if it doesn't exist
         if not db_path.exists():
@@ -102,7 +164,7 @@ def main():
 
         read_main(
             db_path=db_path,
-            pdf_path=args.pdfs,
+            pdf_path=args.files,
             max_workers=args.max_workers,
             model=args.model,
             provider=args.provider,
@@ -110,12 +172,136 @@ def main():
         )
 
     elif args.command == "write":
+        from bartleby.project import get_project_db_path, resolve_active_db_path
         from bartleby.write.main import main as write_main
 
-        db_dir = Path(args.db)
-        db_path = db_dir / "bartleby.db"
+        if args.project:
+            db_path = get_project_db_path(args.project)
+        else:
+            db_path = resolve_active_db_path()
 
-        write_main(db_path=db_path, qa_only=args.qa_only)
+        write_main(db_path=db_path, verbose=args.verbose)
+
+    elif args.command == "book":
+        from bartleby.project import get_project_db_path, resolve_active_db_path
+        from bartleby.book.main import main as book_main
+
+        if args.project:
+            db_path = get_project_db_path(args.project)
+        else:
+            db_path = resolve_active_db_path()
+
+        # Determine subcommand and options
+        subcommand = args.book_command
+        full = getattr(args, "full", False)
+        session_filter = getattr(args, "session", None)
+
+        book_main(
+            db_path=db_path,
+            subcommand=subcommand,
+            full=full,
+            session_filter=session_filter,
+        )
+
+
+def _handle_project(args, project_parser):
+    from rich.console import Console
+    from rich.prompt import Confirm
+    from rich.table import Table
+
+    from bartleby.project import (
+        create_project,
+        delete_project,
+        get_active_project,
+        get_project_info,
+        list_projects,
+        set_active_project,
+    )
+
+    console = Console()
+
+    if not args.project_command:
+        project_parser.print_help()
+        sys.exit(1)
+
+    if args.project_command == "create":
+        try:
+            project_dir = create_project(args.name)
+            console.print(f"[bold green]Created project '{args.name}'[/bold green]")
+            console.print(f"Location: [cyan]{project_dir}[/cyan]")
+            console.print(f"Active project set to: [bold]{args.name}[/bold]")
+        except (ValueError, FileExistsError) as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+
+    elif args.project_command == "list":
+        projects = list_projects()
+        if not projects:
+            console.print("No projects found. Create one with `bartleby project create <name>`")
+            return
+
+        table = Table(title="Projects")
+        table.add_column("", width=2)
+        table.add_column("Name", style="bold")
+        table.add_column("Database")
+
+        for p in projects:
+            marker = "*" if p["is_active"] else ""
+            db_status = "[green]ready[/green]" if p["has_db"] else "[red]no db[/red]"
+            table.add_row(marker, p["name"], db_status)
+
+        console.print(table)
+
+    elif args.project_command == "use":
+        try:
+            set_active_project(args.name)
+            console.print(f"Active project set to: [bold]{args.name}[/bold]")
+        except FileNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+
+    elif args.project_command == "info":
+        name = args.name or get_active_project()
+        if not name:
+            console.print("[red]No active project. Specify a name: `bartleby project info <name>`[/red]")
+            sys.exit(1)
+
+        try:
+            info = get_project_info(name)
+        except (ValueError, FileNotFoundError) as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+
+        table = Table(title=f"Project: {info['name']}")
+        table.add_column("Field", style="bold")
+        table.add_column("Value")
+
+        active_str = "yes" if info["is_active"] else "no"
+        table.add_row("Active", active_str)
+        table.add_row("Path", str(info["path"]))
+        table.add_row("Database", "ready" if info["has_db"] else "missing")
+        table.add_row("DB size", f"{info['db_size_mb']} MB")
+        table.add_row("Documents", str(info["document_count"]))
+        table.add_row("Report", "yes" if info["has_report"] else "no")
+        table.add_row("Findings", str(info["findings_count"]))
+
+        console.print(table)
+
+    elif args.project_command == "delete":
+        if not args.yes:
+            confirmed = Confirm.ask(f"Delete project '{args.name}' and all its data?", default=False)
+            if not confirmed:
+                console.print("Cancelled.")
+                return
+
+        try:
+            delete_project(args.name)
+            console.print(f"[bold red]Deleted project '{args.name}'[/bold red]")
+            if get_active_project() is None:
+                console.print("[yellow]No active project. Set one with `bartleby project use <name>`[/yellow]")
+        except (ValueError, FileNotFoundError) as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
