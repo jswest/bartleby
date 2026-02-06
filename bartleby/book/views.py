@@ -169,20 +169,10 @@ def render_logs(console: Console, sessions: list[Session], filter_session: str |
 
     # Aggregate tool call stats
     tool_stats: Counter[str] = Counter()
-    tool_times: dict[str, list[float]] = {}
 
     for session in sessions:
-        prev_time = None
         for tc in session.tool_calls:
             tool_stats[tc.tool_name] += 1
-
-            # Estimate duration from timestamps (time until next call or end)
-            if prev_time is not None:
-                duration = (tc.timestamp - prev_time).total_seconds()
-                if tc.tool_name not in tool_times:
-                    tool_times[tc.tool_name] = []
-                # Use previous tool's duration
-            prev_time = tc.timestamp
 
     # Build summary table
     table = Table(title="Tool Usage", show_header=True, header_style="bold")

@@ -16,6 +16,7 @@ from bartleby.lib.consts import (
 from bartleby.lib.utils import truncate_result
 from bartleby.write.search import (
     count_document_chunks,
+    document_exists,
     full_text_search,
     get_chunk_window_by_chunk_id,
     get_document_chunks,
@@ -42,15 +43,6 @@ def _result_with_body(results: list, max_body_chars: int = 300) -> list[Dict]:
     return out
 
 
-def _document_exists(connection, document_id: str) -> bool:
-    cursor = connection.cursor()
-    cursor.execute(
-        "SELECT 1 FROM documents WHERE document_id = ? LIMIT 1",
-        (document_id,),
-    )
-    return cursor.fetchone() is not None
-
-
 class SearchDocumentsFTSTool(Tool):
     name = "search_documents_fts"
     description = load_tool_doc("search_documents_fts")
@@ -75,7 +67,7 @@ class SearchDocumentsFTSTool(Tool):
 
     def forward(self, query: str, limit: int = None, document_id: str = None) -> str:
         safe_limit = _sanitize_limit(limit)
-        if document_id and not _document_exists(self.connection, document_id):
+        if document_id and not document_exists(self.connection, document_id):
             return json.dumps({
                 "error": "DOCUMENT_NOT_FOUND",
                 "message": f"Document '{document_id}' was not found.",
@@ -114,7 +106,7 @@ class SearchDocumentsSemanticTool(Tool):
 
     def forward(self, query: str, limit: int = None, document_id: str = None) -> str:
         safe_limit = _sanitize_limit(limit)
-        if document_id and not _document_exists(self.connection, document_id):
+        if document_id and not document_exists(self.connection, document_id):
             return json.dumps({
                 "error": "DOCUMENT_NOT_FOUND",
                 "message": f"Document '{document_id}' was not found.",

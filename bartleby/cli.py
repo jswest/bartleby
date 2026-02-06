@@ -7,6 +7,25 @@ from loguru import logger
 from bartleby.lib.consts import DEFAULT_MAX_WORKERS
 
 
+def _add_project_arg(parser: argparse.ArgumentParser):
+    """Add the standard --project argument."""
+    parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Project name (defaults to active project)"
+    )
+
+
+def _add_verbose_arg(parser: argparse.ArgumentParser):
+    """Add the standard --verbose argument."""
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (show DEBUG messages)"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="bartleby",
@@ -47,12 +66,7 @@ def main():
         type=str,
         help="Path to a file or directory containing PDF/HTML files"
     )
-    read_parser.add_argument(
-        "--project",
-        type=str,
-        default=None,
-        help="Project name (defaults to active project)"
-    )
+    _add_project_arg(read_parser)
     read_parser.add_argument(
         "--max-workers",
         type=int,
@@ -72,34 +86,16 @@ def main():
         default=None,
         help="LLM provider (anthropic or openai, default: from config)"
     )
-    read_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging (show DEBUG messages)"
-    )
+    _add_verbose_arg(read_parser)
 
     # Write command
     write_parser = subparsers.add_parser("write", help="Research agent for document investigation")
-    write_parser.add_argument(
-        "--project",
-        type=str,
-        default=None,
-        help="Project name (defaults to active project)"
-    )
-    write_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging (show DEBUG messages and full tracebacks)"
-    )
+    _add_project_arg(write_parser)
+    _add_verbose_arg(write_parser)
 
     # Book command
     book_parser = subparsers.add_parser("book", help="View research activity and findings")
-    book_parser.add_argument(
-        "--project",
-        type=str,
-        default=None,
-        help="Project name (defaults to active project)"
-    )
+    _add_project_arg(book_parser)
     book_subparsers = book_parser.add_subparsers(dest="book_command", help="Book commands")
 
     book_sessions = book_subparsers.add_parser("sessions", help="List research sessions")
@@ -204,19 +200,114 @@ def main():
         )
 
 
-def _handle_project(args, project_parser):
-    from rich.console import Console
-    from rich.prompt import Confirm
+def _handle_project_create(args, console):
+    """Handle: bartleby project create <name>"""
+    from bartleby.project import create_project
+
+    try:
+        project_dir = create_project(args.name)
+        console.print(f"[bold green]Created project '{args.name}'[/bold green]")
+        console.print(f"Location: [cyan]{project_dir}[/cyan]")
+        console.print(f"Active project set to: [bold]{args.name}[/bold]")
+    except (ValueError, FileExistsError) as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+
+def _handle_project_list(args, console):
+    """Handle: bartleby project list"""
     from rich.table import Table
 
-    from bartleby.project import (
-        create_project,
-        delete_project,
-        get_active_project,
-        get_project_info,
-        list_projects,
-        set_active_project,
-    )
+    from bartleby.project import list_projects
+
+    projects = list_projects()
+    if not projects:
+        console.print("No projects found. Create one with `bartleby project create <name>`")
+        return
+
+    table = Table(title="Projects")
+    table.add_column("", width=2)
+    table.add_column("Name", style="bold")
+    table.add_column("Database")
+
+    for p in projects:
+        marker = "*" if p["is_active"] else ""
+        db_status = "[green]ready[/green]" if p["has_db"] else "[red]no db[/red]"
+        table.add_row(marker, p["name"], db_status)
+
+    console.print(table)
+
+
+def _handle_project_use(args, console):
+    """Handle: bartleby project use <name>"""
+    from bartleby.project import set_active_project
+
+    try:
+        set_active_project(args.name)
+        console.print(f"Active project set to: [bold]{args.name}[/bold]")
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+
+def _handle_project_info(args, console):
+    """Handle: bartleby project info [name]"""
+    from rich.table import Table
+
+    from bartleby.project import get_active_project, get_project_info
+
+    name = args.name or get_active_project()
+    if not name:
+        console.print("[red]No active project. Specify a name: `bartleby project info <name>`[/red]")
+        sys.exit(1)
+
+    try:
+        info = get_project_info(name)
+    except (ValueError, FileNotFoundError) as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+    table = Table(title=f"Project: {info['name']}")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+
+    active_str = "yes" if info["is_active"] else "no"
+    table.add_row("Active", active_str)
+    table.add_row("Path", str(info["path"]))
+    table.add_row("Database", "ready" if info["has_db"] else "missing")
+    table.add_row("DB size", f"{info['db_size_mb']} MB")
+    table.add_row("Documents", str(info["document_count"]))
+    table.add_row("Report", "yes" if info["has_report"] else "no")
+    table.add_row("Findings", str(info["findings_count"]))
+
+    console.print(table)
+
+
+def _handle_project_delete(args, console):
+    """Handle: bartleby project delete <name>"""
+    from rich.prompt import Confirm
+
+    from bartleby.project import delete_project, get_active_project
+
+    if not args.yes:
+        confirmed = Confirm.ask(f"Delete project '{args.name}' and all its data?", default=False)
+        if not confirmed:
+            console.print("Cancelled.")
+            return
+
+    try:
+        delete_project(args.name)
+        console.print(f"[bold red]Deleted project '{args.name}'[/bold red]")
+        if get_active_project() is None:
+            console.print("[yellow]No active project. Set one with `bartleby project use <name>`[/yellow]")
+    except (ValueError, FileNotFoundError) as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+
+def _handle_project(args, project_parser):
+    """Route project subcommands to handlers."""
+    from rich.console import Console
 
     console = Console()
 
@@ -224,84 +315,17 @@ def _handle_project(args, project_parser):
         project_parser.print_help()
         sys.exit(1)
 
-    if args.project_command == "create":
-        try:
-            project_dir = create_project(args.name)
-            console.print(f"[bold green]Created project '{args.name}'[/bold green]")
-            console.print(f"Location: [cyan]{project_dir}[/cyan]")
-            console.print(f"Active project set to: [bold]{args.name}[/bold]")
-        except (ValueError, FileExistsError) as e:
-            console.print(f"[red]{e}[/red]")
-            sys.exit(1)
+    handlers = {
+        "create": _handle_project_create,
+        "list": _handle_project_list,
+        "use": _handle_project_use,
+        "info": _handle_project_info,
+        "delete": _handle_project_delete,
+    }
 
-    elif args.project_command == "list":
-        projects = list_projects()
-        if not projects:
-            console.print("No projects found. Create one with `bartleby project create <name>`")
-            return
-
-        table = Table(title="Projects")
-        table.add_column("", width=2)
-        table.add_column("Name", style="bold")
-        table.add_column("Database")
-
-        for p in projects:
-            marker = "*" if p["is_active"] else ""
-            db_status = "[green]ready[/green]" if p["has_db"] else "[red]no db[/red]"
-            table.add_row(marker, p["name"], db_status)
-
-        console.print(table)
-
-    elif args.project_command == "use":
-        try:
-            set_active_project(args.name)
-            console.print(f"Active project set to: [bold]{args.name}[/bold]")
-        except FileNotFoundError as e:
-            console.print(f"[red]{e}[/red]")
-            sys.exit(1)
-
-    elif args.project_command == "info":
-        name = args.name or get_active_project()
-        if not name:
-            console.print("[red]No active project. Specify a name: `bartleby project info <name>`[/red]")
-            sys.exit(1)
-
-        try:
-            info = get_project_info(name)
-        except (ValueError, FileNotFoundError) as e:
-            console.print(f"[red]{e}[/red]")
-            sys.exit(1)
-
-        table = Table(title=f"Project: {info['name']}")
-        table.add_column("Field", style="bold")
-        table.add_column("Value")
-
-        active_str = "yes" if info["is_active"] else "no"
-        table.add_row("Active", active_str)
-        table.add_row("Path", str(info["path"]))
-        table.add_row("Database", "ready" if info["has_db"] else "missing")
-        table.add_row("DB size", f"{info['db_size_mb']} MB")
-        table.add_row("Documents", str(info["document_count"]))
-        table.add_row("Report", "yes" if info["has_report"] else "no")
-        table.add_row("Findings", str(info["findings_count"]))
-
-        console.print(table)
-
-    elif args.project_command == "delete":
-        if not args.yes:
-            confirmed = Confirm.ask(f"Delete project '{args.name}' and all its data?", default=False)
-            if not confirmed:
-                console.print("Cancelled.")
-                return
-
-        try:
-            delete_project(args.name)
-            console.print(f"[bold red]Deleted project '{args.name}'[/bold red]")
-            if get_active_project() is None:
-                console.print("[yellow]No active project. Set one with `bartleby project use <name>`[/yellow]")
-        except (ValueError, FileNotFoundError) as e:
-            console.print(f"[red]{e}[/red]")
-            sys.exit(1)
+    handler = handlers.get(args.project_command)
+    if handler:
+        handler(args, console)
 
 
 if __name__ == "__main__":

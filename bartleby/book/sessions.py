@@ -192,14 +192,8 @@ def parse_sessions(book_dir: Path) -> list[Session]:
     log_path = book_dir / "log.json"
     all_tool_calls = _parse_log_file(log_path)
 
-    # Group tool calls by run_uuid
+    # Group tool calls by run_uuid (re-parse log to get run_uuid field)
     calls_by_uuid: dict[str, list[ToolCall]] = {}
-    for tc in all_tool_calls:
-        # We need to get run_uuid from log entries - check the raw file
-        pass
-
-    # Re-parse to get run_uuid
-    calls_by_uuid = {}
     if log_path.exists():
         with log_path.open("r", encoding="utf-8") as f:
             for line in f:

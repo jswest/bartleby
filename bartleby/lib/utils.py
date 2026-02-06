@@ -1,11 +1,7 @@
 """Utility functions."""
 
 import json
-from typing import Any, Optional
-
-from loguru import logger
-
-from bartleby.lib.config import setup_provider_env
+from typing import Any
 
 
 def _estimate_tokens(text: str) -> int:
@@ -13,66 +9,6 @@ def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, len(text) // 4)
-
-
-def build_model_id(config: dict) -> Optional[str]:
-    """
-    Build a LiteLLM-compatible model_id string from config.
-
-    Returns:
-        Model ID string (e.g., "anthropic/claude-3-5-sonnet-20241022") or None
-    """
-    provider = config.get("provider")
-    model = config.get("model")
-
-    if not provider or not model:
-        return None
-
-    setup_provider_env(config)
-
-    if provider == "anthropic":
-        return f"anthropic/{model}"
-    elif provider == "openai":
-        return model
-    elif provider == "ollama":
-        return f"ollama_chat/{model}"
-    else:
-        return None
-
-
-def load_model_from_config(config: dict):
-    """
-    Load a smolagents LiteLLMModel from config.
-
-    Returns:
-        Initialized LiteLLMModel or None if not configured
-    """
-    from smolagents import LiteLLMModel
-
-    model_id = build_model_id(config)
-    if not model_id:
-        return None
-
-    try:
-        temperature = config.get("temperature", 0)
-        temperature = max(0.0, min(1.0, float(temperature)))
-
-        return LiteLLMModel(model_id=model_id, temperature=temperature)
-    except Exception as e:
-        logger.error(f"Failed to load model from config: {e}")
-        return None
-
-
-def has_vision(config: dict) -> bool:
-    """Check if the configured model supports vision."""
-    provider = config.get("provider", "")
-    model = config.get("model", "")
-
-    if provider == "anthropic":
-        return "claude-3" in model or "claude-4" in model
-    elif provider == "openai":
-        return "gpt-4" in model and "vision" in model
-    return False
 
 
 def truncate_result(data: Any, max_tokens: int = 5000) -> Any:
@@ -105,3 +41,59 @@ def truncate_result(data: Any, max_tokens: int = 5000) -> Any:
             "message": f"Result was {token_count} tokens, exceeding the {max_tokens} token limit. "
                       f"Try a more specific query."
         }
+
+
+# Backward-compatible imports for callers that import from utils
+# These delegate to ConfigManager
+def build_model_id(config: dict):
+    """Build a LiteLLM-compatible model_id string from config.
+
+    DEPRECATED: Use get_config_manager().model_id instead.
+    """
+    from bartleby.lib.config import get_config_manager
+
+    mgr = get_config_manager()
+    # Ensure config is loaded first
+    mgr._load_if_stale()
+    # Update manager with passed config for backward compat
+    if config:
+        for key in ("provider", "model"):
+            if key in config:
+                mgr._config[key] = config[key]
+    return mgr.model_id
+
+
+def load_model_from_config(config: dict):
+    """Load a smolagents LiteLLMModel from config.
+
+    DEPRECATED: Use get_config_manager().load_model() instead.
+    """
+    from bartleby.lib.config import get_config_manager
+
+    mgr = get_config_manager()
+    # Ensure config is loaded first
+    mgr._load_if_stale()
+    # Update manager with passed config for backward compat
+    if config:
+        for key in ("provider", "model", "temperature"):
+            if key in config:
+                mgr._config[key] = config[key]
+    return mgr.load_model()
+
+
+def has_vision(config: dict) -> bool:
+    """Check if the configured model supports vision.
+
+    DEPRECATED: Use get_config_manager().has_vision() instead.
+    """
+    from bartleby.lib.config import get_config_manager
+
+    mgr = get_config_manager()
+    # Ensure config is loaded first
+    mgr._load_if_stale()
+    # Update manager with passed config for backward compat
+    if config:
+        for key in ("provider", "model"):
+            if key in config:
+                mgr._config[key] = config[key]
+    return mgr.has_vision()

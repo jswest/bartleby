@@ -12,6 +12,7 @@ from bartleby.lib.utils import truncate_result
 from bartleby.read.llm import DocumentSummary, _parse_summary_response, SUMMARIZE_PROMPT
 from bartleby.write.search import (
     count_document_chunks,
+    document_exists,
     get_document_chunks,
     get_document_summary,
     list_all_documents,
@@ -21,15 +22,6 @@ from bartleby.write.skills.base import Skill, load_tool_doc
 
 MAX_FIRST_CHUNKS = 15
 MAX_SUMMARIZE_INPUT_CHARS = 8000
-
-
-def _document_exists(connection, document_id: str) -> bool:
-    cursor = connection.cursor()
-    cursor.execute(
-        "SELECT 1 FROM documents WHERE document_id = ? LIMIT 1",
-        (document_id,),
-    )
-    return cursor.fetchone() is not None
 
 
 class ListDocumentsTool(Tool):
@@ -68,7 +60,7 @@ class GetDocumentSummaryTool(Tool):
         self.connection = connection
 
     def forward(self, document_id: str) -> str:
-        if not _document_exists(self.connection, document_id):
+        if not document_exists(self.connection, document_id):
             return json.dumps({
                 "error": "DOCUMENT_NOT_FOUND",
                 "message": f"Document '{document_id}' was not found.",
@@ -141,7 +133,7 @@ class SummarizeDocumentTool(Tool):
         self.model_id = model_id
 
     def forward(self, document_id: str) -> str:
-        if not _document_exists(self.connection, document_id):
+        if not document_exists(self.connection, document_id):
             return json.dumps({
                 "error": "DOCUMENT_NOT_FOUND",
                 "message": f"Document '{document_id}' was not found.",

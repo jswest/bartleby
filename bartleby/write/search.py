@@ -9,6 +9,10 @@ from sentence_transformers import SentenceTransformer
 from bartleby.lib.embeddings import embed_chunk
 
 
+# Pre-compiled regex for detecting FTS5 operators
+_FTS_OPERATOR_RE = re.compile(r'\b(AND|OR|NOT)\b|"')
+
+
 def _sanitize_fts_query(query: str) -> str:
     """Sanitize a query for FTS5. Splits into words, strips special chars.
 
@@ -16,7 +20,7 @@ def _sanitize_fts_query(query: str) -> str:
     the query is passed through unchanged.  Otherwise each word is cleaned
     of FTS5 special characters and returned as implicit-AND terms.
     """
-    if re.search(r'\b(AND|OR|NOT)\b|"', query):
+    if _FTS_OPERATOR_RE.search(query):
         return query
     # Quote each term so FTS5's own tokenizer handles punctuation
     # correctly (e.g. "PM2.5" tokenizes to the phrase "pm2 5").
@@ -407,3 +411,13 @@ def save_document_summary(
         """,
         (document_id, title, subtitle, body),
     )
+
+
+def document_exists(connection, document_id: str) -> bool:
+    """Check if a document exists in the database."""
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT 1 FROM documents WHERE document_id = ? LIMIT 1",
+        (document_id,),
+    )
+    return cursor.fetchone() is not None
