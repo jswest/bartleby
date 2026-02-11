@@ -17,7 +17,7 @@ dependencies = [
     "litellm>=1.0.0",
     "loguru>=0.7.3",
     "numpy>=2.3.4",
-    "pillow>=12.0.0",
+    "pillow>=10.0.0",
     "playwright>=1.56.0",
     "pymupdf>=1.26.6",
     "pytesseract>=0.3.13",
@@ -28,10 +28,11 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "tiktoken>=0.12.0",
     "tqdm>=4.67.1",
+    "docling>=2.0.0",
 ]
 
 [project.scripts]
 bartleby = "bartleby.cli:main"
 
 [tool.setuptools.package-data]
-bartleby = ["read/schema.sql", "write/prompts/*.md"]
+bartleby = ["read/schema.sql", "write/prompts/*.md", "write/skills/docs/*.md"]

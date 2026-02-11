@@ -86,6 +86,11 @@ def main():
         default=None,
         help="LLM provider (anthropic or openai, default: from config)"
     )
+    read_parser.add_argument(
+        "--docling",
+        action="store_true",
+        help="Use Docling for layout-aware document conversion and structure-aware chunking"
+    )
     _add_verbose_arg(read_parser)
 
     # Write command
@@ -164,7 +169,8 @@ def main():
             max_workers=args.max_workers,
             model=args.model,
             provider=args.provider,
-            verbose=args.verbose
+            verbose=args.verbose,
+            use_docling=args.docling,
         )
 
     elif args.command == "write":

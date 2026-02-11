@@ -40,6 +40,8 @@ class SearchResult:
         document_id: Optional[str] = None,
         origin_file_path: Optional[str] = None,
         chunk_index: Optional[int] = None,
+        section_heading: Optional[str] = None,
+        content_type: Optional[str] = None,
     ):
         self.chunk_id = chunk_id
         self.body = body
@@ -48,6 +50,8 @@ class SearchResult:
         self.document_id = document_id
         self.origin_file_path = origin_file_path
         self.chunk_index = chunk_index
+        self.section_heading = section_heading
+        self.content_type = content_type
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -58,6 +62,8 @@ class SearchResult:
             "document_id": self.document_id,
             "origin_file_path": self.origin_file_path,
             "chunk_index": self.chunk_index,
+            "section_heading": self.section_heading,
+            "content_type": self.content_type,
         }
 
     def to_metadata_dict(self) -> Dict[str, Any]:
@@ -100,7 +106,9 @@ def full_text_search(
             p.page_number,
             d.document_id,
             d.origin_file_path,
-            c.chunk_index
+            c.chunk_index,
+            c.section_heading,
+            c.content_type
         FROM fts_chunks fts
         JOIN chunks c ON fts.chunk_id = c.chunk_id
         JOIN pages p ON c.page_id = p.page_id
@@ -127,6 +135,8 @@ def full_text_search(
             document_id=row[4],
             origin_file_path=row[5],
             chunk_index=row[6],
+            section_heading=row[7],
+            content_type=row[8],
         ))
 
     return results
@@ -165,7 +175,9 @@ def semantic_search(
             p.page_number,
             d.document_id,
             d.origin_file_path,
-            c.chunk_index
+            c.chunk_index,
+            c.section_heading,
+            c.content_type
         FROM vec_chunks vc
         JOIN chunks c ON vc.chunk_id = c.chunk_id
         JOIN pages p ON c.page_id = p.page_id
@@ -192,6 +204,8 @@ def semantic_search(
             document_id=row[4],
             origin_file_path=row[5],
             chunk_index=row[6],
+            section_heading=row[7],
+            content_type=row[8],
         ))
 
     return results
@@ -224,7 +238,9 @@ def get_document_chunks(
             c.chunk_index,
             p.page_number,
             d.document_id,
-            d.origin_file_path
+            d.origin_file_path,
+            c.section_heading,
+            c.content_type
         FROM chunks c
         JOIN pages p ON c.page_id = p.page_id
         JOIN documents d ON p.document_id = d.document_id
@@ -249,6 +265,8 @@ def get_document_chunks(
             document_id=row[4],
             origin_file_path=row[5],
             chunk_index=row[2],
+            section_heading=row[6],
+            content_type=row[7],
         ))
 
     return results

@@ -13,10 +13,10 @@ from tqdm import tqdm
 
 from bartleby.lib.config import load_config, setup_provider_env
 from bartleby.lib.console import send
-from bartleby.lib.consts import DEFAULT_MAX_WORKERS, DEFAULT_PDF_PAGES_TO_SUMMARIZE, EMBEDDING_MODEL
+from bartleby.lib.consts import DEFAULT_MAX_WORKERS, DEFAULT_PDF_PAGES_TO_SUMMARIZE, DOCLING_MAX_TOKENS, EMBEDDING_MODEL
 from bartleby.lib.utils import build_model_id, has_vision
 from bartleby.read.converters import convert_html_to_pdf
-from bartleby.read.processor import process_pdf
+from bartleby.read.processor import process_pdf, process_pdf_docling
 from bartleby.read.sqlite import get_connection
 
 
@@ -61,7 +61,40 @@ def _process_pdf_worker(args):
         connection.close()
 
 
-def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider: str = None, verbose: bool = False):
+def _process_docling(pdf_files, db_path, archive_path, model_id, llm_has_vision, pdf_pages_to_summarize):
+    """Process documents sequentially using Docling's layout-aware pipeline."""
+    from docling.chunking import HybridChunker
+    from docling.document_converter import DocumentConverter
+
+    converter = DocumentConverter()
+    chunker = HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=DOCLING_MAX_TOKENS)
+
+    embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+    connection = get_connection(db_path)
+
+    try:
+        for pdf_file in tqdm(pdf_files, desc="Processing documents (Docling)", unit="doc"):
+            try:
+                process_pdf_docling(
+                    connection,
+                    pdf_file,
+                    db_path,
+                    archive_path,
+                    embedding_model,
+                    converter,
+                    chunker,
+                    model_id,
+                    llm_has_vision,
+                    pdf_pages_to_summarize,
+                )
+                logger.debug(f"Successfully processed: {pdf_file}")
+            except Exception as e:
+                send(f"Failed to process {pdf_file.name}: {e}", "ERROR")
+    finally:
+        connection.close()
+
+
+def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider: str = None, verbose: bool = False, use_docling: bool = False):
     # Configure logging level
     logger.remove()
     if verbose:
@@ -141,32 +174,36 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
             except Exception as e:
                 send(f"Failed to convert {html_file.name}: {e}", "ERROR")
 
-    send(f"Processing {len(pdf_files)} document(s) with {max_workers} workers", "BIG")
+    if use_docling:
+        send(f"Processing {len(pdf_files)} document(s) with Docling (sequential)", "BIG")
+        _process_docling(pdf_files, db_path, archive_path, model_id, llm_has_vision, pdf_pages_to_summarize)
+    else:
+        send(f"Processing {len(pdf_files)} document(s) with {max_workers} workers", "BIG")
 
-    # Use ProcessPoolExecutor instead of ThreadPoolExecutor for SentenceTransformer thread-safety
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Prepare arguments for each worker (must be picklable - pass model_id string instead of LLM objects)
-        worker_args = [
-            (pdf_file, db_path, archive_path, model_id, llm_has_vision,
-             pdf_pages_to_summarize, config, verbose)
-            for pdf_file in pdf_files
-        ]
+        # Use ProcessPoolExecutor instead of ThreadPoolExecutor for SentenceTransformer thread-safety
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Prepare arguments for each worker (must be picklable - pass model_id string instead of LLM objects)
+            worker_args = [
+                (pdf_file, db_path, archive_path, model_id, llm_has_vision,
+                 pdf_pages_to_summarize, config, verbose)
+                for pdf_file in pdf_files
+            ]
 
-        futures = {
-            executor.submit(_process_pdf_worker, args): args[0]
-            for args in worker_args
-        }
+            futures = {
+                executor.submit(_process_pdf_worker, args): args[0]
+                for args in worker_args
+            }
 
-        with tqdm(total=len(pdf_files), desc="Processing documents", unit="doc") as pbar:
-            for future in as_completed(futures):
-                pdf_file = futures[future]
-                try:
-                    future.result()
-                    logger.debug(f"Successfully processed: {pdf_file}")
-                except Exception as e:
-                    send(f"Failed to process {pdf_file.name}: {e}", "ERROR")
-                finally:
-                    pbar.update(1)
+            with tqdm(total=len(pdf_files), desc="Processing documents", unit="doc") as pbar:
+                for future in as_completed(futures):
+                    pdf_file = futures[future]
+                    try:
+                        future.result()
+                        logger.debug(f"Successfully processed: {pdf_file}")
+                    except Exception as e:
+                        send(f"Failed to process {pdf_file.name}: {e}", "ERROR")
+                    finally:
+                        pbar.update(1)
 
     # Clean up temporary directory if HTML files were converted
     if temp_dir and temp_dir.exists():

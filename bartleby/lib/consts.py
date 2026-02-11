@@ -14,5 +14,8 @@ DEFAULT_CHUNK_WINDOW_RADIUS = 3
 MAX_DOCUMENT_CHUNK_WINDOW = 100
 MAX_TOOL_TOKENS = 10000
 
+# Docling chunking
+DOCLING_MAX_TOKENS = 400  # Leave headroom for heading context in embeddings
+
 # Embedding model
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
