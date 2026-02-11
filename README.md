@@ -169,9 +169,10 @@ bartleby read --files <path> [options]
 | `--max-workers <n>` | Worker threads (default: from config) |
 | `--model <name>` | Override LLM model for summarization |
 | `--provider <name>` | Override LLM provider (`anthropic` or `openai`) |
+| `--docling` | Use Docling for layout-aware processing (see below) |
 | `--verbose` | Show debug output |
 
-**Processing pipeline:**
+**Processing pipeline (default):**
 
 1. Converts HTML to PDF (if applicable) via Playwright/Chromium
 2. Extracts text from PDFs using PyMuPDF
@@ -180,6 +181,18 @@ bartleby read --files <path> [options]
 5. Generates vector embeddings (BAAI/bge-base-en-v1.5)
 6. Creates LLM-powered summaries for the first N pages (if configured)
 7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec)
+
+**Processing pipeline (`--docling`):**
+
+The `--docling` flag swaps in IBM's [Docling](https://docling-project.github.io/docling/) library for layout-aware document understanding. Instead of treating all text equally, Docling detects headings, tables, code blocks, formulas, and reading order using ML models, then chunks along structural boundaries.
+
+1. Converts documents with Docling's `DocumentConverter` (ML-based layout analysis)
+2. Chunks using Docling's `HybridChunker` (respects document structure)
+3. Preserves heading hierarchy (`section_heading`) and content type (`content_type`: text/table/code/formula/list/picture) on each chunk
+4. Embeds chunks with heading context prepended for better semantic search
+5. Generates summaries from Docling's structured markdown export
+
+Documents are processed sequentially (Docling loads heavy ML models that shouldn't be duplicated across processes). Search results include `section_heading` and `content_type` fields when available.
 
 Supported file types: `.pdf`, `.html`, `.htm`
 
