@@ -1,5 +1,5 @@
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 50
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 100
 
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_PDF_PAGE_IMAGE_DPI = 300
@@ -15,7 +15,10 @@ MAX_DOCUMENT_CHUNK_WINDOW = 100
 MAX_TOOL_TOKENS = 10000
 
 # Docling chunking
-DOCLING_MAX_TOKENS = 400  # Leave headroom for heading context in embeddings
+DOCLING_MAX_TOKENS = 800  # Leave headroom for heading context in embeddings
 
 # Embedding model
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+
+# Cross-encoder re-ranking model (optional)
+RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"

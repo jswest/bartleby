@@ -4,7 +4,7 @@ Combines full-text keyword search and meaning-based vector search, then merges a
 
 **Best for:** Any search query — exact terms, natural language questions, conceptual queries, or a mix.
 
-**Important:** Searches within individual text chunks. For multi-term queries, keep it focused:
+**Important:** Searches within individual text chunks (~800 characters each). For multi-term queries, keep it focused:
 - Use 1-3 specific keywords or a short natural language question
 - Results are ranked by combined relevance across both search methods
 

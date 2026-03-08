@@ -23,11 +23,11 @@ from smolagents import (
 # Disable tokenizers parallelism warning (set before importing sentence_transformers)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from bartleby.lib.config import load_config
 from bartleby.lib.console import send
-from bartleby.lib.consts import EMBEDDING_MODEL
+from bartleby.lib.consts import EMBEDDING_MODEL, RERANKER_MODEL
 from bartleby.lib.utils import build_model_id, load_model_from_config
 from bartleby.read.sqlite import get_connection
 from bartleby.write.logging import StreamingLogger
@@ -191,6 +191,14 @@ def main(db_path: Path, verbose: bool = False):
     send(f"Loading embedding model: {EMBEDDING_MODEL}", "BIG")
     embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
+    # Load cross-encoder re-ranker
+    reranker = None
+    try:
+        send(f"Loading re-ranker: {RERANKER_MODEL}", "BIG")
+        reranker = CrossEncoder(RERANKER_MODEL)
+    except Exception as e:
+        logger.warning(f"Could not load re-ranker: {e}")
+
     # Open a single DB connection for the session
     connection = get_connection(db_path)
 
@@ -217,6 +225,7 @@ def main(db_path: Path, verbose: bool = False):
         "run_uuid": run_uuid,
         "model_id": build_model_id(config),
         "ref_registry": ref_registry,
+        "reranker": reranker,
     }
 
     # Build search subagent
