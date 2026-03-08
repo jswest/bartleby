@@ -26,12 +26,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from bartleby.lib.config import load_config
-from bartleby.lib.console import send
+from bartleby.lib.console import print_session_info, send
 from bartleby.lib.consts import EMBEDDING_MODEL, RERANKER_MODEL
 from bartleby.lib.utils import build_model_id, load_model_from_config
 from bartleby.read.sqlite import get_connection
 from bartleby.write.logging import StreamingLogger
-from bartleby.write.progress import ProgressDisplay
+from bartleby.write.progress import ProgressDisplay, extract_tool_summary
 from bartleby.write.references import ReferenceRegistry
 from bartleby.write.search import get_chunk_window_by_chunk_id, list_all_documents
 from bartleby.write.skills.search import HybridSearchTool, GetChunkWindowTool, GetFullDocumentTool
@@ -148,6 +148,46 @@ def _log_search_invocation(log_path: Path, task: str, result: str):
         f.write(entry)
 
 
+def _generate_research_summary(model, tool_log: list[dict]) -> str:
+    """Generate a brief LLM summary of the research process."""
+    if not tool_log:
+        return ""
+
+    # Build a compact description of what happened
+    steps = []
+    for entry in tool_log:
+        name = entry.get("name", "")
+        args = entry.get("args", {})
+        summary = entry.get("summary", "")
+        if name == "search_expert":
+            task = args.get("task", "")
+            steps.append(f"- Searched: {task}")
+        elif name == "get_chunk_window":
+            steps.append(f"- Read passage in context ({summary})")
+        elif name == "save_note":
+            steps.append(f"- Saved note ({summary})")
+        elif name != "final_answer":
+            steps.append(f"- {name}: {summary}")
+
+    if not steps:
+        return ""
+
+    prompt = (
+        "Summarize this research process in 1-2 sentences. "
+        "Be specific about what was searched and found. "
+        "Do not use phrases like 'the agent' — write in passive voice.\n\n"
+        + "\n".join(steps)
+    )
+
+    try:
+        result = model.generate(
+            [{"role": "user", "content": prompt}],
+        )
+        return result.content if hasattr(result, "content") else str(result)
+    except Exception:
+        return ""
+
+
 def main(db_path: Path, verbose: bool = False):
     """Run the research agent in conversational mode."""
     # Configure logging level
@@ -171,7 +211,6 @@ def main(db_path: Path, verbose: bool = False):
     search_log_path = _build_search_log_path(book_dir, run_uuid)
 
     send(message_type="SPLASH")
-    send("Starting Bartleby research agent", "BIG")
 
     # Validate database exists
     if not db_path.exists():
@@ -180,7 +219,7 @@ def main(db_path: Path, verbose: bool = False):
         return
 
     # Load model from config
-    send("Loading LLM from configuration...", "BIG")
+    send("Loading LLM...", "BIG")
     model = load_model_from_config(config)
     if model is None:
         send("No LLM configured", "ERROR")
@@ -188,13 +227,13 @@ def main(db_path: Path, verbose: bool = False):
         return
 
     # Load embedding model
-    send(f"Loading embedding model: {EMBEDDING_MODEL}", "BIG")
+    send("Loading embedding model...", "BIG")
     embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 
     # Load cross-encoder re-ranker
     reranker = None
     try:
-        send(f"Loading re-ranker: {RERANKER_MODEL}", "BIG")
+        send("Loading re-ranker...", "BIG")
         reranker = CrossEncoder(RERANKER_MODEL)
     except Exception as e:
         logger.warning(f"Could not load re-ranker: {e}")
@@ -202,8 +241,21 @@ def main(db_path: Path, verbose: bool = False):
     # Open a single DB connection for the session
     connection = get_connection(db_path)
 
-    # Build shared context
+    # Count documents for session info
+    docs = list_all_documents(connection)
+    doc_count = len(docs)
+
+    # Show session info
+    project_name = config.get("active_project", "")
     model_name = config.get("model", "")
+    print_session_info(
+        project=project_name,
+        model=model_name,
+        doc_count=doc_count,
+        session_id=run_uuid,
+    )
+
+    # Build shared context
     token_counter = TokenCounter(model_name=model_name)
     console = Console(force_terminal=True, force_interactive=True)
 
@@ -347,14 +399,16 @@ def main(db_path: Path, verbose: bool = False):
             else:
                 augmented_input = stripped
 
-            # Run agent with live spinner status
-            progress = ProgressDisplay()
+            # Run agent with live progress display
+            max_steps = 10
+            progress = ProgressDisplay(max_steps=max_steps)
+            tool_log: list[dict] = []
             with Live(progress, console=console, refresh_per_second=4):
                 agent = ToolCallingAgent(
                     tools=main_tools,
                     model=model,
                     managed_agents=[search_subagent],
-                    max_steps=10,
+                    max_steps=max_steps,
                     instructions=system_prompt,
                     step_callbacks=[on_step],
                     verbosity_level=agent_log_level,
@@ -365,14 +419,19 @@ def main(db_path: Path, verbose: bool = False):
                     for event in agent.run(augmented_input, stream=True):
                         if isinstance(event, SmolToolCall):
                             if event.name != "final_answer":
-                                progress.start_tool(event.name)
+                                progress.start_tool(event.name, getattr(event, "arguments", {}))
                         elif isinstance(event, ActionStep):
                             if hasattr(event, "tool_calls") and event.tool_calls:
-                                obs = str(getattr(event, "observations", "")) if hasattr(event, "observations") else ""
+                                obs = str(getattr(event, "observations", ""))
                                 for tc in event.tool_calls:
                                     tc_name = getattr(tc, "name", "")
                                     if tc_name != "final_answer":
                                         progress.complete_tool(tc_name, obs)
+                                        tool_log.append({
+                                            "name": tc_name,
+                                            "args": getattr(tc, "arguments", {}),
+                                            "summary": extract_tool_summary(tc_name, obs),
+                                        })
                             else:
                                 progress.spinner.text = "Thinking..."
                         elif isinstance(event, FinalAnswerStep):
@@ -383,6 +442,14 @@ def main(db_path: Path, verbose: bool = False):
                         answer = f"Error: {e}\n\n```\n{traceback.format_exc()}```"
                     else:
                         answer = f"Error: {e}"
+
+            # Show research summary
+            research_summary = _generate_research_summary(model, tool_log)
+            if research_summary:
+                console.print("")
+                console.print("[dim]" + "\u2500" * 60 + "[/dim]")
+                console.print(f"[dim italic]Research: {research_summary.strip()}[/dim italic]")
+                console.print("[dim]" + "\u2500" * 60 + "[/dim]")
 
             # Display answer
             console.print("")

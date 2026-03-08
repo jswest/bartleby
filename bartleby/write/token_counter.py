@@ -7,18 +7,14 @@ class TokenCounter:
     def __init__(self, model_name: str = ""):
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        self.total_tokens = 0
         self.total_cost = 0.0
         self.has_unknown_cost_model = False
         self.model_name = model_name
-        self.max_recursions = 0
-        self.recursions_used = 0
-        self.token_budget: int | None = None
 
         # Check if model has known pricing
         if model_name:
             pricing = get_model_pricing(model_name)
-            if pricing is None and not self._is_free_model(model_name):
+            if pricing is None and not self._is_free_model():
                 self.has_unknown_cost_model = True
 
     def on_step(self, step) -> None:
@@ -37,16 +33,12 @@ class TokenCounter:
         if input_tokens > 0 or output_tokens > 0:
             self.prompt_tokens += input_tokens
             self.completion_tokens += output_tokens
-            self.total_tokens += input_tokens + output_tokens
 
             if self.model_name:
                 cost = calculate_cost(self.model_name, input_tokens, output_tokens)
                 self.total_cost += cost
 
-    def _is_free_model(self, model_name: str) -> bool:
-        return self._is_ollama_model()
-
-    def _is_ollama_model(self) -> bool:
+    def _is_free_model(self) -> bool:
         return self.model_name.startswith("ollama/") or ":" in self.model_name
 
     def get_stats(self) -> str:
@@ -56,21 +48,18 @@ class TokenCounter:
             rounded = round(count / 100) * 100
             return f"{rounded / 1000:.1f}k"
 
+        tokens_str = f"Tokens: {format_tokens(self.prompt_tokens)} in / {format_tokens(self.completion_tokens)} out"
+
         if self.has_unknown_cost_model:
-            cost_str = f" (~${self.total_cost:.2f}, unknown cost)" if self.total_cost > 0 else " (unknown cost)"
+            cost_str = f" | Cost: ~${self.total_cost:.2f} (unknown pricing)" if self.total_cost > 0 else " | Cost: unknown"
         elif self.total_cost > 0:
-            cost_str = f" (~${self.total_cost:.2f})"
+            cost_str = f" | Cost: ~${self.total_cost:.2f}"
         else:
             cost_str = ""
 
-        return f"↑{format_tokens(self.prompt_tokens)}/↓{format_tokens(self.completion_tokens)}/+{format_tokens(self.total_tokens)}{cost_str}"
+        return f"{tokens_str}{cost_str}"
 
     def reset(self) -> None:
         self.prompt_tokens = 0
         self.completion_tokens = 0
-        self.total_tokens = 0
         self.total_cost = 0.0
-        self.has_unknown_cost_model = False
-        self.recursions_used = 0
-        self.max_recursions = 0
-        self.token_budget = None

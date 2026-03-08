@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import List, Optional
 
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.spinner import Spinner
@@ -28,18 +27,39 @@ COMPLETED_LABELS = {
 }
 
 
-def _list_count(data) -> Optional[int]:
-    """Extract item count from a list or a truncated-result dict."""
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict) and data.get("truncated"):
-        count = data.get("original_count")
-        if count is not None:
-            return count
-    return None
+def _describe_tool_start(tool_name: str, tool_args: dict) -> str:
+    """Build a descriptive message from tool name and arguments."""
+    if tool_name == "search_expert":
+        task = tool_args.get("task", "")
+        if task:
+            short = task[:60] + "..." if len(task) > 60 else task
+            return f'Researching: "{short}"'
+        return "Searching corpus..."
+
+    if tool_name == "search_documents":
+        query = tool_args.get("query", "")
+        if query:
+            short = query[:50] + "..." if len(query) > 50 else query
+            return f'Searching for "{short}"'
+        return "Searching documents..."
+
+    if tool_name == "get_chunk_window":
+        return "Reading passage in context..."
+
+    if tool_name == "get_full_document":
+        doc_id = tool_args.get("document_id", "")
+        if doc_id:
+            short = doc_id[:20] + "..." if len(doc_id) > 20 else doc_id
+            return f"Reading document {short}..."
+        return "Reading document..."
+
+    if tool_name in ("get_document_summary", "summarize_document"):
+        return "Reading document summary..."
+
+    return TOOL_MESSAGES.get(tool_name, f"{tool_name}...")
 
 
-def _extract_summary(tool_name: str, observations: str) -> str:
+def extract_tool_summary(tool_name: str, observations: str) -> str:
     """Extract a brief result indicator from tool output."""
     try:
         data = json.loads(observations)
@@ -49,16 +69,20 @@ def _extract_summary(tool_name: str, observations: str) -> str:
     if tool_name == "search_documents":
         count = _list_count(data)
         if count is not None:
-            return f"({count} results)"
+            return f"{count} results"
         if isinstance(data, dict) and "error" in data:
-            return "(no results)"
+            return "no results"
+        return ""
+
+    if tool_name == "search_expert":
+        # Subagent returns a string, not JSON
         return ""
 
     if tool_name == "get_chunk_window":
         if isinstance(data, dict):
             n = data.get("returned_chunks")
             if n is not None:
-                return f"({n} chunks)"
+                return f"{n} chunks"
         return ""
 
     if tool_name == "get_full_document":
@@ -70,13 +94,13 @@ def _extract_summary(tool_name: str, observations: str) -> str:
             rc = data.get("returned_chunks")
             if rc is not None:
                 parts.append(f"{rc} chunks")
-            return f"({', '.join(parts)})" if parts else ""
+            return ", ".join(parts) if parts else ""
         return ""
 
     if tool_name == "list_documents":
         count = _list_count(data)
         if count is not None:
-            return f"({count} documents)"
+            return f"{count} documents"
         return ""
 
     if tool_name in ("get_document_summary", "summarize_document"):
@@ -84,46 +108,60 @@ def _extract_summary(tool_name: str, observations: str) -> str:
             title = data.get("title", "")
             if title:
                 short = title[:40] + "..." if len(title) > 40 else title
-                return f"({short})"
+                return short
         return ""
 
     if tool_name == "save_note":
         if isinstance(data, dict):
-            msg = data.get("message", "")
-            return f"({msg})" if msg else ""
+            return data.get("message", "")
         return ""
 
     if tool_name == "write_file":
         if isinstance(data, dict):
             fp = data.get("filepath", "")
             if fp:
-                return f"({os.path.basename(fp)})"
+                return os.path.basename(fp)
         return ""
 
     return ""
 
 
+def _list_count(data) -> int | None:
+    """Extract item count from a list or a truncated-result dict."""
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict) and data.get("truncated"):
+        count = data.get("original_count")
+        if count is not None:
+            return count
+    return None
+
+
 class ProgressDisplay:
-    """Rich renderable showing completed tool-call log lines above an active spinner.
+    """Rich renderable showing step-by-step agent progress.
 
-    Usage::
-
-        progress = ProgressDisplay()
-        with Live(progress, console=console, refresh_per_second=4):
-            progress.start_tool(tool_name)
-            ...
-            progress.complete_tool(tool_name, observations)
+    Displays:
+        Step 2/10 | Searching for "PM2.5 equity"
+               +  | Found 3 passages across 2 documents (0.2s)
+        Step 3/10 | Thinking...
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_steps: int = 10) -> None:
+        self.max_steps = max_steps
         self.spinner = Spinner("dots", text="Thinking...")
-        self._completed_lines: List[Text] = []
+        self._completed_lines: list[Text] = []
         self._step_start: float = time.monotonic()
+        self._step_num: int = 0
 
-    def start_tool(self, tool_name: str) -> None:
+    def start_tool(self, tool_name: str, tool_args: dict | None = None) -> None:
         """Update the spinner text for an active tool call."""
-        label = TOOL_MESSAGES.get(tool_name, tool_name)
-        self.spinner.text = label
+        self._step_num += 1
+        self._step_start = time.monotonic()
+        description = _describe_tool_start(tool_name, tool_args or {})
+        step_label = f"Step {self._step_num}/{self.max_steps}"
+        self.spinner.text = Text.from_markup(
+            f"[bold]{step_label}[/bold] [dim]|[/dim] {description}"
+        )
 
     def complete_tool(self, tool_name: str, observations: str) -> None:
         """Finalize a tool call and append a log line."""
@@ -132,21 +170,18 @@ class ProgressDisplay:
         self._step_start = now
 
         label = COMPLETED_LABELS.get(tool_name, tool_name)
-        summary = _extract_summary(tool_name, observations)
+        summary = extract_tool_summary(tool_name, observations)
 
-        left = f"  [green]\u2713[/green] {label}"
+        step_label = f"Step {self._step_num}/{self.max_steps}"
+        time_str = f"({elapsed:.1f}s)"
+
+        # Completed step line
+        left = f"[bold]{step_label}[/bold] [dim]|[/dim] [green]+[/green] {label}"
         if summary:
-            left += f" {summary}"
+            left += f" [dim]- {summary}[/dim]"
+        left += f" [dim]{time_str}[/dim]"
 
-        time_str = f"{elapsed:.1f}s"
-
-        # Approximate visible length for dot-fill alignment.
-        visible_left = len(label) + (len(f" {summary}") if summary else 0) + 4
-        target_width = 58
-        dots_needed = max(2, target_width - visible_left - len(time_str))
-        dots = " " + "." * dots_needed + " "
-
-        line = Text.from_markup(f"{left}[dim]{dots}{time_str}[/dim]")
+        line = Text.from_markup(left)
         self._completed_lines.append(line)
 
         self.spinner.text = "Thinking..."
