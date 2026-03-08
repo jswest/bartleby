@@ -42,7 +42,8 @@ from bartleby.write.skills.library import (
 )
 from bartleby.write.skills.memory import ReadNotesTool, SaveNoteTool
 from bartleby.write.skills.file_write import WriteFileTool
-from bartleby.write.token_counter import TokenCounter
+from bartleby.write.skills.steps import RequestMoreStepsTool
+from bartleby.write.token_counter import BudgetExceededError, TokenCounter
 from bartleby.write.views import render_browse_view, render_sources_table
 
 
@@ -283,12 +284,17 @@ def main(db_path: Path, verbose: bool = False):
     # Build search subagent
     search_subagent = _build_search_subagent(model, context, agent_log_level)
 
-    # Main agent tools: browse refs directly, notes, file writing
+    # Main agent tools: browse refs directly, notes, file writing, step extension
+    # agent_ref is a mutable list so RequestMoreStepsTool can access the agent
+    # after it's created (avoids circular dependency)
+    agent_ref: list = []
+    live_ref: list = []
     main_tools = [
         GetChunkWindowTool(connection, ref_registry=ref_registry),
         ReadNotesTool(findings_dir),
         SaveNoteTool(findings_dir, run_uuid),
         WriteFileTool(findings_dir.parent),
+        RequestMoreStepsTool(agent_ref, console, live_ref),
     ]
 
     system_prompt = _load_prompt("agent")
@@ -403,7 +409,7 @@ def main(db_path: Path, verbose: bool = False):
             max_steps = 10
             progress = ProgressDisplay(max_steps=max_steps)
             tool_log: list[dict] = []
-            with Live(progress, console=console, refresh_per_second=4):
+            with Live(progress, console=console, refresh_per_second=4) as live:
                 agent = ToolCallingAgent(
                     tools=main_tools,
                     model=model,
@@ -413,6 +419,11 @@ def main(db_path: Path, verbose: bool = False):
                     step_callbacks=[on_step],
                     verbosity_level=agent_log_level,
                 )
+                # Allow RequestMoreStepsTool to access the agent and live display
+                agent_ref.clear()
+                agent_ref.append(agent)
+                live_ref.clear()
+                live_ref.append(live)
 
                 try:
                     result = None
@@ -432,11 +443,16 @@ def main(db_path: Path, verbose: bool = False):
                                             "args": getattr(tc, "arguments", {}),
                                             "summary": extract_tool_summary(tc_name, obs),
                                         })
+                                # Sync progress max_steps after step extensions
+                                progress.max_steps = agent.max_steps
                             else:
                                 progress.spinner.text = "Thinking..."
                         elif isinstance(event, FinalAnswerStep):
                             result = event.output
                     answer = str(result) if result else "I couldn't generate an answer."
+                except BudgetExceededError:
+                    answer = str(result) if result else "Token budget exceeded. Here is what I found so far."
+                    console.print("[yellow]Token budget exceeded — wrapping up.[/yellow]")
                 except Exception as e:
                     if verbose:
                         answer = f"Error: {e}\n\n```\n{traceback.format_exc()}```"

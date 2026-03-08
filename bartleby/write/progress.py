@@ -24,6 +24,7 @@ COMPLETED_LABELS = {
     "read_notes": "Read notes",
     "save_note": "Saved note",
     "write_file": "Wrote file",
+    "request_more_steps": "Requested more steps",
 }
 
 
@@ -121,6 +122,11 @@ def extract_tool_summary(tool_name: str, observations: str) -> str:
             fp = data.get("filepath", "")
             if fp:
                 return os.path.basename(fp)
+        return ""
+
+    if tool_name == "request_more_steps":
+        if isinstance(data, dict):
+            return data.get("message", "")
         return ""
 
     return ""

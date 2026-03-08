@@ -1,15 +1,23 @@
 """Token usage tracking for LLM calls."""
 
+from loguru import logger
+
 from bartleby.lib.pricing import calculate_cost, get_model_pricing
 
 
+class BudgetExceededError(Exception):
+    """Raised when the token budget is exceeded."""
+
+
 class TokenCounter:
-    def __init__(self, model_name: str = ""):
+    def __init__(self, model_name: str = "", token_budget: int | None = None):
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_cost = 0.0
         self.has_unknown_cost_model = False
         self.model_name = model_name
+        self.token_budget = token_budget
+        self._warned_at_80 = False
 
         # Check if model has known pricing
         if model_name:
@@ -17,13 +25,12 @@ class TokenCounter:
             if pricing is None and not self._is_free_model():
                 self.has_unknown_cost_model = True
 
-    def on_step(self, step) -> None:
-        """
-        Update token counts from a smolagents step.
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
 
-        Args:
-            step: A smolagents ActionStep or similar step object
-        """
+    def on_step(self, step) -> None:
+        """Update token counts from a smolagents step."""
         token_usage = getattr(step, "token_usage", None)
         if token_usage is None:
             return
@@ -37,6 +44,26 @@ class TokenCounter:
             if self.model_name:
                 cost = calculate_cost(self.model_name, input_tokens, output_tokens)
                 self.total_cost += cost
+
+        self._check_budget()
+
+    def _check_budget(self) -> None:
+        """Check token usage against budget, warn at 80%, raise at 100%."""
+        if not self.token_budget:
+            return
+
+        usage_ratio = self.total_tokens / self.token_budget
+
+        if usage_ratio >= 1.0:
+            raise BudgetExceededError(
+                f"Token budget exceeded: {self.total_tokens} / {self.token_budget} tokens"
+            )
+
+        if usage_ratio >= 0.8 and not self._warned_at_80:
+            self._warned_at_80 = True
+            logger.warning(
+                f"Token budget 80% used: {self.total_tokens} / {self.token_budget} tokens"
+            )
 
     def _is_free_model(self) -> bool:
         return self.model_name.startswith("ollama/") or ":" in self.model_name
@@ -63,3 +90,4 @@ class TokenCounter:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_cost = 0.0
+        self._warned_at_80 = False
