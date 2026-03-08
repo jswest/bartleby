@@ -1,7 +1,6 @@
 """Search skill - hybrid document search with RRF fusion."""
 
 import json
-from threading import Lock
 from typing import Dict, Optional
 
 from smolagents import Tool
@@ -21,7 +20,7 @@ from bartleby.write.search import (
     get_document_chunks,
     hybrid_search,
 )
-from bartleby.write.skills.base import Skill, load_tool_doc
+from bartleby.write.skills.base import load_tool_doc
 
 
 def _sanitize_limit(limit: Optional[int]) -> int:
@@ -182,27 +181,3 @@ class GetFullDocumentTool(Tool):
             "next_start_chunk": end_chunk if end_chunk < total_chunks else None,
             "chunks": [r.to_dict() for r in chunks],
         }, default=str)
-
-
-class SearchSkill(Skill):
-    name = "search"
-    description = "Hybrid document search with context retrieval tools"
-
-    def get_tools(self, context: dict) -> list[Tool]:
-        connection = context["connection"]
-        embedding_model = context.get("embedding_model")
-        embedding_lock = context.get("embedding_lock", Lock())
-        ref_registry = context.get("ref_registry")
-        reranker = context.get("reranker")
-
-        return [
-            HybridSearchTool(
-                connection,
-                embedding_model=embedding_model,
-                embedding_lock=embedding_lock,
-                ref_registry=ref_registry,
-                reranker=reranker,
-            ),
-            GetChunkWindowTool(connection, ref_registry=ref_registry),
-            GetFullDocumentTool(connection),
-        ]

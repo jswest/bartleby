@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 
 TOOL_MESSAGES = {
+    "search_expert": "Searching corpus...",
     "search_documents": "Searching documents...",
     "get_full_document": "Reading document...",
     "get_chunk_window": "Reading passage...",

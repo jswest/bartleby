@@ -5,7 +5,7 @@ from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills.base import Skill, load_tool_doc
+from bartleby.write.skills.base import load_tool_doc
 
 
 class WriteFileTool(Tool):
@@ -36,13 +36,3 @@ class WriteFileTool(Tool):
             "message": f"Wrote {len(content)} characters to {clean_name}",
             "filepath": str(filepath),
         })
-
-
-class FileWriteSkill(Skill):
-    name = "file_write"
-    description = "Write files to the output directory"
-
-    def get_tools(self, context: dict) -> list[Tool]:
-        # Use the book directory as output
-        output_dir = context["findings_dir"].parent
-        return [WriteFileTool(output_dir)]

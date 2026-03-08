@@ -9,7 +9,7 @@ from smolagents import Tool
 
 from bartleby.lib.consts import MAX_TOOL_TOKENS
 from bartleby.lib.utils import truncate_result
-from bartleby.read.llm import DocumentSummary, _parse_summary_response, SUMMARIZE_PROMPT
+from bartleby.read.llm import _parse_summary_response, SUMMARIZE_PROMPT
 from bartleby.write.search import (
     count_document_chunks,
     document_exists,
@@ -18,7 +18,7 @@ from bartleby.write.search import (
     list_all_documents,
     save_document_summary,
 )
-from bartleby.write.skills.base import Skill, load_tool_doc
+from bartleby.write.skills.base import load_tool_doc
 
 MAX_FIRST_CHUNKS = 15
 MAX_SUMMARIZE_INPUT_CHARS = 8000
@@ -213,29 +213,3 @@ class SummarizeDocumentTool(Tool):
             "body": summary.body,
             "note": "Summary generated and cached.",
         })
-
-
-class LibrarySkill(Skill):
-    name = "library"
-    description = "Document listing and summarization tools"
-
-    def get_tools(self, context: dict) -> list[Tool]:
-        connection = context["connection"]
-        model_id = context.get("model_id")
-
-        # Ensure summaries table exists (lazy migration for old databases)
-        cursor = connection.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS summaries (
-                document_id TEXT PRIMARY KEY REFERENCES documents(document_id),
-                title TEXT NOT NULL,
-                subtitle TEXT,
-                body TEXT NOT NULL
-            )
-        """)
-
-        return [
-            ListDocumentsTool(connection),
-            GetDocumentSummaryTool(connection),
-            SummarizeDocumentTool(connection, model_id),
-        ]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills.base import Skill, load_tool_doc
+from bartleby.write.skills.base import load_tool_doc
 
 
 class ReadNotesTool(Tool):
@@ -63,17 +63,3 @@ class SaveNoteTool(Tool):
             "filename": filename,
             "sequence": self._sequence,
         })
-
-
-class MemorySkill(Skill):
-    name = "memory"
-    description = "Notes and research findings management"
-
-    def get_tools(self, context: dict) -> list[Tool]:
-        findings_dir = context["findings_dir"]
-        run_uuid = context["run_uuid"]
-
-        return [
-            ReadNotesTool(findings_dir),
-            SaveNoteTool(findings_dir, run_uuid),
-        ]

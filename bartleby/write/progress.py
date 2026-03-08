@@ -15,6 +15,7 @@ from bartleby.write.logging import TOOL_MESSAGES
 
 
 COMPLETED_LABELS = {
+    "search_expert": "Searched corpus",
     "search_documents": "Searched documents",
     "get_full_document": "Read document",
     "get_chunk_window": "Read passage",
