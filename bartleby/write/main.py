@@ -1,6 +1,7 @@
 """Main entry point for the write (research agent) command."""
 
 import os
+import signal
 import sys
 import traceback
 import uuid
@@ -191,6 +192,10 @@ def _generate_research_summary(model, tool_log: list[dict]) -> str:
 
 def main(db_path: Path, verbose: bool = False):
     """Run the research agent in conversational mode."""
+    # Ensure Ctrl+C always works, even when Rich's Live display or
+    # smolagents' HTTP calls are active and may interfere with signals.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
     # Configure logging level
     logger.remove()
     if verbose:
