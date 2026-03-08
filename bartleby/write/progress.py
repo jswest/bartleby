@@ -15,8 +15,7 @@ from bartleby.write.logging import TOOL_MESSAGES
 
 
 COMPLETED_LABELS = {
-    "search_documents_fts": "Searched text",
-    "search_documents_semantic": "Searched vectors",
+    "search_documents": "Searched documents",
     "get_full_document": "Read document",
     "get_chunk_window": "Read passage",
     "list_documents": "Listed documents",
@@ -46,7 +45,7 @@ def _extract_summary(tool_name: str, observations: str) -> str:
     except (json.JSONDecodeError, TypeError):
         return ""
 
-    if tool_name in ("search_documents_fts", "search_documents_semantic"):
+    if tool_name == "search_documents":
         count = _list_count(data)
         if count is not None:
             return f"({count} results)"

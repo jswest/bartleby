@@ -2,6 +2,7 @@
 
 import os
 import re
+from threading import Lock
 from typing import List, Dict, Any, Optional
 
 from sentence_transformers import SentenceTransformer
@@ -66,11 +67,19 @@ class SearchResult:
             "content_type": self.content_type,
         }
 
-    def to_metadata_dict(self) -> Dict[str, Any]:
-        """Return dict representation without the potentially large body field."""
-        data = self.to_dict()
-        data.pop("body", None)
-        return data
+    def with_score(self, score: float) -> "SearchResult":
+        """Return a copy of this result with a different score."""
+        return SearchResult(
+            chunk_id=self.chunk_id,
+            body=self.body,
+            score=score,
+            page_number=self.page_number,
+            document_id=self.document_id,
+            origin_file_path=self.origin_file_path,
+            chunk_index=self.chunk_index,
+            section_heading=self.section_heading,
+            content_type=self.content_type,
+        )
 
     def __repr__(self) -> str:
         return f"SearchResult(score={self.score:.3f}, page={self.page_number}, doc={self.document_id})"
@@ -209,6 +218,88 @@ def semantic_search(
         ))
 
     return results
+
+
+def _reciprocal_rank_fusion(
+    result_lists: List[List[SearchResult]],
+    k: int = 60,
+) -> List[SearchResult]:
+    """Merge multiple ranked result lists using Reciprocal Rank Fusion.
+
+    RRF score for a document d = sum(1 / (k + rank_i(d))) across all lists
+    where rank_i is the 1-based rank in list i. k=60 is the standard constant.
+    """
+    scores: Dict[str, float] = {}
+    best_result: Dict[str, SearchResult] = {}
+
+    for result_list in result_lists:
+        for rank, result in enumerate(result_list, start=1):
+            cid = result.chunk_id
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
+            # Keep the result object with the higher original score
+            if cid not in best_result or result.score > best_result[cid].score:
+                best_result[cid] = result
+
+    # Sort by RRF score descending
+    ranked_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
+
+    return [best_result[cid].with_score(scores[cid]) for cid in ranked_ids]
+
+
+def hybrid_search(
+    connection,
+    query: str,
+    embedding_model: Optional[SentenceTransformer],
+    embedding_lock: Optional[Lock] = None,
+    limit: int = 10,
+    document_id: Optional[str] = None,
+    reranker=None,
+) -> List[SearchResult]:
+    """Run FTS5 and semantic search, merge results with Reciprocal Rank Fusion.
+
+    If no embedding model is available, falls back to FTS-only.
+    If a reranker (cross-encoder) is provided, re-ranks the fused results.
+    """
+    # Fetch more candidates than requested so RRF has material to work with
+    fetch_limit = limit * 3
+
+    # Always run FTS
+    fts_results = full_text_search(connection, query, fetch_limit, document_id=document_id)
+
+    # Run semantic if we have an embedding model
+    if embedding_model is not None:
+        lock = embedding_lock or Lock()
+        with lock:
+            sem_results = semantic_search(
+                connection, query, embedding_model, fetch_limit, document_id=document_id,
+            )
+        result_lists = [fts_results, sem_results]
+    else:
+        result_lists = [fts_results]
+
+    merged = _reciprocal_rank_fusion(result_lists)
+
+    # Optional cross-encoder re-ranking
+    if reranker is not None and merged:
+        merged = _rerank(reranker, query, merged, limit)
+    else:
+        merged = merged[:limit]
+
+    return merged
+
+
+def _rerank(
+    reranker,
+    query: str,
+    results: List[SearchResult],
+    limit: int,
+) -> List[SearchResult]:
+    """Re-rank results using a cross-encoder model."""
+    pairs = [(query, r.body) for r in results]
+    scores = reranker.predict(pairs)
+
+    scored = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
+    return [r.with_score(float(s)) for s, r in scored[:limit]]
 
 
 def get_document_chunks(

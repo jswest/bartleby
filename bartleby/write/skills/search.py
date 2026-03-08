@@ -1,4 +1,4 @@
-"""Search skill - full-text and semantic document search."""
+"""Search skill - hybrid document search with RRF fusion."""
 
 import json
 from threading import Lock
@@ -17,10 +17,9 @@ from bartleby.lib.utils import truncate_result
 from bartleby.write.search import (
     count_document_chunks,
     document_exists,
-    full_text_search,
     get_chunk_window_by_chunk_id,
     get_document_chunks,
-    semantic_search,
+    hybrid_search,
 )
 from bartleby.write.skills.base import Skill, load_tool_doc
 
@@ -31,7 +30,7 @@ def _sanitize_limit(limit: Optional[int]) -> int:
     return max(1, min(limit, MAX_SEARCH_RESULT_LIMIT))
 
 
-def _result_with_body(results: list, max_body_chars: int = 300) -> list[Dict]:
+def _result_with_body(results: list, max_body_chars: int = 300, ref_registry=None) -> list[Dict]:
     """Return search results with truncated body text included."""
     out = []
     for r in results:
@@ -39,18 +38,21 @@ def _result_with_body(results: list, max_body_chars: int = 300) -> list[Dict]:
         body = d.get("body")
         if body and len(body) > max_body_chars:
             d["body"] = body[:max_body_chars] + "..."
+        if ref_registry is not None:
+            ref_num = ref_registry.register(d["chunk_id"], d)
+            d["ref"] = ref_num
         out.append(d)
     return out
 
 
-class SearchDocumentsFTSTool(Tool):
-    name = "search_documents_fts"
-    description = load_tool_doc("search_documents_fts")
+class HybridSearchTool(Tool):
+    name = "search_documents"
+    description = load_tool_doc("search_documents")
     inputs = {
-        "query": {"type": "string", "description": "Search query string"},
+        "query": {"type": "string", "description": "Search query (keywords or natural language)"},
         "limit": {
             "type": "integer",
-            "description": "Maximum results (default 3, max 5)",
+            "description": "Maximum results to return (default 3, max 5)",
             "nullable": True,
         },
         "document_id": {
@@ -61,48 +63,14 @@ class SearchDocumentsFTSTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, connection):
-        super().__init__()
-        self.connection = connection
-
-    def forward(self, query: str, limit: int = None, document_id: str = None) -> str:
-        safe_limit = _sanitize_limit(limit)
-        if document_id and not document_exists(self.connection, document_id):
-            return json.dumps({
-                "error": "DOCUMENT_NOT_FOUND",
-                "message": f"Document '{document_id}' was not found.",
-            })
-
-        results = full_text_search(
-            self.connection, query, safe_limit, document_id=document_id or None
-        )
-        data = _result_with_body(results)
-        return json.dumps(truncate_result(data, max_tokens=MAX_TOOL_TOKENS), default=str)
-
-
-class SearchDocumentsSemanticTool(Tool):
-    name = "search_documents_semantic"
-    description = load_tool_doc("search_documents_semantic")
-    inputs = {
-        "query": {"type": "string", "description": "Natural language query"},
-        "limit": {
-            "type": "integer",
-            "description": "Maximum results (default 3, max 5)",
-            "nullable": True,
-        },
-        "document_id": {
-            "type": "string",
-            "description": "Optional document ID to search within",
-            "nullable": True,
-        },
-    }
-    output_type = "string"
-
-    def __init__(self, connection, embedding_model, embedding_lock: Lock):
+    def __init__(self, connection, embedding_model=None, embedding_lock=None,
+                 ref_registry=None, reranker=None):
         super().__init__()
         self.connection = connection
         self.embedding_model = embedding_model
         self.embedding_lock = embedding_lock
+        self.ref_registry = ref_registry
+        self.reranker = reranker
 
     def forward(self, query: str, limit: int = None, document_id: str = None) -> str:
         safe_limit = _sanitize_limit(limit)
@@ -112,15 +80,16 @@ class SearchDocumentsSemanticTool(Tool):
                 "message": f"Document '{document_id}' was not found.",
             })
 
-        with self.embedding_lock:
-            results = semantic_search(
-                self.connection,
-                query,
-                self.embedding_model,
-                safe_limit,
-                document_id=document_id or None,
-            )
-        data = _result_with_body(results)
+        results = hybrid_search(
+            self.connection,
+            query,
+            self.embedding_model,
+            embedding_lock=self.embedding_lock,
+            limit=safe_limit,
+            document_id=document_id,
+            reranker=self.reranker,
+        )
+        data = _result_with_body(results, ref_registry=self.ref_registry)
         return json.dumps(truncate_result(data, max_tokens=MAX_TOOL_TOKENS), default=str)
 
 
@@ -137,9 +106,10 @@ class GetChunkWindowTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, connection):
+    def __init__(self, connection, ref_registry=None):
         super().__init__()
         self.connection = connection
+        self.ref_registry = ref_registry
 
     def forward(self, chunk_id: str, window_radius: int = None) -> str:
         if window_radius is None:
@@ -149,6 +119,11 @@ class GetChunkWindowTool(Tool):
         window = get_chunk_window_by_chunk_id(self.connection, chunk_id, safe_radius)
         if window is None:
             return json.dumps({"error": f"Chunk {chunk_id} not found"})
+
+        if self.ref_registry is not None:
+            for chunk in window.get("chunks", []):
+                ref_num = self.ref_registry.register(chunk["chunk_id"], chunk)
+                chunk["ref"] = ref_num
 
         return json.dumps(window, default=str)
 
@@ -211,20 +186,23 @@ class GetFullDocumentTool(Tool):
 
 class SearchSkill(Skill):
     name = "search"
-    description = "Full-text and semantic document search tools"
+    description = "Hybrid document search with context retrieval tools"
 
     def get_tools(self, context: dict) -> list[Tool]:
         connection = context["connection"]
         embedding_model = context.get("embedding_model")
         embedding_lock = context.get("embedding_lock", Lock())
+        ref_registry = context.get("ref_registry")
+        reranker = context.get("reranker")
 
-        tools = [
-            SearchDocumentsFTSTool(connection),
-            GetChunkWindowTool(connection),
+        return [
+            HybridSearchTool(
+                connection,
+                embedding_model=embedding_model,
+                embedding_lock=embedding_lock,
+                ref_registry=ref_registry,
+                reranker=reranker,
+            ),
+            GetChunkWindowTool(connection, ref_registry=ref_registry),
             GetFullDocumentTool(connection),
         ]
-
-        if embedding_model:
-            tools.insert(1, SearchDocumentsSemanticTool(connection, embedding_model, embedding_lock))
-
-        return tools
