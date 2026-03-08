@@ -10,7 +10,7 @@ I have found it useful to let an AI agent run wild in a SQLite database containi
 
 **`bartleby read`** handles the parsing side: OCR-ing and parsing PDFs (and converting HTML files) into a SQLite database, then paginating, summarizing, chunking, and embedding. This is valuable on its own regardless of your desire to sift through documents with an AI agent, as it enables all sorts of deeper explorations of large corpora.
 
-**`bartleby write`** is the research agent: an interactive Q&A loop where you ask questions about your corpus and the agent searches, reads, and synthesizes answers with citations. It works well with paid models like `gpt-5-nano` and `gpt-5-mini`, and also with open-weights models like `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b` via Ollama.
+**`bartleby write`** is the research agent: an interactive Q&A loop where you ask questions about your corpus and the agent searches, reads, and synthesizes answers with citations. A dedicated search subagent handles retrieval (hybrid FTS + semantic search with cross-encoder re-ranking), keeping the main agent's context clean for reasoning and synthesis. It works well with paid models like `gpt-5-nano` and `gpt-5-mini`, and also with open-weights models like `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b` via Ollama.
 
 A couple things to be aware of:
 
@@ -92,22 +92,34 @@ Point this at a directory of PDFs (or HTML files) and Bartleby will extract text
 bartleby write
 ```
 
-This starts an interactive research session. Ask questions about your corpus and the agent will search, read, and synthesize answers with source citations:
+This starts an interactive research session. Ask questions about your corpus and a search subagent will retrieve relevant passages while the main agent synthesizes answers with citations:
 
 ```
 >: What does this corpus have to say about PM2.5 and equity?
-  ✓ Listed documents (3 documents) ................... 0.2s
-  ✓ Read summary (WANG-ET-AL_2024.pdf) ............... 0.3s
-  ✓ Searched text (2 results) ........................ 3.1s
-  ✓ Read passage (7 chunks) .......................... 6.0s
-⠇ Thinking...
+Step 1/10 | Researching: "PM2.5 equity environmental justice disparities"
+       ✓  | Searched corpus (0.8s)
+Step 2/10 | Reading passage in context...
+       ✓  | Read passage - 7 chunks (0.5s)
+Step 3/10 | Thinking...
 
-[Markdown-formatted answer with citations]
+────────────────────────────────────────────────────────────
+Research: Three EPA reports were searched for PM2.5 equity
+data, with key findings on pp. 14-16 of the 2023 report.
+────────────────────────────────────────────────────────────
 
-↑23.6k/↓5.4k/+29.0k (~$0.00)
+[Markdown-formatted answer with citations [1], [2], etc.]
+
+┌─────────┬───────────────────────┬──────┬───────────────┐
+│ Ref     │ Document              │ Page │ Section       │
+├─────────┼───────────────────────┼──────┼───────────────┤
+│ [1]     │ EPA_Report_2023.pdf   │ 14   │ 3.2 Equity    │
+│ [2]     │ WANG-ET-AL_2024.pdf   │ 7    │ Results       │
+└─────────┴───────────────────────┴──────┴───────────────┘
+
+Tokens: 23.6k in / 5.4k out | Cost: ~$0.12
 ```
 
-Type `/save` to save the last answer as a timestamped report. Press `Ctrl+C` to exit.
+Use `/save` to save the last answer as a timestamped report, `/browse` to list cited sources, or `/browse <#>` to view a source passage in full context. Press `Ctrl+C` to exit.
 
 ---
 
@@ -121,7 +133,7 @@ Interactive configuration wizard. Asks for:
 |---------|---------|-------------|
 | Worker threads | 4 | Parallel processing threads for `read` |
 | LLM provider | anthropic | `anthropic`, `openai`, or `ollama` |
-| Model | varies by provider | Model name (e.g., `claude-3-5-sonnet-20241022`) |
+| Model | varies by provider | Model name (e.g., `claude-sonnet-4-20250514`) |
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
 | Pages to summarize | 10 | Per-PDF page limit for summarization (0 = skip) |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
@@ -146,12 +158,13 @@ bartleby project delete <name>    # Delete a project and its data (-y to skip pr
 
 ```
 ~/.bartleby/projects/<name>/
-├── bartleby.db       # SQLite database (text, embeddings, summaries)
-├── archive/          # Original PDF files (deduplicated by content hash)
-└── book/             # Output artifacts
-    ├── findings/     # Auto-saved Q&A results and research notes
-    ├── report-*.md   # Saved reports (via /save)
-    └── log.json      # Session log with tool calls and token usage
+├── bartleby.db              # SQLite database (text, embeddings, summaries)
+├── archive/                 # Original PDF files (deduplicated by content hash)
+└── book/                    # Output artifacts
+    ├── findings/            # Auto-saved Q&A results and research notes
+    ├── report-*.md          # Saved reports (via /save)
+    ├── searches-*.md        # Per-session search subagent logs
+    └── log.json             # Session log with tool calls and token usage
 ```
 
 ### `bartleby read`
@@ -177,7 +190,7 @@ bartleby read --files <path> [options]
 1. Converts HTML to PDF (if applicable) via Playwright/Chromium
 2. Extracts text from PDFs using PyMuPDF
 3. Falls back to OCR (Tesseract) for image-based pages
-4. Chunks text into segments (~400 characters with overlap)
+4. Chunks text into segments (~800 characters with overlap)
 5. Generates vector embeddings (BAAI/bge-base-en-v1.5)
 6. Creates LLM-powered summaries for the first N pages (if configured)
 7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec)
@@ -214,9 +227,27 @@ bartleby write [options]
 | Command | Description |
 |---------|-------------|
 | `/save` | Save the last answer as `book/report-YYYYMMDDHHmm.md` |
+| `/browse` | Show the sources table for the last answer |
+| `/browse <#>` | View a cited source passage in its surrounding context |
 | `Ctrl+C` | Exit the session |
 
-The agent has access to search tools (keyword and semantic), document reading tools, summarization, and note-taking. Each question-answer pair is auto-saved to `book/findings/` for continuity across the session. Token usage and estimated costs are displayed after each answer.
+**Architecture:** The write command uses a two-agent architecture powered by [smolagents](https://github.com/huggingface/smolagents):
+
+- **Main agent** (10 steps, extendable) — reasons about your question, delegates search to the search subagent, takes notes, and synthesizes a final answer with citations.
+- **Search subagent** (5 steps) — a managed agent that handles all retrieval: hybrid search (FTS5 + semantic with reciprocal rank fusion), cross-encoder re-ranking, passage reading, and document summaries. Returns a synthesis with numbered references that the main agent can cite.
+
+This separation keeps the main agent's context window clean — it receives distilled findings rather than raw chunks. A shared reference registry tracks cited passages across both agents, enabling the `/browse` command and sources table.
+
+After each answer, a brief LLM-generated research summary describes what was searched and found, followed by a sources table and token usage stats.
+
+Each question-answer pair is auto-saved to `book/findings/` for continuity across the session, and search subagent invocations are logged to `book/searches-{session}.md`.
+
+**Step extension:** If the agent needs more steps to complete research, it can request them interactively. You'll see a prompt like:
+
+```
+Agent requests 5 more steps: "Need to cross-reference 3 more documents"
+Allow? [y/N]:
+```
 
 ### `bartleby book`
 
@@ -262,8 +293,18 @@ Use `bartleby book logs --session <name>` to see a detailed timeline of tool cal
 
 | Provider | Default model | Vision support | Notes |
 |----------|--------------|----------------|-------|
-| Anthropic | `claude-3-5-sonnet-20241022` | Claude 3+ models | Requires API key |
-| OpenAI | `gpt-4-turbo` | GPT-4 vision models | Requires API key |
-| Ollama | `llama3.2` | No | Requires local server |
+| Anthropic | `claude-sonnet-4-20250514` | Claude 3+ models | Requires API key |
+| OpenAI | `gpt-5-mini` | GPT-4+ vision models | Requires API key |
+| Ollama | `qwen3:8b` | No | Requires local server |
 
 Vision-capable models can use page images during summarization for better results. Non-vision models fall back to text-only.
+
+## Search and retrieval
+
+The search pipeline combines multiple retrieval strategies for high-quality results:
+
+1. **Hybrid search** — each query runs both FTS5 keyword search and semantic vector search (BAAI/bge-base-en-v1.5 embeddings), then merges results using Reciprocal Rank Fusion (RRF).
+2. **Cross-encoder re-ranking** — the top candidates from RRF are re-scored with a cross-encoder model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) for better precision. This runs automatically if the model loads successfully.
+3. **Progressive truncation** — when results exceed the token budget, lower-ranked results have their bodies truncated to the first sentence (with a `body_truncated` flag) rather than being discarded entirely. The agent can still see metadata and choose to read the full passage.
+
+Chunks are ~800 characters (~200 tokens) with 100-character overlap, well within the embedding model's 512-token limit.
