@@ -1,10 +1,14 @@
 """Step extension skill - allows the agent to request more steps."""
 
-import json
+from __future__ import annotations
 
-from rich.prompt import Confirm
-from rich.console import Console
+import json
+from typing import TYPE_CHECKING
+
 from smolagents import Tool
+
+if TYPE_CHECKING:
+    from bartleby.write.renderer import CliRenderer
 
 
 class RequestMoreStepsTool(Tool):
@@ -28,29 +32,17 @@ class RequestMoreStepsTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, agent_ref: list, console: Console, live_ref: list | None = None):
+    def __init__(self, agent_ref: list, renderer: CliRenderer):
         super().__init__()
-        # agent_ref is a mutable list holding [agent] so we can access it
-        # after the agent is created (circular reference workaround)
         self._agent_ref = agent_ref
-        self._console = console
-        # live_ref holds the active Live display so we can pause it during prompts
-        self._live_ref = live_ref or []
+        self._renderer = renderer
 
     def forward(self, reason: str, additional_steps: int = None) -> str:
         requested = additional_steps if additional_steps is not None else 5
 
-        # Pause the Live display so the prompt renders cleanly
-        live = self._live_ref[0] if self._live_ref else None
-        if live:
-            live.stop()
-        self._console.print("")
-        self._console.print(
-            f"[bold yellow]Agent requests {requested} more steps:[/bold yellow] {reason}"
-        )
-        approved = Confirm.ask("Allow?", default=False, console=self._console)
-        if live:
-            live.start()
+        self._renderer.pause_live()
+        approved = self._renderer.prompt_step_extension(reason, requested)
+        self._renderer.resume_live()
 
         if approved:
             agent = self._agent_ref[0] if self._agent_ref else None

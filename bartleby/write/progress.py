@@ -28,20 +28,31 @@ COMPLETED_LABELS = {
 }
 
 
+def _describe_tool_context(tool_name: str, tool_args: dict) -> str:
+    """Extract a short context string from tool args for the completed line."""
+    if tool_name == "search_expert":
+        task = tool_args.get("task", "")
+        if task:
+            return f'"{task}"'
+    if tool_name == "search_documents":
+        query = tool_args.get("query", "")
+        if query:
+            return f'"{query}"'
+    return ""
+
+
 def _describe_tool_start(tool_name: str, tool_args: dict) -> str:
     """Build a descriptive message from tool name and arguments."""
     if tool_name == "search_expert":
         task = tool_args.get("task", "")
         if task:
-            short = task[:60] + "..." if len(task) > 60 else task
-            return f'Researching: "{short}"'
+            return f'Researching: "{task}"'
         return "Searching corpus..."
 
     if tool_name == "search_documents":
         query = tool_args.get("query", "")
         if query:
-            short = query[:50] + "..." if len(query) > 50 else query
-            return f'Searching for "{short}"'
+            return f'Searching for "{query}"'
         return "Searching documents..."
 
     if tool_name == "get_chunk_window":
@@ -147,8 +158,10 @@ class ProgressDisplay:
     """Rich renderable showing step-by-step agent progress.
 
     Displays:
-        Step 2/10 | Searching for "PM2.5 equity"
-               +  | Found 3 passages across 2 documents (0.2s)
+        Step 2/10 | Researching: "PM2.5 equity"
+                       Searching for "PM2.5 equity"...
+                     ✓ Found 3 results (0.4s)
+               ✓  | Searched corpus (2.1s)
         Step 3/10 | Thinking...
     """
 
@@ -157,13 +170,18 @@ class ProgressDisplay:
         self.spinner = Spinner("dots", text="Thinking...")
         self._completed_lines: list[Text] = []
         self._step_start: float = time.monotonic()
+        self._subtool_start: float = time.monotonic()
         self._step_num: int = 0
+        self._current_tool_name: str = ""
+        self._current_tool_args: dict = {}
 
     def start_tool(self, tool_name: str, tool_args: dict | None = None) -> None:
         """Update the spinner text for an active tool call."""
         self._step_num += 1
         self._step_start = time.monotonic()
-        description = _describe_tool_start(tool_name, tool_args or {})
+        self._current_tool_name = tool_name
+        self._current_tool_args = tool_args or {}
+        description = _describe_tool_start(tool_name, self._current_tool_args)
         step_label = f"Step {self._step_num}/{self.max_steps}"
         self.spinner.text = Text.from_markup(
             f"[bold]{step_label}[/bold] [dim]|[/dim] {description}"
@@ -177,12 +195,14 @@ class ProgressDisplay:
 
         label = COMPLETED_LABELS.get(tool_name, tool_name)
         summary = extract_tool_summary(tool_name, observations)
+        context = _describe_tool_context(tool_name, self._current_tool_args)
 
         step_label = f"Step {self._step_num}/{self.max_steps}"
         time_str = f"({elapsed:.1f}s)"
 
-        # Completed step line
-        left = f"[bold]{step_label}[/bold] [dim]|[/dim] [green]+[/green] {label}"
+        left = f"[bold]{step_label}[/bold] [dim]|[/dim] [green]\u2713[/green] {label}"
+        if context:
+            left += f": {context}"
         if summary:
             left += f" [dim]- {summary}[/dim]"
         left += f" [dim]{time_str}[/dim]"
@@ -190,7 +210,43 @@ class ProgressDisplay:
         line = Text.from_markup(left)
         self._completed_lines.append(line)
 
+        self._current_tool_name = ""
+        self._current_tool_args = {}
         self.spinner.text = "Thinking..."
+
+    def start_subtool(self, tool_name: str, tool_args: dict | None = None) -> None:
+        """Show an indented subagent tool call under the current step."""
+        self._subtool_start = time.monotonic()
+        self._current_subtool_args = tool_args or {}
+        description = _describe_tool_start(tool_name, tool_args or {})
+        line = Text.from_markup(f"             [dim]{description}[/dim]")
+        self._completed_lines.append(line)
+
+    def complete_subtool(self, tool_name: str, observations: str, elapsed: float = 0.0) -> None:
+        """Append an indented completion line for a subagent tool."""
+        if elapsed <= 0:
+            elapsed = time.monotonic() - self._subtool_start
+
+        label = COMPLETED_LABELS.get(tool_name, tool_name)
+        summary = extract_tool_summary(tool_name, observations)
+        context = _describe_tool_context(tool_name, getattr(self, "_current_subtool_args", {}))
+        time_str = f"({elapsed:.1f}s)"
+
+        left = f"           [green]\u2713[/green] {label}"
+        if context:
+            left += f": {context}"
+        if summary:
+            left += f" [dim]- {summary}[/dim]"
+        left += f" [dim]{time_str}[/dim]"
+
+        line = Text.from_markup(left)
+        self._completed_lines.append(line)
+
+    def add_error_line(self, message: str) -> None:
+        """Append a red error line inline with progress (doesn't break Live)."""
+        short = message[:120] + "..." if len(message) > 120 else message
+        line = Text.from_markup(f"           [red]✗ {short}[/red]")
+        self._completed_lines.append(line)
 
     def __rich_console__(
         self, console: Console, options: ConsoleOptions

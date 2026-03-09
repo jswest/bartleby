@@ -23,8 +23,10 @@ def main(
         session_filter: Filter by session name/uuid
     """
     console = Console()
-    book_dir = db_path.parent / "book"
-    project_name = db_path.parent.name
+    project_dir = db_path.parent
+    book_dir = project_dir / "book"
+    memory_dir = project_dir / "memory"
+    project_name = project_dir.name
 
     if not book_dir.exists():
         console.print(f"[yellow]No book directory found for project '{project_name}'.[/yellow]")
@@ -34,12 +36,11 @@ def main(
     sessions = parse_sessions(book_dir)
 
     if subcommand is None:
-        # Overview
-        render_overview(console, project_name, sessions, book_dir)
+        render_overview(console, project_name, sessions, book_dir, memory_dir=memory_dir)
     elif subcommand == "sessions":
         render_sessions(console, sessions)
     elif subcommand == "notes":
-        render_notes(console, sessions, full=full, filter_name=session_filter)
+        render_notes(console, sessions, memory_dir=memory_dir, full=full, filter_name=session_filter)
     elif subcommand == "logs":
         render_logs(console, sessions, filter_session=session_filter)
     else:

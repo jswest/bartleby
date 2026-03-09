@@ -55,6 +55,9 @@ def create_project(name: str) -> Path:
     # Create book directory for write artifacts
     (project_dir / "book").mkdir(exist_ok=True)
 
+    # Create memory directory for curated agent notes
+    (project_dir / "memory").mkdir(exist_ok=True)
+
     # Set as active project
     save_config_field("active_project", name)
 
@@ -101,7 +104,7 @@ def get_project_info(name: str) -> dict:
     db_path = project_dir / "bartleby.db"
     book_dir = project_dir / "book"
     report_path = book_dir / "report.md"
-    findings_dir = book_dir / "findings"
+    memory_dir = project_dir / "memory"
 
     info = {
         "name": name,
@@ -111,7 +114,7 @@ def get_project_info(name: str) -> dict:
         "db_size_mb": round(db_path.stat().st_size / (1024 * 1024), 2) if db_path.exists() else 0,
         "document_count": 0,
         "has_report": report_path.exists(),
-        "findings_count": len(list(findings_dir.glob("*.md"))) if findings_dir.exists() else 0,
+        "findings_count": len(list(memory_dir.glob("*.md"))) if memory_dir.exists() else 0,
     }
 
     if db_path.exists():

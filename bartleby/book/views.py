@@ -8,9 +8,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
-from bartleby.book.sessions import Session, Note, get_reports, short_cute_name
+from bartleby.book.sessions import Session, Note, get_reports, parse_memory_notes
 
 
 def _format_time_ago(dt: datetime | None) -> str:
@@ -44,16 +43,16 @@ def _format_tokens(count: int) -> str:
     return str(count)
 
 
-def render_overview(console: Console, project_name: str, sessions: list[Session], book_dir: Path):
+def render_overview(console: Console, project_name: str, sessions: list[Session], book_dir: Path, memory_dir: Path | None = None):
     """Render the overview panel for `bartleby book`."""
-    total_notes = sum(len(s.notes) for s in sessions)
+    memory_notes = parse_memory_notes(memory_dir) if memory_dir else []
     total_input = sum(s.total_input_tokens for s in sessions)
     total_output = sum(s.total_output_tokens for s in sessions)
     reports = get_reports(book_dir)
 
     lines = [
         f"Sessions: [bold]{len(sessions)}[/bold]",
-        f"Notes: [bold]{total_notes}[/bold]",
+        f"Notes: [bold]{len(memory_notes)}[/bold]",
         f"Reports: [bold]{len(reports)}[/bold]",
         f"Total tokens: [dim]{_format_tokens(total_input)} in / {_format_tokens(total_output)} out[/dim]",
     ]
@@ -61,7 +60,7 @@ def render_overview(console: Console, project_name: str, sessions: list[Session]
     if sessions:
         most_recent = sessions[0]
         lines.append("")
-        lines.append(f"[dim]Last session:[/dim] {short_cute_name(most_recent.run_uuid)} ({_format_time_ago(most_recent.start_time)})")
+        lines.append(f"[dim]Last session:[/dim] {most_recent.session_name} ({_format_time_ago(most_recent.start_time)})")
 
     panel = Panel(
         "\n".join(lines),
@@ -81,73 +80,62 @@ def render_sessions(console: Console, sessions: list[Session]):
     table.add_column("Session", style="cyan")
     table.add_column("Time", style="dim")
     table.add_column("Tools", justify="right")
-    table.add_column("Notes", justify="right")
     table.add_column("Tokens", justify="right", style="dim")
 
     for session in sessions:
-        name = short_cute_name(session.run_uuid)
         time_str = _format_time_ago(session.start_time)
         tools = str(len(session.tool_calls))
-        notes = str(len(session.notes))
         tokens = _format_tokens(session.total_input_tokens + session.total_output_tokens)
 
-        table.add_row(name, time_str, tools, notes, tokens)
+        table.add_row(session.session_name, time_str, tools, tokens)
 
     console.print(table)
 
 
-def render_notes(console: Console, sessions: list[Session], full: bool = False, filter_name: str | None = None):
+def render_notes(console: Console, sessions: list[Session], memory_dir: Path | None = None, full: bool = False, filter_name: str | None = None):
     """Render the notes view for `bartleby book notes`."""
-    # Collect all notes across sessions
-    all_notes: list[tuple[Note, Session]] = []
-    for session in sessions:
-        for note in session.notes:
-            all_notes.append((note, session))
+    # Load notes from memory directory
+    notes = parse_memory_notes(memory_dir) if memory_dir else []
+
+    # Fall back to session-embedded notes (legacy)
+    if not notes:
+        for session in sessions:
+            notes.extend(session.notes)
 
     # Sort by timestamp, most recent first
-    all_notes.sort(key=lambda x: x[0].timestamp or datetime.min, reverse=True)
+    notes.sort(key=lambda n: n.timestamp or datetime.min, reverse=True)
 
     if filter_name:
-        # Filter to a specific session by cute name prefix
-        all_notes = [
-            (n, s) for n, s in all_notes
-            if filter_name.lower() in short_cute_name(s.run_uuid).lower()
-            or filter_name.lower() in s.run_uuid.lower()
-        ]
+        filter_lower = filter_name.lower()
+        notes = [n for n in notes if filter_lower in n.filename.lower() or filter_lower in n.title.lower()]
 
-    if not all_notes:
+    if not notes:
         console.print("[dim]No notes found.[/dim]")
         return
 
     if full:
-        # Show full content
-        for note, session in all_notes:
-            session_name = short_cute_name(session.run_uuid)
+        for note in notes:
             time_str = _format_time_ago(note.timestamp)
-
             console.print()
             console.print(Panel(
                 Markdown(note.content),
                 title=f"[bold]{note.title}[/bold]",
-                subtitle=f"[dim]{session_name} \u00b7 {time_str}[/dim]",
-                border_style="green" if note.is_explicit_note else "blue",
+                subtitle=f"[dim]{note.filename} \u00b7 {time_str}[/dim]",
+                border_style="green",
             ))
     else:
-        # Show titles only
         lines = []
-        for note, session in all_notes:
-            session_name = short_cute_name(session.run_uuid)
+        for note in notes:
             time_str = _format_time_ago(note.timestamp)
-            icon = "\u2022" if note.is_explicit_note else "\u25e6"
-            lines.append(f"{icon} [bold]{note.title}[/bold]")
-            lines.append(f"  [dim]{session_name} \u00b7 {time_str}[/dim]")
+            lines.append(f"\u2022 [bold]{note.title}[/bold]")
+            lines.append(f"  [dim]{note.filename} \u00b7 {time_str}[/dim]")
             lines.append("")
 
-        lines.append("[dim]Use --full or bartleby book notes <session> to see content[/dim]")
+        lines.append("[dim]Use --full to see content[/dim]")
 
         panel = Panel(
             "\n".join(lines),
-            title=f"[bold]Notes ({len(all_notes)})[/bold]",
+            title=f"[bold]Notes ({len(notes)})[/bold]",
             border_style="green",
         )
         console.print(panel)
@@ -155,12 +143,11 @@ def render_notes(console: Console, sessions: list[Session], full: bool = False, 
 
 def render_logs(console: Console, sessions: list[Session], filter_session: str | None = None):
     """Render the logs view for `bartleby book logs`."""
-    # Filter sessions if requested
     if filter_session:
+        filter_lower = filter_session.lower()
         sessions = [
             s for s in sessions
-            if filter_session.lower() in short_cute_name(s.run_uuid).lower()
-            or filter_session.lower() in s.run_uuid.lower()
+            if filter_lower in s.session_name.lower()
         ]
 
     if not sessions:
@@ -195,10 +182,9 @@ def render_logs(console: Console, sessions: list[Session], filter_session: str |
     console.print(f"[bold]Total tokens:[/bold] {_format_tokens(total_input)} input, {_format_tokens(total_output)} output")
 
     if filter_session and len(sessions) == 1:
-        # Show detailed log for single session
         session = sessions[0]
         console.print()
-        console.print(f"[bold]Session:[/bold] {short_cute_name(session.run_uuid)}")
+        console.print(f"[bold]Session:[/bold] {session.session_name}")
         console.print()
 
         detail_table = Table(show_header=True, header_style="bold")

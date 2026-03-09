@@ -45,11 +45,10 @@ def _truncate_for_log(output: Any, max_chars: int = 500) -> Any:
 
 
 class StreamingLogger:
-    """Logs agent tool calls to a JSON-lines file."""
+    """Logs agent tool calls to a per-session JSON-lines file."""
 
-    def __init__(self, log_path: Path, token_counter=None, run_uuid: str | None = None):
-        self.log_path = log_path
-        self.run_uuid = run_uuid
+    def __init__(self, session_dir: Path, token_counter=None):
+        self.log_path = session_dir / "log.jsonl"
         self.token_counter = token_counter
         self.pending_tools: Dict[str, Dict[str, Any]] = {}
 
@@ -73,10 +72,9 @@ class StreamingLogger:
         return TOOL_MESSAGES.get(tool_name, tool_name)
 
     def _write_log(self, tool_info: Dict[str, Any], result: Any):
-        """Write entry to log.json."""
+        """Write entry to log.jsonl."""
         log_entry = {
             "timestamp": datetime.now().isoformat(),
-            "run_uuid": self.run_uuid,
             "tool_name": tool_info["name"],
             "inputs": tool_info["args"],
             "outputs_summary": _truncate_for_log(result),
@@ -88,5 +86,6 @@ class StreamingLogger:
                 "output": self.token_counter.completion_tokens,
             }
 
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry, separators=(",", ":")) + "\n")

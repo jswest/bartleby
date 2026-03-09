@@ -1,6 +1,8 @@
-"""Memory skill - notes and findings management."""
+"""Memory skill - curated research notes shared across agents and sessions."""
 
 import json
+import re
+from datetime import date
 from pathlib import Path
 
 from smolagents import Tool
@@ -8,21 +10,34 @@ from smolagents import Tool
 from bartleby.write.skills.base import load_tool_doc
 
 
+def _slugify(text: str, max_len: int = 60) -> str:
+    """Convert text to a filesystem-safe kebab-case slug."""
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text[:max_len]
+
+
 class ReadNotesTool(Tool):
     name = "read_notes"
-    description = "Read all saved research notes from previous questions. Use this when the user asks about prior research, what they've asked before, or what's been found so far."
+    description = (
+        "Read all saved research notes. Notes are shared between you and other "
+        "agents, and persist across sessions. Use this to review what has been "
+        "discovered so far."
+    )
     inputs = {}
     output_type = "string"
 
-    def __init__(self, findings_dir: Path):
+    def __init__(self, memory_dir: Path):
         super().__init__()
-        self.findings_dir = findings_dir
+        self.memory_dir = memory_dir
 
     def forward(self) -> str:
-        if not self.findings_dir.exists():
+        if not self.memory_dir.exists():
             return json.dumps({"message": "No notes found.", "notes": []})
 
-        note_files = sorted(self.findings_dir.glob("*.md"))
+        note_files = sorted(self.memory_dir.glob("*.md"))
         if not note_files:
             return json.dumps({"message": "No notes found.", "notes": []})
 
@@ -44,16 +59,17 @@ class SaveNoteTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, findings_dir: Path, run_uuid: str):
+    def __init__(self, memory_dir: Path):
         super().__init__()
-        self.findings_dir = findings_dir
-        self.run_uuid = run_uuid
-        self._sequence = 0
+        self.memory_dir = memory_dir
 
     def forward(self, title: str, content: str) -> str:
-        self._sequence += 1
-        filename = f"{self.run_uuid}-note-{self._sequence:02d}.md"
-        filepath = self.findings_dir / filename
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+
+        slug = _slugify(title)
+        today = date.today().isoformat()
+        filename = f"{today}_{slug}.md"
+        filepath = self.memory_dir / filename
 
         note_content = f"# {title}\n\n{content}\n"
         filepath.write_text(note_content, encoding="utf-8")
@@ -61,5 +77,4 @@ class SaveNoteTool(Tool):
         return json.dumps({
             "message": f"Saved note: {title}",
             "filename": filename,
-            "sequence": self._sequence,
         })
