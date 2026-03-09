@@ -4,8 +4,10 @@ import os
 import re
 import signal
 import sys
+import time
 import traceback
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
 
@@ -106,7 +108,6 @@ def _make_subagent_callback(bus: EventBus):
     ActionStep, so we measure elapsed time between consecutive callbacks
     (which approximates model-inference + tool-execution time per step).
     """
-    import time
     _step_start = [time.monotonic()]
 
     def on_step(step):
@@ -191,8 +192,6 @@ def _build_search_subagent(model, context, event_logger, bus: EventBus):
 
 def _create_session_dir(book_dir: Path, run_uuid: str) -> Path:
     """Create a session directory with a date-based temporary name."""
-    from datetime import date
-
     sessions_dir = book_dir / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -225,10 +224,9 @@ def _rename_session_dir(session_dir: Path, model, questions: list[str]) -> Path:
     except Exception:
         return session_dir
 
-    # Build new name: YYYY-MM-DD_slug
-    from datetime import date
-    today = date.today().isoformat()
-    new_name = f"{today}_{slug}"
+    # Preserve the original date prefix from the session dir name
+    date_prefix = session_dir.name.split("_")[0]
+    new_name = f"{date_prefix}_{slug}"
     new_dir = session_dir.parent / new_name
 
     # Handle collision
@@ -461,7 +459,6 @@ def main(db_path: Path, verbose: bool = False):
             # Handle /save command
             if stripped.lower() == "/save":
                 if last_answer:
-                    from datetime import datetime
                     stamp = datetime.now().strftime("%Y%m%d%H%M")
                     report_path = book_dir / "reports" / f"report-{stamp}.md"
                     report_path.write_text(last_answer, encoding="utf-8")

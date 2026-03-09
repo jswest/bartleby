@@ -9,7 +9,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from bartleby.book.sessions import Session, Note, get_reports, parse_memory_notes
+from bartleby.book.sessions import Session, get_reports, parse_memory_notes
 
 
 def _format_time_ago(dt: datetime | None) -> str:
@@ -92,15 +92,9 @@ def render_sessions(console: Console, sessions: list[Session]):
     console.print(table)
 
 
-def render_notes(console: Console, sessions: list[Session], memory_dir: Path | None = None, full: bool = False, filter_name: str | None = None):
+def render_notes(console: Console, memory_dir: Path | None = None, full: bool = False, filter_name: str | None = None):
     """Render the notes view for `bartleby book notes`."""
-    # Load notes from memory directory
     notes = parse_memory_notes(memory_dir) if memory_dir else []
-
-    # Fall back to session-embedded notes (legacy)
-    if not notes:
-        for session in sessions:
-            notes.extend(session.notes)
 
     # Sort by timestamp, most recent first
     notes.sort(key=lambda n: n.timestamp or datetime.min, reverse=True)

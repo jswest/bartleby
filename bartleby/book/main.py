@@ -40,7 +40,7 @@ def main(
     elif subcommand == "sessions":
         render_sessions(console, sessions)
     elif subcommand == "notes":
-        render_notes(console, sessions, memory_dir=memory_dir, full=full, filter_name=session_filter)
+        render_notes(console, memory_dir=memory_dir, full=full, filter_name=session_filter)
     elif subcommand == "logs":
         render_logs(console, sessions, filter_session=session_filter)
     else:

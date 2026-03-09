@@ -103,8 +103,10 @@ def get_project_info(name: str) -> dict:
 
     db_path = project_dir / "bartleby.db"
     book_dir = project_dir / "book"
-    report_path = book_dir / "report.md"
+    reports_dir = book_dir / "reports"
     memory_dir = project_dir / "memory"
+
+    report_count = len(list(reports_dir.glob("report-*.md"))) if reports_dir.exists() else 0
 
     info = {
         "name": name,
@@ -113,7 +115,7 @@ def get_project_info(name: str) -> dict:
         "has_db": db_path.exists(),
         "db_size_mb": round(db_path.stat().st_size / (1024 * 1024), 2) if db_path.exists() else 0,
         "document_count": 0,
-        "has_report": report_path.exists(),
+        "report_count": report_count,
         "findings_count": len(list(memory_dir.glob("*.md"))) if memory_dir.exists() else 0,
     }
 

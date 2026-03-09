@@ -283,7 +283,7 @@ def _handle_project_info(args, console):
     table.add_row("Database", "ready" if info["has_db"] else "missing")
     table.add_row("DB size", f"{info['db_size_mb']} MB")
     table.add_row("Documents", str(info["document_count"]))
-    table.add_row("Report", "yes" if info["has_report"] else "no")
+    table.add_row("Reports", str(info["report_count"]))
     table.add_row("Findings", str(info["findings_count"]))
 
     console.print(table)
