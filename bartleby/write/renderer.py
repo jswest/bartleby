@@ -58,8 +58,8 @@ class CliRenderer:
 
     # -- Lifecycle --
 
-    def start_live(self, max_steps: int) -> None:
-        self.progress = ProgressDisplay(max_steps=max_steps)
+    def start_live(self, max_steps: int, token_counter=None) -> None:
+        self.progress = ProgressDisplay(max_steps=max_steps, token_counter=token_counter)
         self._live = Live(self.progress, console=self.console, refresh_per_second=4)
         self._live.start()
 
@@ -132,7 +132,7 @@ class CliRenderer:
 
     def _on_thinking(self, event: ThinkingEvent) -> None:
         if self.progress:
-            self.progress.spinner.text = "Thinking..."
+            self.progress.start_thinking()
 
     def _on_error(self, event: ErrorEvent) -> None:
         if self.progress:

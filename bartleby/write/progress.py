@@ -157,47 +157,53 @@ class ProgressDisplay:
     Displays:
         Step 2/10 | Researching: "PM2.5 equity"
                        Searching for "PM2.5 equity"...
-                     ✓ Found 3 results (0.4s)
-               ✓  | Searched corpus (2.1s)
-        Step 3/10 | Thinking...
+                     \u2713 Searched documents - 3 results (0.4s)
+                 \u2713 | Searched corpus (2.1s)
+        Thinking... (3s)
     """
 
-    def __init__(self, max_steps: int = 10) -> None:
+    def __init__(self, max_steps: int = 10, token_counter=None) -> None:
         self.max_steps = max_steps
-        self.spinner = Spinner("dots", text="Thinking...")
+        self.spinner = Spinner("dots", text="")
         self._completed_lines: list[Text] = []
         self._step_start: float = time.monotonic()
         self._subtool_start: float = time.monotonic()
         self._step_num: int = 0
         self._current_tool_name: str = ""
         self._current_tool_args: dict = {}
+        self._current_subtool_args: dict = {}
+        self._thinking_since: float | None = time.monotonic()
+        self._token_counter = token_counter
 
     def start_tool(self, tool_name: str, tool_args: dict | None = None) -> None:
-        """Update the spinner text for an active tool call."""
+        """Commit a step-header line to history and update state."""
         self._step_num += 1
         self._step_start = time.monotonic()
+        self._thinking_since = None
         self._current_tool_name = tool_name
         self._current_tool_args = tool_args or {}
         description = _describe_tool_start(tool_name, self._current_tool_args)
         step_label = f"Step {self._step_num}/{self.max_steps}"
-        self.spinner.text = Text.from_markup(
+
+        # Commit step header to history so subtools appear below it
+        header = Text.from_markup(
             f"[bold]{step_label}[/bold] [dim]|[/dim] {description}"
         )
+        self._completed_lines.append(header)
 
     def complete_tool(self, tool_name: str, observations: str) -> None:
-        """Finalize a tool call and append a log line."""
+        """Finalize a tool call and append a completion line."""
         now = time.monotonic()
         elapsed = now - self._step_start
-        self._step_start = now
+        self._thinking_since = now
 
         label = COMPLETED_LABELS.get(tool_name, tool_name)
         summary = extract_tool_summary(tool_name, observations)
         context = _describe_tool_context(tool_name, self._current_tool_args)
 
-        step_label = f"Step {self._step_num}/{self.max_steps}"
         time_str = f"({elapsed:.1f}s)"
 
-        left = f"[bold]{step_label}[/bold] [dim]|[/dim] [green]\u2713[/green] {label}"
+        left = f"         [green]\u2713[/green] [dim]|[/dim] {label}"
         if context:
             left += f": {context}"
         if summary:
@@ -209,13 +215,16 @@ class ProgressDisplay:
 
         self._current_tool_name = ""
         self._current_tool_args = {}
-        self.spinner.text = "Thinking..."
+
+    def start_thinking(self) -> None:
+        """Mark the start of a thinking period (for elapsed display)."""
+        self._thinking_since = time.monotonic()
 
     def start_subtool(self, tool_name: str, tool_args: dict | None = None) -> None:
         """Show an indented subagent tool call under the current step."""
         self._subtool_start = time.monotonic()
         self._current_subtool_args = tool_args or {}
-        description = _describe_tool_start(tool_name, tool_args or {})
+        description = _describe_tool_start(tool_name, self._current_subtool_args)
         line = Text.from_markup(f"             [dim]{description}[/dim]")
         self._completed_lines.append(line)
 
@@ -226,7 +235,7 @@ class ProgressDisplay:
 
         label = COMPLETED_LABELS.get(tool_name, tool_name)
         summary = extract_tool_summary(tool_name, observations)
-        context = _describe_tool_context(tool_name, getattr(self, "_current_subtool_args", {}))
+        context = _describe_tool_context(tool_name, self._current_subtool_args)
         time_str = f"({elapsed:.1f}s)"
 
         left = f"           [green]\u2713[/green] {label}"
@@ -240,15 +249,42 @@ class ProgressDisplay:
         self._completed_lines.append(line)
 
     def add_error_line(self, message: str) -> None:
-        """Append a red error line inline with progress (doesn't break Live)."""
+        """Append a red error line with step/tool context."""
         short = message[:120] + "..." if len(message) > 120 else message
-        line = Text.from_markup(f"           [red]✗ {short}[/red]")
+
+        parts = []
+        if self._step_num:
+            parts.append(f"Step {self._step_num}/{self.max_steps}")
+        parts.append("[red]\u2717[/red]")
+        if self._current_tool_name:
+            parts.append(f"[red]{self._current_tool_name}:[/red]")
+        parts.append(f"[red]{short}[/red]")
+
+        elapsed = time.monotonic() - self._step_start
+        parts.append(f"[dim]({elapsed:.1f}s)[/dim]")
+
+        line = Text.from_markup("           " + " ".join(parts))
         self._completed_lines.append(line)
 
     def __rich_console__(
         self, console: Console, options: ConsoleOptions
     ) -> RenderResult:
-        """Yield completed log lines followed by the spinner."""
+        """Yield completed log lines, spinner with thinking elapsed, and token stats."""
         for line in self._completed_lines:
             yield line
-        yield self.spinner
+
+        # Show spinner with elapsed time only while thinking
+        if self._thinking_since is not None:
+            elapsed = time.monotonic() - self._thinking_since
+            self.spinner.text = Text.from_markup(
+                f"Thinking... [dim]({elapsed:.0f}s)[/dim]"
+            )
+            yield self.spinner
+
+        # Live token usage
+        if self._token_counter is not None:
+            tc = self._token_counter
+            if tc.total_tokens > 0:
+                yield Text.from_markup(
+                    f"[dim]{tc.get_stats()}[/dim]"
+                )

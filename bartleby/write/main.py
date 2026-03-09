@@ -482,7 +482,7 @@ def main(db_path: Path, verbose: bool = False):
             # Run agent with live progress display
             max_steps = 10
             tool_log: list[dict] = []
-            renderer.start_live(max_steps)
+            renderer.start_live(max_steps, token_counter=token_counter)
 
             agent = ToolCallingAgent(
                 tools=main_tools,
