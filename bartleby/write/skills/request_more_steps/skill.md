@@ -1,6 +1,9 @@
 ---
 name: request_more_steps
 agents: [research]
+display:
+  progress_message: "Requesting more steps..."
+  completed_label: "Requested more steps"
 inputs:
   reason:
     type: string

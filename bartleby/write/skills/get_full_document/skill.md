@@ -1,6 +1,9 @@
 ---
 name: get_full_document
 agents: [search_expert]
+display:
+  progress_message: "Reading document..."
+  completed_label: "Read document"
 inputs:
   document_id:
     type: string

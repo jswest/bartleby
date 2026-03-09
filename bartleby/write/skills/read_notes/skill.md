@@ -1,6 +1,9 @@
 ---
 name: read_notes
 agents: [search_expert, research]
+display:
+  progress_message: "Reading research findings..."
+  completed_label: "Read notes"
 inputs: {}
 output_type: string
 ---

@@ -1,6 +1,9 @@
 ---
 name: summarize_document
 agents: [search_expert]
+display:
+  progress_message: "Summarizing document..."
+  completed_label: "Summarized document"
 inputs:
   document_id:
     type: string

@@ -1,6 +1,10 @@
 ---
 name: search_documents
 agents: [search_expert]
+display:
+  progress_message: "Searching documents..."
+  completed_label: "Searched documents"
+  context_arg: query
 inputs:
   query:
     type: string

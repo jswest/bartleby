@@ -1,6 +1,9 @@
 ---
 name: write_file
 agents: [research]
+display:
+  progress_message: "Writing file..."
+  completed_label: "Wrote file"
 inputs:
   filename:
     type: string

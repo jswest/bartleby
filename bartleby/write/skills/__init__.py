@@ -5,7 +5,7 @@ from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills._base import _parse_frontmatter
+from bartleby.write.skills._base import SkillMeta, _parse_frontmatter, load_skill_meta
 
 
 _SKILLS_DIR = Path(__file__).parent
@@ -41,3 +41,24 @@ def collect_tools(agent_name: str, context: dict) -> list[Tool]:
         tools.append(tool)
 
     return tools
+
+
+def collect_display_meta() -> dict[str, SkillMeta]:
+    """Scan all skills and return {tool_name: SkillMeta} for display purposes.
+
+    This is called once at module-load time by progress/logging modules
+    so they can look up display labels without hardcoding them.
+    """
+    result = {}
+    for skill_dir in sorted(_SKILLS_DIR.iterdir()):
+        if not skill_dir.is_dir() or skill_dir.name.startswith("_"):
+            continue
+
+        skill_md = skill_dir / "skill.md"
+        if not skill_md.exists():
+            continue
+
+        meta = load_skill_meta(str(skill_dir / "tool.py"))
+        result[meta.name] = meta
+
+    return result

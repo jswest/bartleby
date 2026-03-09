@@ -10,36 +10,31 @@ from rich.console import Console, ConsoleOptions, RenderResult
 from rich.spinner import Spinner
 from rich.text import Text
 
-from bartleby.write.logging import TOOL_MESSAGES
+from bartleby.write.logging import TOOL_MESSAGES, _DISPLAY_META
 
-
+# Build completed labels from skill.md frontmatter (auto-discovered).
+# search_expert is a managed agent, not a skill — hardcoded here.
 COMPLETED_LABELS = {
-    "search_expert": "Searched corpus",
-    "search_documents": "Searched documents",
-    "get_full_document": "Read document",
-    "get_chunk_window": "Read passage",
-    "list_documents": "Listed documents",
-    "get_document_summary": "Read summary",
-    "summarize_document": "Summarized document",
-    "read_notes": "Read notes",
-    "save_note": "Saved note",
-    "write_file": "Wrote file",
-    "write_csv": "Wrote CSV",
-    "describe_self": "Described capabilities",
-    "request_more_steps": "Requested more steps",
+    name: meta.completed_label
+    for name, meta in _DISPLAY_META.items()
+    if meta.completed_label
 }
+COMPLETED_LABELS["search_expert"] = "Searched corpus"
 
 
 def _describe_tool_context(tool_name: str, tool_args: dict) -> str:
     """Extract a short context string from tool args for the completed line."""
+    # search_expert is a managed agent with no skill.md
     if tool_name == "search_expert":
         task = tool_args.get("task", "")
-        if task:
-            return f'"{task}"'
-    if tool_name == "search_documents":
-        query = tool_args.get("query", "")
-        if query:
-            return f'"{query}"'
+        return f'"{task}"' if task else ""
+
+    # Use context_arg from skill.md frontmatter
+    meta = _DISPLAY_META.get(tool_name)
+    if meta and meta.context_arg:
+        value = tool_args.get(meta.context_arg, "")
+        return f'"{value}"' if value else ""
+
     return ""
 
 

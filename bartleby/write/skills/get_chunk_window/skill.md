@@ -1,6 +1,9 @@
 ---
 name: get_chunk_window
 agents: [search_expert, research]
+display:
+  progress_message: "Reading passage..."
+  completed_label: "Read passage"
 inputs:
   chunk_id:
     type: string

@@ -1,6 +1,9 @@
 ---
 name: describe_self
 agents: [research]
+display:
+  progress_message: "Describing capabilities..."
+  completed_label: "Described capabilities"
 inputs: {}
 output_type: string
 ---

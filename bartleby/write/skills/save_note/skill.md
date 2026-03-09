@@ -1,6 +1,9 @@
 ---
 name: save_note
 agents: [search_expert, research]
+display:
+  progress_message: "Saving note..."
+  completed_label: "Saved note"
 inputs:
   title:
     type: string

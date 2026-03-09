@@ -1,6 +1,9 @@
 ---
 name: get_document_summary
 agents: [search_expert]
+display:
+  progress_message: "Reading summary..."
+  completed_label: "Read summary"
 inputs:
   document_id:
     type: string

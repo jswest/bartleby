@@ -1,6 +1,9 @@
 ---
 name: write_csv
 agents: [research]
+display:
+  progress_message: "Writing CSV..."
+  completed_label: "Wrote CSV"
 inputs:
   filename:
     type: string

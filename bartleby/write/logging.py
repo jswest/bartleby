@@ -8,21 +8,17 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+from bartleby.write.skills import collect_display_meta
+
+# Build display labels from skill.md frontmatter (auto-discovered).
+# search_expert is a managed agent, not a skill — hardcoded here.
+_DISPLAY_META = collect_display_meta()
 TOOL_MESSAGES = {
-    "search_expert": "Searching corpus...",
-    "search_documents": "Searching documents...",
-    "get_full_document": "Reading document...",
-    "get_chunk_window": "Reading passage...",
-    "list_documents": "Listing documents...",
-    "get_document_summary": "Reading summary...",
-    "summarize_document": "Summarizing document...",
-    "read_notes": "Reading research findings...",
-    "save_note": "Saving note...",
-    "write_file": "Writing file...",
-    "write_csv": "Writing CSV...",
-    "describe_self": "Describing capabilities...",
-    "request_more_steps": "Requesting more steps...",
+    name: meta.progress_message
+    for name, meta in _DISPLAY_META.items()
+    if meta.progress_message
 }
+TOOL_MESSAGES["search_expert"] = "Searching corpus..."
 
 
 def _truncate_for_log(output: Any, max_chars: int = 500) -> Any:

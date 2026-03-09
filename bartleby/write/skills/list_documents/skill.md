@@ -1,6 +1,9 @@
 ---
 name: list_documents
 agents: [search_expert]
+display:
+  progress_message: "Listing documents..."
+  completed_label: "Listed documents"
 inputs: {}
 output_type: string
 ---

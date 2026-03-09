@@ -15,6 +15,10 @@ class SkillMeta:
     inputs: dict
     output_type: str
     agents: list[str] = field(default_factory=list)
+    # Display metadata (used by CLI renderer)
+    progress_message: str = ""
+    completed_label: str = ""
+    context_arg: str = ""
 
 
 def load_skill_meta(tool_file: str) -> SkillMeta:
@@ -30,12 +34,17 @@ def load_skill_meta(tool_file: str) -> SkillMeta:
     raw = skill_path.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(raw)
 
+    display = frontmatter.get("display", {})
+
     return SkillMeta(
         name=frontmatter.get("name", skill_path.parent.name),
         description=body.strip(),
         inputs=frontmatter.get("inputs", {}),
         output_type=frontmatter.get("output_type", "string"),
         agents=frontmatter.get("agents", []),
+        progress_message=display.get("progress_message", ""),
+        completed_label=display.get("completed_label", ""),
+        context_arg=display.get("context_arg", ""),
     )
 
 
