@@ -160,11 +160,16 @@ bartleby project delete <name>    # Delete a project and its data (-y to skip pr
 ~/.bartleby/projects/<name>/
 ├── bartleby.db              # SQLite database (text, embeddings, summaries)
 ├── archive/                 # Original PDF files (deduplicated by content hash)
-└── book/                    # Output artifacts
-    ├── findings/            # Auto-saved Q&A results and research notes
-    ├── report-*.md          # Saved reports (via /save)
-    ├── searches-*.md        # Per-session search subagent logs
-    └── log.json             # Session log with tool calls and token usage
+├── memory/                  # Curated research notes (shared across sessions)
+│   └── 2026-03-09_key-finding.md
+└── book/
+    ├── reports/             # Saved reports (via /save)
+    │   └── report-YYYYMMDDHHmm.md
+    └── sessions/            # Per-session artifacts
+        └── 2026-03-09_pm25-health-disparities/
+            ├── log.jsonl        # Tool calls and token usage
+            ├── transcript.md    # Human-readable Q&A transcript
+            └── search_reports/  # Auto-saved search subagent syntheses
 ```
 
 ### `bartleby read`
@@ -226,7 +231,7 @@ bartleby write [options]
 
 | Command | Description |
 |---------|-------------|
-| `/save` | Save the last answer as `book/report-YYYYMMDDHHmm.md` |
+| `/save` | Save the last answer as `book/reports/report-YYYYMMDDHHmm.md` |
 | `/browse` | Show the sources table for the last answer |
 | `/browse <#>` | View a cited source passage in its surrounding context |
 | `Ctrl+C` | Exit the session |
@@ -240,7 +245,9 @@ This separation keeps the main agent's context window clean — it receives dist
 
 After each answer, a brief LLM-generated research summary describes what was searched and found, followed by a sources table and token usage stats.
 
-Each question-answer pair is auto-saved to `book/findings/` for continuity across the session, and search subagent invocations are logged to `book/searches-{session}.md`.
+Each question-answer pair is appended to the session's `transcript.md`, and search subagent syntheses are auto-saved to `search_reports/`. Both agents can save curated notes to a shared `memory/` directory that persists across sessions — these notes are automatically injected as context for every new question.
+
+**Skills:** Agent tools are organized as self-describing skill directories under `bartleby/write/skills/`. Each skill has a `skill.md` (YAML frontmatter declaring agent assignments, inputs, and description) and a `tool.py` (implementation + factory). A registry function discovers and instantiates tools by agent name at startup.
 
 **Step extension:** If the agent needs more steps to complete research, it can request them interactively. You'll see a prompt like:
 
@@ -251,7 +258,7 @@ Allow? [y/N]:
 
 ### `bartleby book`
 
-View research activity and findings from your project. Each session gets a memorable name (e.g., "mighty-grove", "sharp-oak") derived from its ID.
+View research activity and findings from your project. Sessions are named with a date prefix and an LLM-generated topic slug (e.g., `2026-03-09_pm25-health-disparities`).
 
 ```bash
 bartleby book [subcommand] [options]
@@ -263,7 +270,7 @@ bartleby book [subcommand] [options]
 |------------|-------------|
 | *(none)* | Overview: session count, notes, reports, total tokens |
 | `sessions` | List all research sessions with stats |
-| `notes [session]` | Show research notes (filter by session name) |
+| `notes` | Show curated research notes from `memory/` |
 | `logs [--session <name>]` | Show tool usage and token breakdown |
 
 | Option | Description |
@@ -275,14 +282,14 @@ bartleby book [subcommand] [options]
 
 ```
 $ bartleby book sessions
-                      Sessions
-┏━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┓
-┃ Session      ┃ Time    ┃ Tools ┃ Notes ┃  Tokens ┃
-┡━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━┩
-│ mighty-grove │ 18m ago │    10 │     3 │ 2196.4k │
-│ sharp-oak    │ 3h ago  │    23 │     5 │ 6877.0k │
-│ tawny-oak    │ 3h ago  │    10 │     2 │  336.2k │
-└──────────────┴─────────┴───────┴───────┴─────────┘
+                              Sessions
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┓
+┃ Session                            ┃ Time    ┃ Tools ┃  Tokens ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━┩
+│ 2026-03-09_pm25-health-disparities │ 18m ago │    10 │ 2196.4k │
+│ 2026-03-08_environmental-justice   │ 3h ago  │    23 │ 6877.0k │
+│ 2026-03-08_air-quality-standards   │ 3h ago  │    10 │  336.2k │
+└────────────────────────────────────┴─────────┴───────┴─────────┘
 ```
 
 Use `bartleby book logs --session <name>` to see a detailed timeline of tool calls for debugging or understanding agent behavior.
