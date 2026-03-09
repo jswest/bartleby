@@ -10,7 +10,7 @@ from bartleby.lib.consts import (
     MAX_SEARCH_RESULT_LIMIT,
     MAX_TOOL_TOKENS,
 )
-from bartleby.lib.utils import truncate_result
+from bartleby.lib.utils import safe_dumps, truncate_result
 from bartleby.write.search import document_exists, full_text_search, hybrid_search
 from bartleby.write.skills._base import load_skill_meta
 
@@ -81,7 +81,7 @@ class HybridSearchTool(Tool):
             )
 
         data = _result_with_body(results, ref_registry=self.ref_registry)
-        return json.dumps(truncate_result(data, max_tokens=MAX_TOOL_TOKENS), default=str)
+        return safe_dumps(truncate_result(data, max_tokens=MAX_TOOL_TOKENS), default=str)
 
 
 def create(context: dict) -> HybridSearchTool:

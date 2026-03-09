@@ -5,7 +5,7 @@ import json
 from smolagents import Tool
 
 from bartleby.lib.consts import MAX_TOOL_TOKENS
-from bartleby.lib.utils import truncate_result
+from bartleby.lib.utils import safe_dumps, truncate_result
 from bartleby.write.search import (
     count_document_chunks,
     document_exists,
@@ -46,7 +46,7 @@ class GetDocumentSummaryTool(Tool):
                 "subtitle": summary["subtitle"],
                 "body": summary["body"],
             }
-            return json.dumps(
+            return safe_dumps(
                 truncate_result(result, max_tokens=MAX_TOOL_TOKENS),
                 default=str,
             )
@@ -80,7 +80,7 @@ class GetDocumentSummaryTool(Tool):
             "total_chunks": total,
             "body": body,
         }
-        return json.dumps(
+        return safe_dumps(
             truncate_result(result, max_tokens=MAX_TOOL_TOKENS),
             default=str,
         )

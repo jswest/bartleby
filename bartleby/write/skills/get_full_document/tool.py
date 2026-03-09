@@ -5,6 +5,7 @@ import json
 from smolagents import Tool
 
 from bartleby.lib.consts import MAX_DOCUMENT_CHUNK_WINDOW
+from bartleby.lib.utils import safe_dumps
 from bartleby.write.search import count_document_chunks, get_document_chunks
 from bartleby.write.skills._base import load_skill_meta
 
@@ -43,7 +44,7 @@ class GetFullDocumentTool(Tool):
         )
 
         end_chunk = safe_start + len(chunks)
-        return json.dumps({
+        return safe_dumps({
             "document_id": document_id,
             "origin_file_path": chunks[0].origin_file_path if chunks else None,
             "total_chunks": total_chunks,

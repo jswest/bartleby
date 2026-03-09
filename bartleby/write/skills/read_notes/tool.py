@@ -5,6 +5,7 @@ from pathlib import Path
 
 from smolagents import Tool
 
+from bartleby.lib.utils import safe_dumps
 from bartleby.write.skills._base import load_skill_meta
 
 meta = load_skill_meta(__file__)
@@ -34,7 +35,7 @@ class ReadNotesTool(Tool):
                 "filename": f.name,
                 "content": f.read_text(encoding="utf-8")
             })
-        return json.dumps({"count": len(notes), "notes": notes})
+        return safe_dumps({"count": len(notes), "notes": notes})
 
 
 def create(context: dict) -> ReadNotesTool:

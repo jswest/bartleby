@@ -1,7 +1,43 @@
 """Utility functions."""
 
 import json
+import re
 from typing import Any
+
+
+# Matches characters that are invalid or dangerous in JSON strings:
+# - \x00-\x08, \x0b-\x0c, \x0e-\x1f: control chars (except \t \n \r)
+# - lone surrogates U+D800-U+DFFF (invalid Unicode, Go rejects)
+# Note: backslashes are handled correctly by json.dumps — no need to sanitize.
+_JSON_UNSAFE_RE = re.compile(
+    r'[\x00-\x08\x0b\x0c\x0e-\x1f]'
+    r'|[\ud800-\udfff]',
+)
+
+
+def sanitize_text(text: str) -> str:
+    """Remove characters that break JSON parsers (especially Go's).
+
+    - Strips control characters (except tab, newline, carriage return)
+    - Strips lone surrogates
+    """
+    return _JSON_UNSAFE_RE.sub('', text)
+
+
+def _sanitize_obj(obj: Any) -> Any:
+    """Recursively sanitize string values in a data structure."""
+    if isinstance(obj, str):
+        return sanitize_text(obj)
+    if isinstance(obj, dict):
+        return {k: _sanitize_obj(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_obj(v) for v in obj]
+    return obj
+
+
+def safe_dumps(data: Any, **kwargs) -> str:
+    """json.dumps with string values sanitized for JSON parser compatibility."""
+    return json.dumps(_sanitize_obj(data), **kwargs)
 
 
 def _estimate_tokens(text: str) -> int:

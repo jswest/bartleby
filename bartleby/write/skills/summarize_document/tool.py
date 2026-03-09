@@ -13,6 +13,7 @@ from bartleby.write.search import (
     get_document_summary,
     save_document_summary,
 )
+from bartleby.lib.utils import safe_dumps
 from bartleby.write.skills._base import load_skill_meta
 
 MAX_FIRST_CHUNKS = 15
@@ -42,7 +43,7 @@ class SummarizeDocumentTool(Tool):
         # Check if already cached
         existing = get_document_summary(self.connection, document_id)
         if existing:
-            return json.dumps({
+            return safe_dumps({
                 "document_id": document_id,
                 "source": "summary",
                 "title": existing["title"],
@@ -105,7 +106,7 @@ class SummarizeDocumentTool(Tool):
             summary.body,
         )
 
-        return json.dumps({
+        return safe_dumps({
             "document_id": document_id,
             "source": "summary",
             "title": summary.title,
