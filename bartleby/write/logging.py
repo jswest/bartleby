@@ -19,6 +19,8 @@ TOOL_MESSAGES = {
     "read_notes": "Reading research findings...",
     "save_note": "Saving note...",
     "write_file": "Writing file...",
+    "write_csv": "Writing CSV...",
+    "describe_self": "Describing capabilities...",
     "request_more_steps": "Requesting more steps...",
 }
 

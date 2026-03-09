@@ -24,6 +24,8 @@ COMPLETED_LABELS = {
     "read_notes": "Read notes",
     "save_note": "Saved note",
     "write_file": "Wrote file",
+    "write_csv": "Wrote CSV",
+    "describe_self": "Described capabilities",
     "request_more_steps": "Requested more steps",
 }
 
@@ -128,7 +130,7 @@ def extract_tool_summary(tool_name: str, observations: str) -> str:
             return data.get("message", "")
         return ""
 
-    if tool_name == "write_file":
+    if tool_name in ("write_file", "write_csv"):
         if isinstance(data, dict):
             fp = data.get("filepath", "")
             if fp:

@@ -1,7 +1,5 @@
 """Describe the agent's own capabilities and available tools."""
 
-from __future__ import annotations
-
 from collections import defaultdict
 from pathlib import Path
 
