@@ -1,3 +1,17 @@
+---
+name: get_chunk_window
+agents: [search_expert, research]
+inputs:
+  chunk_id:
+    type: string
+    description: "Chunk ID from a search result"
+  window_radius:
+    type: integer
+    description: "Chunks before/after the anchor (default 3)"
+    nullable: true
+output_type: string
+---
+
 Read a window of text around a specific search hit.
 
 Use this when you find a relevant chunk via search and need more surrounding context. Provide the `chunk_id` from any search result to grab nearby text (default ~3 chunks on either side, roughly 2400 characters total).

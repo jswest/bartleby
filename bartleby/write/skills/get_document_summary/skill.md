@@ -1,3 +1,13 @@
+---
+name: get_document_summary
+agents: [search_expert]
+inputs:
+  document_id:
+    type: string
+    description: "Document ID from list_documents or search results"
+output_type: string
+---
+
 Get a summary of a specific document.
 
 Returns the cached LLM-generated summary if available. If no summary exists, returns the first ~15 chunks as an approximation. Check the `source` field in the response:

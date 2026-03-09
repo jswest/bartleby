@@ -1,21 +1,20 @@
-"""File write skill - write files to the output directory."""
+"""Write content to a file in the output directory."""
 
 import json
 from pathlib import Path
 
 from smolagents import Tool
 
-from bartleby.write.skills.base import load_tool_doc
+from bartleby.write.skills._base import load_skill_meta
+
+meta = load_skill_meta(__file__)
 
 
 class WriteFileTool(Tool):
-    name = "write_file"
-    description = load_tool_doc("write_file")
-    inputs = {
-        "filename": {"type": "string", "description": "Filename to write (e.g., 'draft.md')"},
-        "content": {"type": "string", "description": "Content to write to the file"},
-    }
-    output_type = "string"
+    name = meta.name
+    description = meta.description
+    inputs = meta.inputs
+    output_type = meta.output_type
 
     def __init__(self, output_dir: Path):
         super().__init__()
@@ -36,3 +35,7 @@ class WriteFileTool(Tool):
             "message": f"Wrote {len(content)} characters to {clean_name}",
             "filepath": str(filepath),
         })
+
+
+def create(context: dict) -> WriteFileTool:
+    return WriteFileTool(output_dir=context["book_dir"])

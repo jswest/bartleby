@@ -49,15 +49,8 @@ from bartleby.write.progress import extract_tool_summary
 from bartleby.write.references import ReferenceRegistry
 from bartleby.write.renderer import CliRenderer, EventCapturingLogger
 from bartleby.write.search import get_chunk_window_by_chunk_id, list_all_documents
-from bartleby.write.skills.search import HybridSearchTool, GetChunkWindowTool, GetFullDocumentTool
-from bartleby.write.skills.library import (
-    ListDocumentsTool,
-    GetDocumentSummaryTool,
-    SummarizeDocumentTool,
-)
-from bartleby.write.skills.memory import ReadNotesTool, SaveNoteTool
-from bartleby.write.skills.file_write import WriteFileTool
-from bartleby.write.skills.steps import RequestMoreStepsTool
+from bartleby.write.skills import collect_tools
+from bartleby.write.skills._base import slugify
 from bartleby.write.token_counter import BudgetExceededError, TokenCounter
 from bartleby.write.views import render_browse_view, render_sources_table
 
@@ -143,35 +136,12 @@ def _make_subagent_callback(bus: EventBus):
 
 
 def _build_search_subagent(model, context, event_logger, bus: EventBus):
-    """Create the search subagent with search/library/memory tools."""
-    connection = context["connection"]
-    embedding_model = context.get("embedding_model")
-    embedding_lock = context.get("embedding_lock")
-    ref_registry = context.get("ref_registry")
-    reranker = context.get("reranker")
-    model_id = context.get("model_id")
-    memory_dir = context["memory_dir"]
-
-    search_tools = [
-        HybridSearchTool(
-            connection,
-            embedding_model=embedding_model,
-            embedding_lock=embedding_lock,
-            ref_registry=ref_registry,
-            reranker=reranker,
-        ),
-        GetChunkWindowTool(connection, ref_registry=ref_registry),
-        GetFullDocumentTool(connection),
-        ListDocumentsTool(connection),
-        GetDocumentSummaryTool(connection),
-        SummarizeDocumentTool(connection, model_id),
-        ReadNotesTool(memory_dir),
-        SaveNoteTool(memory_dir),
-    ]
+    """Create the search subagent with auto-discovered tools."""
+    search_tools = collect_tools("search_expert", context)
 
     # Build search prompt with corpus overview
     base_prompt = _load_prompt("search_agent")
-    corpus_overview = _build_corpus_overview(connection)
+    corpus_overview = _build_corpus_overview(context["connection"])
     search_prompt = f"{base_prompt}\n\n## Corpus\n\n{corpus_overview}"
 
     return ToolCallingAgent(
@@ -253,9 +223,7 @@ def _append_transcript(session_dir: Path, question: str, answer: str):
 
 def _save_search_report(session_dir: Path, task: str, observations: str, index: int):
     """Save a search agent's full synthesis to the session's search_reports/."""
-    from bartleby.write.skills.memory import _slugify
-
-    slug = _slugify(task, max_len=40)
+    slug = slugify(task, max_len=40)
     filename = f"{index:02d}-{slug}.md"
     report_path = session_dir / "search_reports" / filename
     report_path.write_text(f"# Search: {task}\n\n{observations}\n", encoding="utf-8")
@@ -390,6 +358,8 @@ def main(db_path: Path, verbose: bool = False):
     # Event-capturing logger replaces verbosity_level
     event_logger = EventCapturingLogger(bus)
 
+    agent_ref: list = []
+
     context = {
         "connection": connection,
         "memory_dir": memory_dir,
@@ -399,20 +369,16 @@ def main(db_path: Path, verbose: bool = False):
         "model_id": build_model_id(config),
         "ref_registry": ref_registry,
         "reranker": reranker,
+        "renderer": renderer,
+        "agent_ref": agent_ref,
+        "book_dir": book_dir,
     }
 
     # Build search subagent
     search_subagent = _build_search_subagent(model, context, event_logger, bus)
 
-    # Main agent tools
-    agent_ref: list = []
-    main_tools = [
-        GetChunkWindowTool(connection, ref_registry=ref_registry),
-        ReadNotesTool(memory_dir),
-        SaveNoteTool(memory_dir),
-        WriteFileTool(book_dir),
-        RequestMoreStepsTool(agent_ref, renderer),
-    ]
+    # Main agent tools (auto-discovered from skill.md frontmatter)
+    main_tools = collect_tools("research", context)
 
     system_prompt = _load_prompt("agent")
 

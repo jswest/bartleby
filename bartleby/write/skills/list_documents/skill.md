@@ -1,3 +1,10 @@
+---
+name: list_documents
+agents: [search_expert]
+inputs: {}
+output_type: string
+---
+
 List all documents in the database with metadata.
 
 Returns document IDs, filenames, page counts, chunk counts, titles (if summarized), and whether a summary exists.

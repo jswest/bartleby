@@ -1,3 +1,16 @@
+---
+name: save_note
+agents: [search_expert, research]
+inputs:
+  title:
+    type: string
+    description: "Title for the note"
+  content:
+    type: string
+    description: "Markdown content of the note"
+output_type: string
+---
+
 Save a research note to shared memory.
 
 Notes are shared between all agents and persist across sessions. They are your primary way to build up knowledge over time and communicate important findings.

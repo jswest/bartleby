@@ -1,3 +1,21 @@
+---
+name: search_documents
+agents: [search_expert]
+inputs:
+  query:
+    type: string
+    description: "Search query (keywords or natural language)"
+  limit:
+    type: integer
+    description: "Maximum results to return (default 3, max 5)"
+    nullable: true
+  document_id:
+    type: string
+    description: "Optional document ID to search within"
+    nullable: true
+output_type: string
+---
+
 Search documents using hybrid retrieval (keyword + semantic matching).
 
 Combines full-text keyword search and meaning-based vector search, then merges and re-ranks results for best coverage. You don't need to choose between search modes — this tool handles both.

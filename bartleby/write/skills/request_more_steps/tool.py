@@ -1,4 +1,4 @@
-"""Step extension skill - allows the agent to request more steps."""
+"""Allow the agent to request more steps from the user."""
 
 from __future__ import annotations
 
@@ -7,30 +7,19 @@ from typing import TYPE_CHECKING
 
 from smolagents import Tool
 
+from bartleby.write.skills._base import load_skill_meta
+
 if TYPE_CHECKING:
     from bartleby.write.renderer import CliRenderer
 
+meta = load_skill_meta(__file__)
+
 
 class RequestMoreStepsTool(Tool):
-    name = "request_more_steps"
-    description = (
-        "Request additional steps when you are running low and need more time "
-        "to complete your research. Call this when you are approaching the step "
-        "limit and still have important work to do. The user will be asked to "
-        "approve the extension."
-    )
-    inputs = {
-        "reason": {
-            "type": "string",
-            "description": "Brief explanation of why you need more steps and what you still need to do",
-        },
-        "additional_steps": {
-            "type": "integer",
-            "description": "Number of additional steps requested (typically 5)",
-            "nullable": True,
-        },
-    }
-    output_type = "string"
+    name = meta.name
+    description = meta.description
+    inputs = meta.inputs
+    output_type = meta.output_type
 
     def __init__(self, agent_ref: list, renderer: CliRenderer):
         super().__init__()
@@ -62,3 +51,10 @@ class RequestMoreStepsTool(Tool):
                 "approved": False,
                 "message": "Denied. Wrap up your answer with what you have so far.",
             })
+
+
+def create(context: dict) -> RequestMoreStepsTool:
+    return RequestMoreStepsTool(
+        agent_ref=context["agent_ref"],
+        renderer=context["renderer"],
+    )
