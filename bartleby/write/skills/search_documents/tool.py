@@ -11,7 +11,7 @@ from bartleby.lib.consts import (
     MAX_TOOL_TOKENS,
 )
 from bartleby.lib.utils import truncate_result
-from bartleby.write.search import document_exists, hybrid_search
+from bartleby.write.search import document_exists, full_text_search, hybrid_search
 from bartleby.write.skills._base import load_skill_meta
 
 meta = load_skill_meta(__file__)
@@ -53,7 +53,8 @@ class HybridSearchTool(Tool):
         self.ref_registry = ref_registry
         self.reranker = reranker
 
-    def forward(self, query: str, limit: int = None, document_id: str = None) -> str:
+    def forward(self, query: str, limit: int = None, document_id: str = None,
+                exact_match: bool = None) -> str:
         safe_limit = _sanitize_limit(limit)
         if document_id and not document_exists(self.connection, document_id):
             return json.dumps({
@@ -61,15 +62,24 @@ class HybridSearchTool(Tool):
                 "message": f"Document '{document_id}' was not found.",
             })
 
-        results = hybrid_search(
-            self.connection,
-            query,
-            self.embedding_model,
-            embedding_lock=self.embedding_lock,
-            limit=safe_limit,
-            document_id=document_id,
-            reranker=self.reranker,
-        )
+        if exact_match:
+            # Exact phrase search: FTS5 only, wrap query in quotes
+            # Strip any existing quotes to avoid malformed FTS5 syntax
+            phrase_query = f'"{query.replace(chr(34), "")}"'
+            results = full_text_search(
+                self.connection, phrase_query, safe_limit, document_id=document_id,
+            )
+        else:
+            results = hybrid_search(
+                self.connection,
+                query,
+                self.embedding_model,
+                embedding_lock=self.embedding_lock,
+                limit=safe_limit,
+                document_id=document_id,
+                reranker=self.reranker,
+            )
+
         data = _result_with_body(results, ref_registry=self.ref_registry)
         return json.dumps(truncate_result(data, max_tokens=MAX_TOOL_TOKENS), default=str)
 
