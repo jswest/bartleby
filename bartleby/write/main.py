@@ -94,7 +94,7 @@ def _build_corpus_overview(connection) -> str:
     return "\n".join(lines)
 
 
-def _make_subagent_callback(bus: EventBus):
+def _make_subagent_callback(bus: EventBus, token_counter: TokenCounter):
     """Create a step callback that emits subagent events.
 
     Timing: smolagents attaches both tool_calls and observations to the same
@@ -104,6 +104,8 @@ def _make_subagent_callback(bus: EventBus):
     _step_start = [time.monotonic()]
 
     def on_step(step):
+        token_counter.on_step(step)
+
         now = time.monotonic()
         if not isinstance(step, ActionStep):
             return
@@ -135,7 +137,7 @@ def _make_subagent_callback(bus: EventBus):
     return on_step
 
 
-def _build_search_subagent(model, context, event_logger, bus: EventBus):
+def _build_search_subagent(model, context, event_logger, bus: EventBus, token_counter: TokenCounter):
     """Create the search subagent with auto-discovered tools."""
     search_tools = collect_tools("search_expert", context)
 
@@ -156,7 +158,7 @@ def _build_search_subagent(model, context, event_logger, bus: EventBus):
         max_steps=5,
         instructions=search_prompt,
         logger=event_logger,
-        step_callbacks=[_make_subagent_callback(bus)],
+        step_callbacks=[_make_subagent_callback(bus, token_counter)],
     )
 
 
@@ -375,7 +377,7 @@ def main(db_path: Path, verbose: bool = False):
     }
 
     # Build search subagent
-    search_subagent = _build_search_subagent(model, context, event_logger, bus)
+    search_subagent = _build_search_subagent(model, context, event_logger, bus, token_counter)
 
     # Main agent tools (auto-discovered from skill.md frontmatter)
     main_tools = collect_tools("research", context)

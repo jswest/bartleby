@@ -4,8 +4,8 @@ import json
 
 from smolagents import Tool
 
-from bartleby.lib.consts import MAX_DOCUMENT_CHUNK_WINDOW
-from bartleby.lib.utils import safe_dumps
+from bartleby.lib.consts import MAX_DOCUMENT_CHUNK_WINDOW, MAX_TOOL_TOKENS
+from bartleby.lib.utils import safe_dumps, truncate_result
 from bartleby.write.search import count_document_chunks, get_document_chunks
 from bartleby.write.skills._base import load_skill_meta
 
@@ -44,7 +44,7 @@ class GetFullDocumentTool(Tool):
         )
 
         end_chunk = safe_start + len(chunks)
-        return safe_dumps({
+        return safe_dumps(truncate_result({
             "document_id": document_id,
             "origin_file_path": chunks[0].origin_file_path if chunks else None,
             "total_chunks": total_chunks,
@@ -53,7 +53,7 @@ class GetFullDocumentTool(Tool):
             "has_more": end_chunk < total_chunks,
             "next_start_chunk": end_chunk if end_chunk < total_chunks else None,
             "chunks": [r.to_dict() for r in chunks],
-        }, default=str)
+        }, max_tokens=MAX_TOOL_TOKENS), default=str)
 
 
 def create(context: dict) -> GetFullDocumentTool:

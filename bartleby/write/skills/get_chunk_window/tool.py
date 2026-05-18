@@ -4,8 +4,8 @@ import json
 
 from smolagents import Tool
 
-from bartleby.lib.consts import DEFAULT_CHUNK_WINDOW_RADIUS, MAX_DOCUMENT_CHUNK_WINDOW
-from bartleby.lib.utils import safe_dumps
+from bartleby.lib.consts import DEFAULT_CHUNK_WINDOW_RADIUS, MAX_DOCUMENT_CHUNK_WINDOW, MAX_TOOL_TOKENS
+from bartleby.lib.utils import safe_dumps, truncate_result
 from bartleby.write.search import get_chunk_window_by_chunk_id
 from bartleby.write.skills._base import load_skill_meta
 
@@ -37,7 +37,7 @@ class GetChunkWindowTool(Tool):
                 ref_num = self.ref_registry.register(chunk["chunk_id"], chunk)
                 chunk["ref"] = ref_num
 
-        return safe_dumps(window, default=str)
+        return safe_dumps(truncate_result(window, max_tokens=MAX_TOOL_TOKENS), default=str)
 
 
 def create(context: dict) -> GetChunkWindowTool:
