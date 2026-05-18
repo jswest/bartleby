@@ -1,24 +1,10 @@
+"""Constants used across the v1 ingest pipeline.
+
+Other knobs (chunker limits, search defaults) live in the module that owns
+them — keep this file focused on shared values.
+"""
+
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 
-DEFAULT_MAX_WORKERS = 4
-DEFAULT_PDF_PAGE_IMAGE_DPI = 300
-DEFAULT_PDF_PAGES_TO_SUMMARIZE = 10
-
-# Search result limits - keep results lean
-DEFAULT_SEARCH_RESULT_LIMIT = 3
-MAX_SEARCH_RESULT_LIMIT = 5
-DEFAULT_CHUNK_WINDOW_RADIUS = 3
-
-# Document retrieval limits
-MAX_DOCUMENT_CHUNK_WINDOW = 100
-MAX_TOOL_TOKENS = 10000
-
-# Docling chunking
-DOCLING_MAX_TOKENS = 800  # Leave headroom for heading context in embeddings
-
-# Embedding model
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
-
-# Cross-encoder re-ranking model (optional)
-RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"

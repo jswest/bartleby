@@ -1,0 +1,108 @@
+"""Integration tests for bartleby.project (create, info, delete) against the v1 schema."""
+
+from __future__ import annotations
+
+import pytest
+
+import bartleby.config
+import bartleby.db.connection
+import bartleby.project
+from bartleby.db.chunks import ChunkInput, insert_document_chunks
+from bartleby.db.connection import open_db
+from bartleby.db.schema import EMBEDDING_DIM, SCHEMA_VERSION
+
+
+def _emb(seed: float = 0.0) -> list[float]:
+    return [seed + i * 0.001 for i in range(EMBEDDING_DIM)]
+
+
+@pytest.fixture
+def projects_root(tmp_path, monkeypatch):
+    """Point every PROJECTS_DIR reference at a fresh tmp dir + isolate config."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
+    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
+    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
+    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+    yield projects
+
+
+def test_create_project_initializes_v1_schema(projects_root):
+    bartleby.project.create_project("alpha")
+
+    db_path = projects_root / "alpha" / "bartleby.db"
+    archive = projects_root / "alpha" / "archive"
+    assert db_path.exists()
+    assert archive.is_dir()
+    assert not (projects_root / "alpha" / "book").exists()
+    assert not (projects_root / "alpha" / "memory").exists()
+
+    conn = open_db("alpha")
+    try:
+        meta = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+    finally:
+        conn.close()
+
+
+def test_create_project_sets_active(projects_root):
+    bartleby.project.create_project("alpha")
+    assert bartleby.project.get_active_project() == "alpha"
+
+
+def test_create_project_refuses_existing(projects_root):
+    bartleby.project.create_project("alpha")
+    with pytest.raises(FileExistsError):
+        bartleby.project.create_project("alpha")
+
+
+def test_project_info_reports_v1_stats(projects_root):
+    bartleby.project.create_project("alpha")
+    conn = open_db("alpha")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path) VALUES (?, ?, ?)",
+            ("h", "doc.pdf", "/tmp/doc.pdf"),
+        )
+        doc_id = conn.last_insert_rowid()
+        insert_document_chunks(conn, doc_id, [
+            ChunkInput(text="a", embedding=_emb(), chunk_index=0),
+            ChunkInput(text="b", embedding=_emb(), chunk_index=1),
+        ])
+        cur.execute("INSERT INTO sessions (name) VALUES (?)", ("test-sess",))
+        sid = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO findings (session_id, title, body) VALUES (?, ?, ?)",
+            (sid, "t", "b"),
+        )
+    finally:
+        conn.close()
+
+    info = bartleby.project.get_project_info("alpha")
+    assert info["schema_version"] == str(SCHEMA_VERSION)
+    assert info["embedding_model"]
+    assert info["document_count"] == 1
+    assert info["session_count"] == 1
+    assert info["finding_count"] == 1
+    assert info["chunk_counts"] == {"document": 2, "summary": 0, "finding": 0}
+
+
+def test_delete_project_removes_dir_and_clears_active(projects_root):
+    bartleby.project.create_project("alpha")
+    bartleby.project.delete_project("alpha")
+    assert not (projects_root / "alpha").exists()
+    assert bartleby.project.get_active_project() is None
+
+
+def test_list_projects_marks_active(projects_root):
+    bartleby.project.create_project("alpha")
+    bartleby.project.create_project("beta")
+    listing = bartleby.project.list_projects()
+    by_name = {p["name"]: p for p in listing}
+    assert by_name["alpha"]["has_db"] and not by_name["alpha"]["is_active"]
+    assert by_name["beta"]["has_db"] and by_name["beta"]["is_active"]

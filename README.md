@@ -1,21 +1,26 @@
-# Bartleby, the Scrivener
+# Bartleby, the Scrivener: A Tool of Wall Street
 
 An AI-powered tool for processing document corpora and researching them with an agentic assistant.
+
+Made with love by [John West](https://github.com/jswest), [Brian Whitton](https://github.com/noslouch), and [Rob Barry](https://github.com/robbarry).
 
 ---
 
 ## Background
 
-I have found it useful to let an AI agent run wild in a SQLite database containing the extracted text from a bunch of documents. I've explored giving that agent various tools to explore the database more effectively, including full-text and semantic searching. This provides a toolkit _and_ agent to research and generate reports based on caches of PDF documents.
+At the _Wall Street Journal_, we have found it useful to let an AI agent run wild in a SQLite database containing the extracted text from a bunch of documents. Bartleby is the toolkit for that.
 
-**`bartleby read`** handles the parsing side: OCR-ing and parsing PDFs (and converting HTML files) into a SQLite database, then paginating, summarizing, chunking, and embedding. This is valuable on its own regardless of your desire to sift through documents with an AI agent, as it enables all sorts of deeper explorations of large corpora.
+It's split into two pieces that share a SQLite database:
 
-**`bartleby write`** is the research agent: an interactive Q&A loop where you ask questions about your corpus and the agent searches, reads, and synthesizes answers with citations. A dedicated search subagent handles retrieval (hybrid FTS + semantic search with cross-encoder re-ranking), keeping the main agent's context clean for reasoning and synthesis. It works well with paid models like `gpt-5-nano` and `gpt-5-mini`, and also with open-weights models like `gpt-oss:20b`, `qwen3:8b`, and `qwen3:30b` via Ollama.
+- **The `bartleby` CLI** scribes (parses, chunks, embeds, and indexes) documents. It also exposes helper commands that agents use during research sessions. Run on its own, it gives you a rich, queryable corpus regardless of whether you ever point an agent at it.
+- **The `bartleby` skill** (in [`./skill`](./skill)) is a skill you drop into Claude Code, Cowork, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
+
+A SQLite database binds these two together. The CLI writes it, the skill romps through it, writing findings back into it as it cavorts.
 
 A couple things to be aware of:
 
-- Token costs can add up, especially during document summarization in `read` and during research sessions in `write`. You have knobs for this (e.g., how many pages to summarize per PDF, which can be zero). **The costs the tool shows are estimates.**
-- I'm using the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
+- Token costs can add up. For ingestion, summarization is the main driver (you can also turn it off). For research, costs are governed by whatever model you're running the skill against.
+- This uses the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
 
 ---
 
@@ -23,18 +28,17 @@ A couple things to be aware of:
 
 ### Prerequisites
 
-Install system dependencies:
-
-```bash
-brew install tesseract
+```
 brew install uv
 ```
+
+That's it. Bartleby uses [Docling](https://docling-project.github.io/docling/) for document conversion, which bundles OCR and structural parsing — no separate Tesseract or Playwright install required.
 
 ### Install Bartleby
 
 From the project directory:
 
-```bash
+```
 uv tool install .
 ```
 
@@ -42,19 +46,31 @@ This installs `bartleby` as a command-line tool in an isolated environment.
 
 For development:
 
-```bash
+```
 uv tool install --editable .
 ```
 
-### Install Playwright browsers (optional, for HTML support)
+### Install the skill
 
-If you want to process HTML files, install the Chromium browser for Playwright:
+The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory. For Claude Code, that's typically:
 
-```bash
-uv run playwright install chromium
+```
+cp -r skill ~/.claude/skills/bartleby
 ```
 
-This only needs to be done once. Skip this if you only process PDFs.
+See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
+
+### A note on first-run latency
+
+The first time you run `bartleby scribe`, it will pause for several minutes while it downloads:
+
+- the Docling layout models (PDF table/structure detection, OCR weights),
+- the `BAAI/bge-base-en-v1.5` embedding model (~400 MB),
+- and the tokenizer assets that ride alongside both.
+
+These are cached under `~/.cache/` and reused on every subsequent run, so the second ingest starts immediately. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model when it loads in a fresh process.
+
+If you want to warm the caches before your first real ingest, run `bartleby embed "warm up"` once — that loads BGE — and `bartleby scribe --files <one small pdf>` once, which loads Docling.
 
 ---
 
@@ -62,64 +78,79 @@ This only needs to be done once. Skip this if you only process PDFs.
 
 ### 1. Configure
 
-Run the setup wizard to choose your LLM provider, model, and other settings:
-
-```bash
+```
 bartleby ready
 ```
 
-This walks you through configuring worker threads, LLM provider/model, API keys, summarization depth, and temperature. Settings are saved to `~/.bartleby/config.yaml`.
+The setup wizard asks for LLM provider/model, API keys, summary depth, temperature, and the max token threshold for reading whole documents. Settings save to `~/.bartleby/config.yaml`.
 
 ### 2. Create a project
 
-```bash
-bartleby project create my-research
+```
+bartleby project create foo
 ```
 
-This creates a project directory and sets it as your active project. All subsequent commands use the active project by default.
+This creates a project directory (foo in this case) and marks it active. Subsequent commands use the active project unless you pass `--project`.
 
-### 3. Process documents
-
-```bash
-bartleby read --files /path/to/your/pdfs
-```
-
-Point this at a directory of PDFs (or HTML files) and Bartleby will extract text, generate embeddings, and optionally create LLM-powered summaries. Everything goes into a SQLite database in your project.
-
-### 4. Ask questions
-
-```bash
-bartleby write
-```
-
-This starts an interactive research session. Ask questions about your corpus and a search subagent will retrieve relevant passages while the main agent synthesizes answers with citations:
+### 3. Ingest documents
 
 ```
->: What does this corpus have to say about PM2.5 and equity?
-Step 1/10 | Researching: "PM2.5 equity environmental justice disparities"
-       ✓  | Searched corpus (0.8s)
-Step 2/10 | Reading passage in context...
-       ✓  | Read passage - 7 chunks (0.5s)
-Step 3/10 | Thinking...
-
-────────────────────────────────────────────────────────────
-Research: Three EPA reports were searched for PM2.5 equity
-data, with key findings on pp. 14-16 of the 2023 report.
-────────────────────────────────────────────────────────────
-
-[Markdown-formatted answer with citations [1], [2], etc.]
-
-┌─────────┬───────────────────────┬──────┬───────────────┐
-│ Ref     │ Document              │ Page │ Section       │
-├─────────┼───────────────────────┼──────┼───────────────┤
-│ [1]     │ EPA_Report_2023.pdf   │ 14   │ 3.2 Equity    │
-│ [2]     │ WANG-ET-AL_2024.pdf   │ 7    │ Results       │
-└─────────┴───────────────────────┴──────┴───────────────┘
-
-Tokens: 23.6k in / 5.4k out | Cost: ~$0.12
+bartleby scribe --files /path/to/your/docs
 ```
 
-Use `/save` to save the last answer as a timestamped report, `/browse` to list cited sources, or `/browse <#>` to view a source passage in full context. Press `Ctrl+C` to exit.
+Point this at a file or directory of `.pdf`, `.html`, `.md`, or `.txt` files. Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. Everything goes into the project's SQLite database.
+
+### 4. Start an agent session
+
+In your harness of choice, load the `bartleby` skill and ask the agent a question about your corpus. The skill will guide it through searching, reading, synthesizing, and citing.
+
+If you want the agent to ignore findings from prior sessions, start the session with the memory flag off:
+
+```
+bartleby session start --no-memory
+```
+
+(More on sessions and memory in the skill README.)
+
+---
+
+## Architecture
+
+```
+                       ┌──────────────────┐
+                       │  bartleby ready  │
+                       │  bartleby scribe │   ← you, at the terminal
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │  SQLite database │
+                       │   (the contract) │
+                       └────────┬─────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │  bartleby skill  │   ← your agent, via your harness
+                       │  search / read / │
+                       │  save / cite     │
+                       └──────────────────┘
+```
+
+The CLI owns ingestion. The skill owns research. The database is the API between them. Each piece can be replaced independently as long as the schema contract holds.
+
+The database is self-describing — schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
+
+---
+
+## Project directory structure
+
+```
+~/.bartleby/projects/<name>/
+├── bartleby.db       # everything: chunks, summaries, findings, sessions, audit log
+└── archive/          # original PDF files, deduplicated by content hash
+```
+
+All queryable state lives in `bartleby.db`. Findings, audit logs, and agent-generated summaries are all stored as rows there — no sidecar files, no on-disk reports.
 
 ---
 
@@ -130,188 +161,148 @@ Use `/save` to save the last answer as a timestamped report, `/browse` to list c
 Interactive configuration wizard. Asks for:
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| Worker threads | 4 | Parallel processing threads for `read` |
+| --- | --- | --- |
 | LLM provider | anthropic | `anthropic`, `openai`, or `ollama` |
-| Model | varies by provider | Model name (e.g., `claude-sonnet-4-20250514`) |
+| Model | varies by provider | Model name (e.g., `claude-haiku-4-5`, `gpt-5-mini`, `gpt-oss:20b`) |
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
-| Pages to summarize | 10 | Per-PDF page limit for summarization (0 = skip) |
+| Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
+| Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
+| Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
-Config is saved to `~/.bartleby/config.yaml`.
+**A note on Ollama defaults.** The default Ollama model (`gpt-oss:20b`) assumes you have ~16GB of GPU/unified memory free. If you're on smaller hardware, override it during `bartleby ready` — anything in the Ollama library that handles summarization well will work. The "right" local default is determined by your machine, not by us.
+
+**A note on token counts.** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of the LLM provider you're using. It's a rough estimate — accurate enough for the `read_document --force` gate, but not authoritative across providers.
+
+Config saves to `~/.bartleby/config.yaml`.
 
 ### `bartleby project`
 
-Manage project workspaces. Each project gets its own database, document archive, and output directory.
+Manage project workspaces. Each project gets its own database and document archive.
 
 ```
 bartleby project create <name>    # Create and activate a new project
 bartleby project list             # List all projects
 bartleby project use <name>       # Switch active project
-bartleby project info [name]      # Show project details (defaults to active)
-bartleby project delete <name>    # Delete a project and its data (-y to skip prompt)
+bartleby project info [name]      # Show project details
+bartleby project delete <name>    # Delete a project and all its data (-y to skip prompt)
 ```
 
-**Project directory structure:**
+### `bartleby scribe`
+
+Ingest HTML, MD, PDF, and TXT documents into the project database. (Previously named `bartleby read` — renamed in v1 because the scribe writes the corpus; the agent reads it.)
 
 ```
-~/.bartleby/projects/<name>/
-├── bartleby.db              # SQLite database (text, embeddings, summaries)
-├── archive/                 # Original PDF files (deduplicated by content hash)
-├── memory/                  # Curated research notes (shared across sessions)
-│   └── 2026-03-09_key-finding.md
-└── book/
-    ├── reports/             # Saved reports (via /save)
-    │   └── report-YYYYMMDDHHmm.md
-    └── sessions/            # Per-session artifacts
-        └── 2026-03-09_pm25-health-disparities/
-            ├── log.jsonl        # Tool calls and token usage
-            ├── transcript.md    # Human-readable Q&A transcript
-            └── search_reports/  # Auto-saved search subagent syntheses
-```
-
-### `bartleby read`
-
-Process PDF and HTML documents into the project database.
-
-```bash
-bartleby read --files <path> [options]
+bartleby scribe --files <path> [options]
 ```
 
 | Option | Description |
-|--------|-------------|
-| `--files <path>` | Path to a file or directory of PDFs/HTML (required) |
+| --- | --- |
+| `--files <path>` | Path to a file or directory of supported documents (required) |
 | `--project <name>` | Target project (defaults to active) |
-| `--max-workers <n>` | Worker threads (default: from config) |
 | `--model <name>` | Override LLM model for summarization |
-| `--provider <name>` | Override LLM provider (`anthropic` or `openai`) |
-| `--docling` | Use Docling for layout-aware processing (see below) |
+| `--provider <name>` | Override LLM provider |
 | `--verbose` | Show debug output |
 
-**Processing pipeline (default):**
+**Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`.
 
-1. Converts HTML to PDF (if applicable) via Playwright/Chromium
-2. Extracts text from PDFs using PyMuPDF
-3. Falls back to OCR (Tesseract) for image-based pages
-4. Chunks text into segments (~800 characters with overlap)
-5. Generates vector embeddings (BAAI/bge-base-en-v1.5)
-6. Creates LLM-powered summaries for the first N pages (if configured)
-7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec)
+Ingestion runs sequentially. The embedding and Docling ML models are heavy, and small corpora don't benefit enough from parallelism to justify the warmup cost and complexity.
 
-**Processing pipeline (`--docling`):**
+**Pipeline:**
 
-The `--docling` flag swaps in IBM's [Docling](https://docling-project.github.io/docling/) library for layout-aware document understanding. Instead of treating all text equally, Docling detects headings, tables, code blocks, formulas, and reading order using ML models, then chunks along structural boundaries.
+1. Hashes and archives the source file at `archive/<hash>/<hash>.<ext>` (dedup by content).
+2. Converts and chunks:
+   - `.pdf`, `.html`, `.md`: [Docling](https://docling-project.github.io/docling/) — layout-aware, structural, with internal OCR for image-based PDFs. Chunks carry `section_heading` and `content_type`.
+   - `.txt`: read as UTF-8, simple character chunker (Docling has no text reader).
+3. Computes a `tiktoken` token count for the document.
+4. Generates vector embeddings (BAAI/bge-base-en-v1.5, 768 dims).
+5. Generates a one-shot, whole-document summary per document (if summary depth is `one-shot`). The summarizer enforces structured JSON output across all providers (anthropic, openai, ollama) via Pydantic — useful when an open-source model might otherwise drift into "Here's your summary:" preambles.
+6. For documents longer than `max_summarize_tokens`, the summarizer runs on the first N tokens only and a deterministic note is appended to the saved summary.
+7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec).
 
-1. Converts documents with Docling's `DocumentConverter` (ML-based layout analysis)
-2. Chunks using Docling's `HybridChunker` (respects document structure)
-3. Preserves heading hierarchy (`section_heading`) and content type (`content_type`: text/table/code/formula/list/picture) on each chunk
-4. Embeds chunks with heading context prepended for better semantic search
-5. Generates summaries from Docling's structured markdown export
+### `bartleby session`
 
-Documents are processed sequentially (Docling loads heavy ML models that shouldn't be duplicated across processes). Search results include `section_heading` and `content_type` fields when available.
-
-Supported file types: `.pdf`, `.html`, `.htm`
-
-### `bartleby write`
-
-Interactive research agent for investigating your document corpus.
-
-```bash
-bartleby write [options]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--project <name>` | Target project (defaults to active) |
-| `--verbose` | Show debug output and full tracebacks |
-
-**In-session commands:**
-
-| Command | Description |
-|---------|-------------|
-| `/save` | Save the last answer as `book/reports/report-YYYYMMDDHHmm.md` |
-| `/browse` | Show the sources table for the last answer |
-| `/browse <#>` | View a cited source passage in its surrounding context |
-| `Ctrl+C` | Exit the session |
-
-**Architecture:** The write command uses a two-agent architecture powered by [smolagents](https://github.com/huggingface/smolagents):
-
-- **Main agent** (10 steps, extendable) — reasons about your question, delegates search to the search subagent, takes notes, and synthesizes a final answer with citations.
-- **Search subagent** (5 steps) — a managed agent that handles all retrieval: hybrid search (FTS5 + semantic with reciprocal rank fusion), cross-encoder re-ranking, passage reading, and document summaries. Returns a synthesis with numbered references that the main agent can cite.
-
-This separation keeps the main agent's context window clean — it receives distilled findings rather than raw chunks. A shared reference registry tracks cited passages across both agents, enabling the `/browse` command and sources table.
-
-After each answer, a brief LLM-generated research summary describes what was searched and found, followed by a sources table and token usage stats.
-
-Each question-answer pair is appended to the session's `transcript.md`, and search subagent syntheses are auto-saved to `search_reports/`. Both agents can save curated notes to a shared `memory/` directory that persists across sessions — these notes are automatically injected as context for every new question.
-
-**Skills:** Agent tools are organized as self-describing skill directories under `bartleby/write/skills/`. Each skill has a `skill.md` (YAML frontmatter declaring agent assignments, inputs, and description) and a `tool.py` (implementation + factory). A registry function discovers and instantiates tools by agent name at startup.
-
-**Step extension:** If the agent needs more steps to complete research, it can request them interactively. You'll see a prompt like:
+Manage agent sessions. Sessions are first-class rows in the database; findings and audit log entries are tagged with a `session_id`.
 
 ```
-Agent requests 5 more steps: "Need to cross-reference 3 more documents"
-Allow? [y/N]:
+bartleby session start [--no-memory]   # Start a new session, print its ID and name
+bartleby session current               # Show the active session
+bartleby session end                   # End the active session (cosmetic; sessions don't really "end")
 ```
 
-### `bartleby book`
+**Most users will never run `bartleby session start`.** If no session is active when the skill calls a script, the skill auto-creates one with default settings (memory on). You only need to start a session explicitly if you want `--no-memory`.
 
-View research activity and findings from your project. Sessions are named with a date prefix and an LLM-generated topic slug (e.g., `2026-03-09_pm25-health-disparities`).
+The `--no-memory` flag creates a session that cannot read findings from prior sessions. This is enforced at the script level — the skill's `search` script returns no findings when called against a memory-off session, regardless of how the agent is prompted.
 
-```bash
-bartleby book [subcommand] [options]
-```
+### `bartleby embed`
 
-**Subcommands:**
-
-| Subcommand | Description |
-|------------|-------------|
-| *(none)* | Overview: session count, notes, reports, total tokens |
-| `sessions` | List all research sessions with stats |
-| `notes` | Show curated research notes from `memory/` |
-| `logs [--session <name>]` | Show tool usage and token breakdown |
-
-| Option | Description |
-|--------|-------------|
-| `--project <name>` | Target project (defaults to active) |
-| `--full` | (notes only) Show full note content instead of titles |
-
-**Example output:**
+Embed a string and print the resulting vector as JSON. Used by the skill's `search` script during semantic search; rarely called directly.
 
 ```
-$ bartleby book sessions
-                              Sessions
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┓
-┃ Session                            ┃ Time    ┃ Tools ┃  Tokens ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━━┩
-│ 2026-03-09_pm25-health-disparities │ 18m ago │    10 │ 2196.4k │
-│ 2026-03-08_environmental-justice   │ 3h ago  │    23 │ 6877.0k │
-│ 2026-03-08_air-quality-standards   │ 3h ago  │    10 │  336.2k │
-└────────────────────────────────────┴─────────┴───────┴─────────┘
+bartleby embed "your query here"
 ```
 
-Use `bartleby book logs --session <name>` to see a detailed timeline of tool calls for debugging or understanding agent behavior.
+### `bartleby logs`
+
+View the audit log for a session. Useful when an agent does something weird and you want to see what tools it called.
+
+```
+bartleby logs [--session <name>] [--limit <n>]
+```
+
+If no session is specified, shows the most recent session's logs.
 
 ---
 
-## Supported LLM providers
+## Supported LLM providers (for ingest summarization)
 
-| Provider | Default model | Vision support | Notes |
-|----------|--------------|----------------|-------|
-| Anthropic | `claude-sonnet-4-20250514` | Claude 3+ models | Requires API key |
-| OpenAI | `gpt-5-mini` | GPT-4+ vision models | Requires API key |
-| Ollama | `qwen3:8b` | No | Requires local server |
+| Provider | Default model | Notes |
+| --- | --- | --- |
+| Anthropic | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
+| OpenAI | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
+| Ollama | `gpt-oss:20b` | Local server. Structured output via the chat API's `format=` JSON schema. Pick a smaller model on smaller hardware. |
 
-Vision-capable models can use page images during summarization for better results. Non-vision models fall back to text-only.
+Summarization is text-only in v1 — we pass the document's extracted text to the model, not images. These providers govern summarization at ingest only. Research is whatever model your harness is running the `bartleby` skill against.
 
-## Search and retrieval
+---
 
-The search pipeline combines multiple retrieval strategies for high-quality results:
+## Running fully local (for sensitive work)
 
-1. **Hybrid search** — each query runs both FTS5 keyword search and semantic vector search (BAAI/bge-base-en-v1.5 embeddings), then merges results using Reciprocal Rank Fusion (RRF).
-2. **Cross-encoder re-ranking** — the top candidates from RRF are re-scored with a cross-encoder model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) for better precision. This runs automatically if the model loads successfully.
-3. **Progressive truncation** — when results exceed the token budget, lower-ranked results have their bodies truncated to the first sentence (with a `body_truncated` flag) rather than being discarded entirely. The agent can still see metadata and choose to read the full passage.
+Bartleby is built to run end-to-end without an internet connection. This is the path for journalists working with sensitive material:
 
-Chunks are ~800 characters (~200 tokens) with 100-character overlap, well within the embedding model's 512-token limit.
+1. **Ingest** — Run `bartleby ready`, set `provider: ollama`, and pick a model your hardware can run. Ingestion, embeddings, and summarization stay on the machine.
+2. **Research** — Install [Goose](https://goose-docs.ai/) (Block's open-source agent, Apache 2.0) and point it at the same local Ollama in its provider settings. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged.
+
+No prompts, source text, or research notes leave the machine.
+
+**A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them.
+
+| Hardware | What to expect |
+| --- | --- |
+| ~16 GB unified memory | `gpt-oss:20b` or `llama3.1:8b` works; spot-check the agent's citations. |
+| 32 GB+ | `llama3.3:70b` or `qwen2.5:32b` quantized — closer to trustworthy citation discipline. |
+| Under 16 GB | Either run ingest locally and use a cloud model for research, or accept noticeably worse citations. |
+
+The tradeoff between fully-local and cloud-research-with-local-ingest is real: privacy vs. citation reliability. Pick by project.
+
+---
+
+## What's the `bartleby` skill?
+
+A folder you drop into your agent harness that teaches the agent how to use this database. It exposes a small set of scripts (`search`, `read_document`, `save_finding`, etc.) and a `SKILL.md` that codifies an opinionated research methodology — what counts as evidence, when to read a full document vs. searching, how to cite.
+
+See [`./skill/README.md`](./skill/README.md) for the full story.
+
+---
+
+## License
+
+MIT.
+
+---
+
+## Anything else?
+
+"Ah Bartleby! Ah Humanity!"
