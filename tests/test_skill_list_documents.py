@@ -23,13 +23,35 @@ def test_list_documents_happy_path(seeded_project, capsys):
     by_name = {d["file_name"]: d for d in out["documents"]}
     assert by_name["alpha.pdf"]["has_summary"] is True
     assert by_name["alpha.pdf"]["chunk_count"] == 4
+    assert by_name["alpha.pdf"]["image_count"] == 0
     assert by_name["alpha.pdf"]["title"] == "Alpha"
     assert by_name["alpha.pdf"]["description"] == "Test summary of alpha document."
     assert by_name["beta.txt"]["has_summary"] is False
     assert by_name["beta.txt"]["chunk_count"] == 2
+    assert by_name["beta.txt"]["image_count"] == 0
     # Unsummarized doc reports title/description as null.
     assert by_name["beta.txt"]["title"] is None
     assert by_name["beta.txt"]["description"] is None
+
+
+def test_list_documents_reports_image_count(seeded_project, capsys):
+    from bartleby.db.connection import open_db
+    from tests._skill_fixtures import seed_image
+    conn = open_db(seeded_project["project"])
+    try:
+        seed_image(conn, seeded_project["doc_a"],
+                   file_hash="img-a-1", file_path="images/a1.jpg")
+        seed_image(conn, seeded_project["doc_a"],
+                   file_hash="img-a-2", file_path="images/a2.jpg",
+                   image_index_on_page=2)
+    finally:
+        conn.close()
+
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    by_name = {d["file_name"]: d for d in out["documents"]}
+    assert by_name["alpha.pdf"]["image_count"] == 2
+    assert by_name["beta.txt"]["image_count"] == 0
 
 
 def test_list_documents_limit_and_offset(seeded_project, capsys):

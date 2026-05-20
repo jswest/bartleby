@@ -37,7 +37,7 @@ def test_search_full_text_only_documents(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["modes"] == ["full-text"]
-    assert out["source_kinds"] == ["document"]
+    assert out["source_kinds"] == ["document", "image"]
     assert out["memory_excluded"] is False
     # "pm25" appears only in alpha doc, chunk 0.
     texts = [r["text"] for r in out["results"]]
@@ -310,3 +310,97 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["in_documents"] == [99999]
     assert out["results"] == []
+
+
+def test_search_includes_image_chunks_with_id_and_path(seeded_project, capsys):
+    from tests._skill_fixtures import seed_image
+    conn = open_db(seeded_project["project"])
+    try:
+        image_id = seed_image(
+            conn, seeded_project["doc_a"],
+            file_hash="img-hash-1", file_path="images/img-hash-1.jpg",
+            description="A bar chart showing pm25 levels over time.",
+            ocr_text="figure caption",
+        )
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "pm25",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    image_hits = [r for r in out["results"] if r["source_kind"] == "image"]
+    assert image_hits, "expected an image hit for 'pm25' in the description"
+    hit = image_hits[0]
+    assert hit["source_id"] == image_id
+    assert hit["image_id"] == image_id
+    assert hit["image_file_path"] == "images/img-hash-1.jpg"
+    # source_name renders the document anchor.
+    assert "image in alpha.pdf" in hit["source_name"]
+
+
+def test_search_in_documents_filters_image_chunks(seeded_project, capsys):
+    from tests._skill_fixtures import seed_image
+    conn = open_db(seeded_project["project"])
+    try:
+        seed_image(
+            conn, seeded_project["doc_a"],
+            file_hash="img-in-a", file_path="images/a.jpg",
+            description="alpha-only image",
+        )
+        seed_image(
+            conn, seeded_project["doc_b"],
+            file_hash="img-in-b", file_path="images/b.jpg",
+            description="beta-only image",
+        )
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "--images",
+        "--in-documents", str(seeded_project["doc_a"]),
+        "image",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["source_kinds"] == ["image"]
+    assert out["results"], "expected at least one image hit in doc_a's scope"
+    for r in out["results"]:
+        assert r["source_kind"] == "image"
+        assert "image in alpha.pdf" in r["source_name"]
+
+
+def test_search_image_source_name_notes_multiple_docs(seeded_project, capsys):
+    """An image attached to two documents shows '+1 other docs' in source_name."""
+    from tests._skill_fixtures import seed_image
+    from bartleby.db.chunks import ChunkInput, insert_image_chunks
+    conn = open_db(seeded_project["project"])
+    try:
+        image_id = seed_image(
+            conn, seeded_project["doc_a"],
+            file_hash="shared-img", file_path="images/shared.jpg",
+            description="a shared image referenced everywhere",
+        )
+        # Attach the same image to doc_b too.
+        conn.cursor().execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_b"], image_id, 1, 1),
+        )
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "shared",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    image_hits = [r for r in out["results"] if r["source_kind"] == "image"]
+    assert image_hits
+    name = image_hits[0]["source_name"]
+    assert "image in alpha.pdf" in name
+    assert "+1 other docs" in name

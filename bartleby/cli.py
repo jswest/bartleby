@@ -34,7 +34,8 @@ def main():
     pd.add_argument("-y", "--yes", action="store_true")
 
     scribe_parser = subparsers.add_parser(
-        "scribe", help="Ingest PDF, HTML, MD, and TXT documents into a project"
+        "scribe",
+        help="Ingest PDF, HTML, MD, TXT, and image files into a project",
     )
     scribe_parser.add_argument("--files", required=True, type=str)
     scribe_parser.add_argument("--project", type=str, default=None)
@@ -42,6 +43,11 @@ def main():
     scribe_parser.add_argument(
         "--provider", type=str,
         choices=["anthropic", "openai", "ollama"], default=None,
+    )
+    scribe_parser.add_argument(
+        "--backend", type=str,
+        choices=["pdfplumber", "docling"], default=None,
+        help="PDF backend; overrides the value in ~/.bartleby/config.yaml.",
     )
     scribe_parser.add_argument("--verbose", action="store_true")
 
@@ -106,6 +112,7 @@ def _scribe(args):
         files=args.files,
         model=args.model,
         provider=args.provider,
+        backend=args.backend,
         verbose=args.verbose,
     )
 

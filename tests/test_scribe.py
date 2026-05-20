@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from PIL import Image
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 import bartleby.config
 import bartleby.db.connection
@@ -10,7 +16,7 @@ import bartleby.project
 from bartleby.commands import scribe
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from bartleby.providers.base import DocumentSummary
+from bartleby.providers.base import DocumentSummary, ImageAnalysis
 
 
 def _emb(seed: float, n: int) -> list[list[float]]:
@@ -64,7 +70,44 @@ def mock_embed(monkeypatch):
     # Patch every import site (commands.scribe imports it directly).
     monkeypatch.setattr("bartleby.commands.scribe.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake)
+    monkeypatch.setattr("bartleby.ingest.images.embed_texts", fake)
     return fake
+
+
+class _StubVisionProvider:
+    name = "stub-vision"
+
+    def __init__(self, analysis: ImageAnalysis | None = None):
+        self.analysis = analysis or ImageAnalysis(
+            kind="scene", text="WELCOME", description="A test image.", notes="",
+        )
+        self.calls = 0
+
+    def summarize(self, *a, **k):  # protocol completeness
+        raise NotImplementedError
+
+    def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+        self.calls += 1
+        return self.analysis
+
+
+def _png_bytes(width=100, height=60, color=(20, 200, 50)) -> bytes:
+    im = Image.new("RGB", (width, height), color=color)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _pdf_with_image(path, image_bytes, *, text="Plenty of text on this page so it is not sparse. " * 3):
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 12)
+    t = c.beginText(72, 720)
+    for line in text.splitlines() or [text]:
+        t.textLine(line)
+    c.drawText(t)
+    c.drawImage(ImageReader(io.BytesIO(image_bytes)), 100, 400, width=200, height=100)
+    c.showPage()
+    c.save()
 
 
 def _write_txt(path, content):
@@ -164,6 +207,169 @@ def test_scribe_writes_summary_when_provider_configured(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='summary'"
         ).fetchone()[0]
         assert sum_chunks == 1
+    finally:
+        conn.close()
+
+
+def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100,
+            "ocr_min_confidence": 30,
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: vision,
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    scribe.main(project="test_proj", files=str(pdf))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # One document row, with chunks tagged content_type='text'.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        n_doc_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0]
+        assert n_doc_chunks >= 1
+        # Embedded image processed: rows in images + document_images, plus
+        # one image chunk per non-empty analysis field.
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] >= 1
+        assert cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0] >= 1
+        n_image_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0]
+        # Stub vision returns text='WELCOME' + description='A test image.'
+        assert n_image_chunks == 2
+        # Vision provider called at least once for the embedded image.
+        assert vision.calls >= 1
+    finally:
+        conn.close()
+
+
+def test_scribe_dedupes_identical_images_across_documents(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100,
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: vision,
+    )
+
+    # Two distinct PDFs, both containing the same image (same byte content).
+    image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
+    pdf_a = tmp_path / "a.pdf"
+    pdf_b = tmp_path / "b.pdf"
+    _pdf_with_image(pdf_a, image_bytes, text="Doc A text " * 12)
+    _pdf_with_image(pdf_b, image_bytes, text="Doc B text " * 12)
+
+    scribe.main(project="test_proj", files=str(pdf_a))
+    calls_after_first = vision.calls
+    scribe.main(project="test_proj", files=str(pdf_b))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Two documents, ONE shared image row, TWO join rows.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+    # Second pass made no additional VLM calls — the dedupe is real.
+    assert vision.calls == calls_after_first
+
+
+def test_scribe_ingests_standalone_image_file(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: vision,
+    )
+
+    img = tmp_path / "photo.png"
+    img.write_bytes(_png_bytes())
+
+    scribe.main(project="test_proj", files=str(img))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        # No document-kind chunks for a standalone image.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0] == 0
+        # But image chunks were written and joined.
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        n_image_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0]
+        assert n_image_chunks == 2
+        # document_images row has NULL page_number for standalone files.
+        row = cur.execute(
+            "SELECT page_number, image_index_on_page FROM document_images"
+        ).fetchone()
+        assert row == (None, 0)
+    finally:
+        conn.close()
+
+
+def test_scribe_skips_image_when_no_vision_provider(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {"summary_depth": "none"},
+    )
+    img = tmp_path / "photo.png"
+    img.write_bytes(_png_bytes())
+
+    scribe.main(project="test_proj", files=str(img))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # No document was created; the file was skipped with a warning.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
     finally:
         conn.close()
 

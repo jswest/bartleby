@@ -1,7 +1,8 @@
-"""Convert + chunk facade.
+"""Convert + chunk facade for non-PDF, non-image files.
 
-Dispatches to Docling (PDF / HTML / MD) or the plain-text path (TXT) and
-returns a uniform shape the orchestrator can hand to the embedder.
+PDFs are dispatched by ``bartleby.commands.scribe`` directly to the pdfplumber
+or docling backends; standalone image files go through the image pipeline.
+This module covers HTML / Markdown (via docling) and plain text.
 """
 
 from __future__ import annotations
@@ -14,9 +15,13 @@ from bartleby.ingest import docling as docling_pipeline
 from bartleby.ingest import text as text_pipeline
 
 
-DOCLING_EXTENSIONS = {".pdf", ".html", ".htm", ".md"}
+PDF_EXTENSIONS = {".pdf"}
+DOCLING_ONLY_EXTENSIONS = {".html", ".htm", ".md"}     # docling is the only converter
 TEXT_EXTENSIONS = {".txt"}
-SUPPORTED_EXTENSIONS = DOCLING_EXTENSIONS | TEXT_EXTENSIONS
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
+SUPPORTED_EXTENSIONS = (
+    PDF_EXTENSIONS | DOCLING_ONLY_EXTENSIONS | TEXT_EXTENSIONS | IMAGE_EXTENSIONS
+)
 
 # Soft cap for agent-authored markdown chunks. Picked to stay well under the
 # embedder's 512-token max sequence; characters are a rough proxy.
@@ -39,7 +44,7 @@ class ConversionResult:
 
 def convert_and_chunk(path: Path) -> ConversionResult:
     ext = path.suffix.lower()
-    if ext in DOCLING_EXTENSIONS:
+    if ext in DOCLING_ONLY_EXTENSIONS:
         result = docling_pipeline.convert(path)
         rows = [
             ChunkRow(text=c.text, section_heading=c.section_heading,

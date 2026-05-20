@@ -8,6 +8,7 @@ Output:
         "title": str|null, "description": str|null,
         "page_count": int|null, "token_count": int|null,
         "has_summary": bool, "chunk_count": int,
+        "image_count": int,                 # distinct images attached to this doc
         "created_at": str,
       }, ...],
       "total": int
@@ -15,6 +16,8 @@ Output:
 
 ``title`` and ``description`` come from the document's summary row and are
 null until one is written (either at ingest time or via ``save_summary``).
+``chunk_count`` counts text-track chunks (``source_kind='document'``); image
+chunks live under ``source_kind='image'`` and are surfaced via ``image_count``.
 """
 
 from __future__ import annotations
@@ -40,12 +43,16 @@ def work(*, conn, args, session_id) -> dict:
         "SELECT d.document_id, d.file_name, d.page_count, d.token_count, d.created_at, "
         "       s.title AS summary_title, s.description AS summary_description, "
         "       (s.summary_id IS NOT NULL) AS has_summary, "
-        "       COALESCE(cc.n, 0) AS chunk_count "
+        "       COALESCE(cc.n, 0) AS chunk_count, "
+        "       COALESCE(ic.n, 0) AS image_count "
         "FROM documents d "
         "LEFT JOIN summaries s USING (document_id) "
         "LEFT JOIN (SELECT source_id, COUNT(*) AS n FROM chunks "
         "           WHERE source_kind = 'document' GROUP BY source_id) cc "
         "  ON cc.source_id = d.document_id "
+        "LEFT JOIN (SELECT document_id, COUNT(DISTINCT image_id) AS n "
+        "           FROM document_images GROUP BY document_id) ic "
+        "  ON ic.document_id = d.document_id "
         "ORDER BY d.document_id LIMIT ? OFFSET ?",
         (args.limit, args.offset),
     )
@@ -60,10 +67,11 @@ def work(*, conn, args, session_id) -> dict:
             "token_count": token_count,
             "has_summary": bool(has_summary),
             "chunk_count": chunk_count,
+            "image_count": image_count,
             "created_at": created_at,
         }
         for doc_id, file_name, page_count, token_count, created_at,
-            title, description, has_summary, chunk_count in rows
+            title, description, has_summary, chunk_count, image_count in rows
     ]
 
     return {"documents": documents, "total": total}

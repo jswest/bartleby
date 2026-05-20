@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""search — keyword + semantic + RRF search across documents/summaries/findings.
+"""search — keyword + semantic + RRF search across documents/summaries/findings/images.
 
-See SPEC §6.2 for the full contract. Defaults: documents-only, both modes on,
-context=1, limit=20.
+Defaults: documents + images, both modes on, context=1, limit=20. Pass any of
+``--documents`` / ``--summaries`` / ``--findings`` / ``--images`` to override
+the default set.
 
 Output:
     {
@@ -21,6 +22,8 @@ Output:
         "rank": int,                  # 1-indexed within this query's results
         "score": float,               # raw RRF score (small, don't compare across queries)
         "normalized_score": float,    # top hit = 1.0, others scaled to that
+        # image hits only:
+        "image_id": int, "image_file_path": str,
       }, ...]
     }
 """
@@ -68,6 +71,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--documents", action="store_true")
     p.add_argument("--summaries", action="store_true")
     p.add_argument("--findings", action="store_true")
+    p.add_argument("--images", action="store_true")
     p.add_argument("--semantic", action="store_true")
     p.add_argument("--full-text", action="store_true", dest="full_text")
     p.add_argument(
@@ -95,7 +99,9 @@ def _resolve_source_kinds(args: argparse.Namespace) -> list[str]:
         explicit.append("summary")
     if args.findings:
         explicit.append("finding")
-    return explicit or ["document"]
+    if args.images:
+        explicit.append("image")
+    return explicit or ["document", "image"]
 
 
 def _resolve_modes(args: argparse.Namespace) -> list[str]:
@@ -155,23 +161,34 @@ def _build_scope(
 
     Without ``in_documents``, every requested kind is unrestricted.
     With ``in_documents``: 'document' is restricted to those ids; 'summary'
-    is restricted to summaries whose document_id is in those ids; 'finding'
-    is excluded entirely (findings aren't tied to documents).
+    is restricted to summaries whose document_id is in those ids; 'image' is
+    restricted to images linked to those documents via ``document_images``;
+    'finding' is excluded entirely (findings aren't tied to documents).
     """
     if in_documents is None:
         return {kind: None for kind in source_kinds}
 
+    placeholders = ",".join("?" * len(in_documents))
+    cur = conn.cursor()
     scope: dict[str, list[int] | None] = {}
     if "document" in source_kinds:
         scope["document"] = list(in_documents)
     if "summary" in source_kinds:
-        placeholders = ",".join("?" * len(in_documents))
-        rows = conn.cursor().execute(
-            f"SELECT summary_id FROM summaries "
-            f"WHERE document_id IN ({placeholders})",
-            in_documents,
-        )
-        scope["summary"] = [row[0] for row in rows]
+        scope["summary"] = [
+            row[0] for row in cur.execute(
+                f"SELECT summary_id FROM summaries "
+                f"WHERE document_id IN ({placeholders})",
+                in_documents,
+            )
+        ]
+    if "image" in source_kinds:
+        scope["image"] = [
+            row[0] for row in cur.execute(
+                f"SELECT DISTINCT image_id FROM document_images "
+                f"WHERE document_id IN ({placeholders})",
+                in_documents,
+            )
+        ]
     return scope
 
 
@@ -342,6 +359,9 @@ def work(*, conn, args, session_id) -> dict:
         )
     }
     names = source_names(conn, {(r[1], r[2]) for r in rows.values()})
+    image_paths = _image_paths(
+        conn, [r[2] for r in rows.values() if r[1] == "image"]
+    )
 
     top_score = scored[0][1]
     results = []
@@ -350,7 +370,7 @@ def work(*, conn, args, session_id) -> dict:
         before, after = _fetch_context(
             conn, source_kind, source_id, chunk_index, args.context
         )
-        results.append({
+        hit = {
             "chunk_id": chunk_id,
             "source_kind": source_kind,
             "source_id": source_id,
@@ -364,9 +384,24 @@ def work(*, conn, args, session_id) -> dict:
             "rank": rank,
             "score": score,
             "normalized_score": score / top_score,
-        })
+        }
+        if source_kind == "image":
+            hit["image_id"] = source_id
+            hit["image_file_path"] = image_paths.get(source_id, "")
+        results.append(hit)
 
     return _response(results)
+
+
+def _image_paths(conn, image_ids: list[int]) -> dict[int, str]:
+    if not image_ids:
+        return {}
+    placeholders = ",".join("?" * len(image_ids))
+    rows = conn.cursor().execute(
+        f"SELECT image_id, file_path FROM images WHERE image_id IN ({placeholders})",
+        image_ids,
+    )
+    return {row[0]: row[1] for row in rows}
 
 
 def main(argv: list[str] | None = None) -> None:

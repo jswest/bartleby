@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+
 from anthropic import Anthropic
 from pydantic import ValidationError
 
-from bartleby.providers.base import DocumentSummary
-from bartleby.providers.prompt import build_summary_messages
+from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.prompt import (
+    IMAGE_ANALYSIS_INSTRUCTIONS,
+    build_summary_messages,
+)
 
 
-_TOOL_NAME = "save_summary"
+_SUMMARY_TOOL = "save_summary"
+_IMAGE_TOOL = "save_image_analysis"
 
 
 class AnthropicProvider:
@@ -32,22 +38,58 @@ class AnthropicProvider:
             temperature=temperature,
             messages=messages,
             tools=[{
-                "name": _TOOL_NAME,
+                "name": _SUMMARY_TOOL,
                 "description": "Save the document summary.",
                 "input_schema": DocumentSummary.model_json_schema(),
             }],
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
+            tool_choice={"type": "tool", "name": _SUMMARY_TOOL},
         )
+        return _extract_tool_input(response, _SUMMARY_TOOL, DocumentSummary)
 
-        for block in response.content:
-            if getattr(block, "type", None) == "tool_use" and block.name == _TOOL_NAME:
-                try:
-                    return DocumentSummary.model_validate(block.input)
-                except ValidationError as e:
-                    raise RuntimeError(
-                        f"Anthropic returned tool input that failed schema validation: {e}"
-                    ) from e
-
-        raise RuntimeError(
-            f"Anthropic response did not include the {_TOOL_NAME!r} tool call."
+    def analyze_image(
+        self,
+        image_bytes: bytes,
+        *,
+        model: str,
+        media_type: str = "image/jpeg",
+    ) -> ImageAnalysis:
+        b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+        response = self._client.messages.create(
+            model=model,
+            max_tokens=2048,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64,
+                        },
+                    },
+                    {"type": "text", "text": IMAGE_ANALYSIS_INSTRUCTIONS},
+                ],
+            }],
+            tools=[{
+                "name": _IMAGE_TOOL,
+                "description": "Save the image analysis.",
+                "input_schema": ImageAnalysis.model_json_schema(),
+            }],
+            tool_choice={"type": "tool", "name": _IMAGE_TOOL},
         )
+        return _extract_tool_input(response, _IMAGE_TOOL, ImageAnalysis)
+
+
+def _extract_tool_input(response, tool_name, model_cls):
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
+            try:
+                return model_cls.model_validate(block.input)
+            except ValidationError as e:
+                raise RuntimeError(
+                    f"Anthropic tool {tool_name!r} input failed schema validation: {e}"
+                ) from e
+    raise RuntimeError(
+        f"Anthropic response did not include the {tool_name!r} tool call."
+    )

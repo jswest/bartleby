@@ -25,6 +25,7 @@ Concrete examples:
 bartleby skill list_documents
 bartleby skill search "PM2.5 health disparities" --limit 10
 bartleby skill search "monitoring gaps" --in-documents 4,7
+bartleby skill search "bar chart" --documents --images   # text + image chunks only
 bartleby skill read_chunks --document 4 --offset 0 --limit 20
 bartleby skill read_chunks --chunks 4192,4188,9201
 bartleby skill read_document --document 4 --summary
@@ -48,9 +49,9 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 
 | Script | When to call it |
 | --- | --- |
-| `list_documents` | Get the lay of the land — file names, titles, descriptions, summary status, sizes. Run this first when you don't know the corpus. The `title` and `description` come from each document's summary and are the fastest way to triage what's in the corpus. |
-| `search "<query>"` | Find chunks that match. Defaults: documents only, semantic + full-text combined via RRF, one chunk of context on each side of each hit. `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--in-documents 12,38` scopes the search to specific documents (and their summaries; findings are dropped). `--limit`, `--context`, `--full-text`, `--semantic` are the other useful knobs. |
-| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. |
+| `list_documents` | Get the lay of the land — file names, titles, descriptions, summary status, chunk + image counts. Run this first when you don't know the corpus. The `title` and `description` come from each document's summary and are the fastest way to triage what's in the corpus. `image_count > 0` tells you a document has analyzed figures/photos available via `search --images`. |
+| `search "<query>"` | Find chunks that match. Defaults: documents + images, semantic + full-text combined via RRF, one chunk of context on each side of each hit. `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--images` keeps image chunks in the result (already on by default — pass it alongside another flag like `--documents` to whittle down). `--in-documents 12,38` scopes the search to those documents' text chunks, their summaries' chunks, and the images attached to them; findings are dropped. `--limit`, `--context`, `--full-text`, `--semantic` are the other useful knobs. |
+| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. Works for image chunks too. |
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. |
 | `save_finding --title <t> --description <d> --body-file <path> [--citations <ids>]` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook that future agents will see when triaging findings. `--citations` is a comma-separated list of `chunk_id`s — the chunks your conclusion actually rests on. |
@@ -80,6 +81,17 @@ Each result carries three signals you can use to triage:
 - `context_after` — the chunks immediately after the hit, in document order. Same rule.
 
 The context arrays exist because Docling sometimes produces small chunks and the hit alone may not be self-explanatory. Reading them is fine; presenting them as your matched evidence is not. If you discover the passage you actually want is in `context_before` or `context_after`, run a fresh `search` whose hit lands on that chunk, then cite it properly.
+
+## Image chunks
+
+Some corpora include image-derived chunks (figures, photos, scanned pages, standalone image files). Search returns them alongside text chunks. They carry an extra `image_id` and `image_file_path` so you can validate against the source image directly if needed. `source_name` reads `image in <filename>, p.<N>` when the image is embedded in a PDF.
+
+Two `content_type` values distinguish image chunks:
+
+- `image_ocr` — verbatim text the model transcribed from the image. Treat this like primary source text; cite it the same way.
+- `image_description` — the model's scene description. **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
+
+Image chunks often have empty `context_before` / `context_after` arrays — most images produce only one or two chunks, so there are no neighbors.
 
 ## Memory rules
 

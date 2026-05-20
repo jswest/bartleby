@@ -36,8 +36,21 @@ class DoclingResult:
     chunks: list[DoclingChunk]
 
 
+def _require_docling():
+    try:
+        import docling  # noqa: F401
+    except ImportError as e:
+        raise RuntimeError(
+            "The 'docling' extra is required for this code path "
+            "(install with `uv pip install 'bartleby[docling]'` or "
+            "`pip install 'bartleby[docling]'`). Either install it or switch "
+            "to the pdfplumber backend for PDFs."
+        ) from e
+
+
 @lru_cache(maxsize=1)
 def _converter():
+    _require_docling()
     from docling.document_converter import DocumentConverter
 
     return DocumentConverter()
@@ -45,6 +58,7 @@ def _converter():
 
 @lru_cache(maxsize=1)
 def _chunker():
+    _require_docling()
     from docling.chunking import HybridChunker
 
     return HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=DOCLING_MAX_TOKENS)

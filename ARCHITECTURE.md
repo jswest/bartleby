@@ -19,9 +19,13 @@ Things that look local but aren't. Code review should catch violations.
 
 ### Polymorphic-chunks discipline
 
-`chunks.source_id` is not a foreign key to any single table — it references `documents`, `summaries`, or `findings` depending on `source_kind`. SQLite can't enforce this; the `CHECK (source_kind IN (...))` constraint blocks typos but not kind/id mismatches.
+`chunks.source_id` is not a foreign key to any single table — it references `documents`, `summaries`, `findings`, or `images` depending on `source_kind`. SQLite can't enforce this; the `CHECK (source_kind IN (...))` constraint blocks typos but not kind/id mismatches.
 
-**All writes to `chunks` go through `bartleby/db/chunks.py` typed helpers** (`insert_document_chunks`, `insert_summary_chunks`, `insert_finding_chunks`, `delete_chunks_for`). The chokepoint exists so the `source_kind` is hardcoded per function. Direct `INSERT INTO chunks` anywhere else is a bug.
+**All writes to `chunks` go through `bartleby/db/chunks.py` typed helpers** (`insert_document_chunks`, `insert_summary_chunks`, `insert_finding_chunks`, `insert_image_chunks`, `delete_chunks_for`). The chokepoint exists so the `source_kind` is hardcoded per function. Direct `INSERT INTO chunks` anywhere else is a bug.
+
+### Image content_type discipline
+
+Image chunks carry one of two `content_type` values: `image_ocr` (verbatim transcription, treat as primary source) or `image_description` (model interpretation of visual content, cite as interpretation). The split is enforced by `bartleby/ingest/images.py:analysis_to_chunk_inputs` and surfaced to agents via SKILL.md. Both `chunks` rows for an image point at the same `image_id` via `chunks.source_id`; the document anchor lives in `document_images` (one join row per occurrence).
 
 ### Summarizer structured-output contract
 
@@ -41,7 +45,9 @@ When a document exceeds `max_summarize_tokens`, the summary's `text` field gets 
 
 - Skill scripts print one JSON object to stdout, exit non-zero on error with `{"error", "code"}`. Prose/progress goes to stderr only.
 - Embedding model: `BAAI/bge-base-en-v1.5` (768 dims, 512 token max). FTS5 tokenizer: `unicode61 remove_diacritics 2`.
-- Provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `gpt-oss:20b`.
+- LLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `gpt-oss:20b`.
+- VLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen2.5-vl:7b`.
+- PDF backends: `pdfplumber` (default — fast text + page-render image extraction) and `docling` (opt-in via config or `--backend docling` — better structural extraction at higher cost). HTML/MD always go through Docling; if you have an HTML/MD corpus, `docling` must be installed.
 - Dependency management: `uv` (not pip/venv). Run with `uv run python`.
 
 ## Deferred (potential v2)
@@ -68,6 +74,7 @@ Settled judgment calls, kept here so we don't re-derive them.
 - **Query embedding**: skill shells out to `bartleby embed` via list-form `subprocess.run`. No shell escaping. No daemon.
 - **`documents.token_count`**: computed via `tiktoken.cl100k_base`. Approximate across providers; acceptable for a `--force` gate.
 - **Schema v2 — title/description on summaries and findings**: `summaries.{title, description}` and `findings.description` (all NOT NULL) so `list_documents` and finding browsing aren't filename-only. Summarizer returns all three fields in one structured-output call — we don't pay for the document text three times.
+- **Schema v3 — image pipeline**: added `images` (one row per unique image, deduped on `file_hash`) and `document_images` (one row per occurrence, with `page_number` + `image_index_on_page`). `chunks.source_kind` gains `'image'`. New content_type values: `'ocr'` for Tesseract-recovered scanned-page text (stored under `source_kind='document'`); `'image_ocr'` and `'image_description'` for VLM outputs (stored under `source_kind='image'`). Default PDF backend swapped from Docling to pdfplumber for ~10x faster text-PDF ingest.
 - **`search --in-documents`**: scopes a search to those documents' chunks and their summaries' chunks. Findings dropped when set (they're not tied to documents).
 - **`search` triage signals**: each hit carries `rank` (1-indexed) and `normalized_score` (top hit = 1.0). Raw RRF `score` is tiny by design (~`0.015–0.033`) and only comparable within one query.
 - **`read_chunks --chunks <ids>`**: second mode for direct chunk lookup by id, mutually exclusive with `--document`.

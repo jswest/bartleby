@@ -90,7 +90,9 @@ def test_project_info_reports_v1_stats(projects_root):
     assert info["document_count"] == 1
     assert info["session_count"] == 1
     assert info["finding_count"] == 1
-    assert info["chunk_counts"] == {"document": 2, "summary": 0, "finding": 0}
+    assert info["chunk_counts"] == {
+        "document": 2, "summary": 0, "finding": 0, "image": 0,
+    }
 
 
 def test_delete_project_removes_dir_and_clears_active(projects_root):

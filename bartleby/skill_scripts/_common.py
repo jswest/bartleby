@@ -36,8 +36,10 @@ def source_names(
     """Resolve display names for ``(source_kind, source_id)`` pairs in one batch.
 
     Documents → file_name; summaries → ``"summary of <file_name>"``; findings →
-    finding title. Pairs that don't resolve (deleted underneath us) are simply
-    absent from the returned dict.
+    finding title; images → ``"image in <file_name>, p.<N>"`` (with
+    ``" (+K other docs)"`` if the image appears in multiple documents).
+    Pairs that don't resolve (deleted underneath us) are simply absent from
+    the returned dict.
     """
     by_kind: dict[str, list[int]] = {}
     for kind, sid in source_keys:
@@ -69,4 +71,35 @@ def source_names(
                 ids,
             ):
                 out[("finding", fid)] = title
+        elif kind == "image":
+            out.update(_image_source_names(cur, ids, ph))
+    return out
+
+
+def _image_source_names(cur, ids, ph) -> dict[tuple[str, int], str]:
+    """Build per-image display names from `document_images`.
+
+    Picks the lowest (document_id, page_number) per image as the primary
+    occurrence and appends ``"(+K other docs)"`` if the image is shared
+    across multiple documents.
+    """
+    rows = list(cur.execute(
+        f"SELECT di.image_id, di.document_id, di.page_number, d.file_name "
+        f"FROM document_images di "
+        f"JOIN documents d ON d.document_id = di.document_id "
+        f"WHERE di.image_id IN ({ph}) "
+        f"ORDER BY di.image_id, di.document_id, di.page_number",
+        ids,
+    ))
+    by_image: dict[int, list[tuple[int, int | None, str]]] = {}
+    for image_id, doc_id, page_number, file_name in rows:
+        by_image.setdefault(image_id, []).append((doc_id, page_number, file_name))
+
+    out: dict[tuple[str, int], str] = {}
+    for image_id, occurrences in by_image.items():
+        primary_doc, primary_page, primary_name = occurrences[0]
+        page_str = f", p.{primary_page}" if primary_page is not None else ""
+        n_other_docs = len({d for d, _, _ in occurrences}) - 1
+        suffix = f" (+{n_other_docs} other docs)" if n_other_docs > 0 else ""
+        out[("image", image_id)] = f"image in {primary_name}{page_str}{suffix}"
     return out

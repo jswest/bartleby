@@ -1,0 +1,117 @@
+"""pdfplumber-based PDF converter.
+
+Replaces Docling as the default backend (Docling stays available as opt-in).
+Cheap text extraction; embedded images come out via page-render-crop, which
+sidesteps the PDF image-codec dance (FlateDecode raw rasters etc.) at the
+cost of one page render per page.
+
+Returns enough information for ``scribe`` to:
+  - chunk text-extractable pages via the character chunker
+  - pump embedded images through the image pipeline
+  - fall back to Tesseract or the VLM on sparse pages (using the saved page
+    render bytes — no second render needed)
+"""
+
+from __future__ import annotations
+
+import io
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pdfplumber
+from PIL import Image
+
+
+PAGE_RENDER_DPI = 150
+
+
+@dataclass
+class EmbeddedImage:
+    image_index_on_page: int   # 1-indexed; 0 reserved for full-page render
+    png_bytes: bytes           # PNG of the rendered crop
+
+
+@dataclass
+class PdfPage:
+    page_number: int           # 1-indexed
+    text: str                  # extracted text (may be empty or sparse)
+    is_sparse: bool
+    page_render_png: bytes | None  # populated only when is_sparse
+    embedded_images: list[EmbeddedImage] = field(default_factory=list)
+
+
+@dataclass
+class PdfResult:
+    full_text: str             # all page texts joined with form-feed (\f)
+    page_count: int
+    pages: list[PdfPage]
+
+
+def convert(path: Path, *, sparse_text_threshold: int) -> PdfResult:
+    pages: list[PdfPage] = []
+    full_text_parts: list[str] = []
+
+    with pdfplumber.open(str(path)) as pdf:
+        for ix, page in enumerate(pdf.pages):
+            page_number = ix + 1
+            raw_text = page.extract_text() or ""
+            text = raw_text.strip()
+            is_sparse = len(text) < sparse_text_threshold
+
+            page_render_png = None
+            embedded_images: list[EmbeddedImage] = []
+
+            if is_sparse or page.images:
+                rendered = page.to_image(resolution=PAGE_RENDER_DPI).original
+                if is_sparse:
+                    page_render_png = _to_png_bytes(rendered)
+                if page.images:
+                    embedded_images = _crop_embedded_images(rendered, page)
+
+            full_text_parts.append(raw_text)
+            pages.append(PdfPage(
+                page_number=page_number,
+                text=text,
+                is_sparse=is_sparse,
+                page_render_png=page_render_png,
+                embedded_images=embedded_images,
+            ))
+
+        page_count = len(pdf.pages)
+
+    return PdfResult(
+        full_text="\n\f\n".join(full_text_parts),
+        page_count=page_count,
+        pages=pages,
+    )
+
+
+def _to_png_bytes(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=False)
+    return buf.getvalue()
+
+
+def _crop_embedded_images(rendered: Image.Image, page) -> list[EmbeddedImage]:
+    """Crop each pdfplumber `page.images` entry out of the rendered page.
+
+    pdfplumber image bboxes are in PDF points (1 pt = 1/72 in); the rendered
+    image is at PAGE_RENDER_DPI, so points → pixels = DPI/72.
+    """
+    scale = PAGE_RENDER_DPI / 72.0
+    page_w, page_h = rendered.size
+    out: list[EmbeddedImage] = []
+    for i, im in enumerate(page.images):
+        x0 = max(0.0, im["x0"]) * scale
+        y0 = max(0.0, im["top"]) * scale
+        x1 = min(page.width, im["x1"]) * scale
+        y1 = min(page.height, im["bottom"]) * scale
+        # Skip zero-area or out-of-bounds crops rather than letting PIL error.
+        if x1 <= x0 or y1 <= y0 or x0 >= page_w or y0 >= page_h:
+            continue
+        crop = rendered.crop((x0, y0, min(x1, page_w), min(y1, page_h)))
+        out.append(EmbeddedImage(
+            image_index_on_page=i + 1,
+            png_bytes=_to_png_bytes(crop),
+        ))
+    return out

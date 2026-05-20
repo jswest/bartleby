@@ -1,14 +1,15 @@
-"""Bartleby v1 SQLite schema.
+"""Bartleby SQLite schema.
 
-The DDL string here is the canonical schema for v1 (see SPEC.md §3).
-Run it via ``init_db`` in ``bartleby.db.connection``.
+The DDL string here is the canonical schema; run it via ``init_db`` in
+``bartleby.db.connection``. See ``ARCHITECTURE.md`` for the polymorphic-chunks
+invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 EMBEDDING_DIM = 768
 
-ALLOWED_SOURCE_KINDS = ("document", "summary", "finding")
+ALLOWED_SOURCE_KINDS = ("document", "summary", "finding", "image")
 
 DDL = """
 CREATE TABLE meta (
@@ -53,9 +54,30 @@ CREATE TABLE findings (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE images (
+    image_id INTEGER PRIMARY KEY,
+    file_hash TEXT NOT NULL UNIQUE,
+    file_path TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    analysis_json TEXT,
+    analysis_model TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE document_images (
+    document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    image_id INTEGER NOT NULL REFERENCES images(image_id) ON DELETE CASCADE,
+    page_number INTEGER,
+    image_index_on_page INTEGER,
+    PRIMARY KEY (document_id, image_id, page_number, image_index_on_page)
+);
+
+CREATE INDEX idx_document_images_image ON document_images(image_id);
+
 CREATE TABLE chunks (
     chunk_id INTEGER PRIMARY KEY,
-    source_kind TEXT NOT NULL CHECK (source_kind IN ('document', 'summary', 'finding')),
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('document', 'summary', 'finding', 'image')),
     source_id INTEGER NOT NULL,
     chunk_index INTEGER NOT NULL,
     text TEXT NOT NULL,

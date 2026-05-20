@@ -11,6 +11,7 @@ from bartleby.db.chunks import (
     delete_chunks_for,
     insert_document_chunks,
     insert_finding_chunks,
+    insert_image_chunks,
     insert_summary_chunks,
 )
 from bartleby.db.connection import init_db, open_db
@@ -65,6 +66,8 @@ def test_all_tables_exist(conn):
         "findings",
         "finding_citations",
         "chunks",
+        "images",
+        "document_images",
         "audit_logs",
         # virtual tables show up as type='table' too
         "chunks_fts",
@@ -266,3 +269,128 @@ def test_audit_log_set_null_on_session_delete(conn):
     cur.execute("DELETE FROM sessions WHERE session_id = ?", (sid,))
     row = cur.execute("SELECT session_id FROM audit_logs").fetchone()
     assert row == (None,)
+
+
+def _insert_image(conn, file_hash: str = "ih") -> int:
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO images (file_hash, file_path, width, height, "
+        "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
+        (file_hash, f"images/{file_hash}.jpg", 800, 600,
+         '{"kind":"scene","text":"","description":"a cat","notes":""}',
+         "fake-vlm"),
+    )
+    return conn.last_insert_rowid()
+
+
+def test_image_chunks_get_image_source_kind(conn):
+    cur = conn.cursor()
+    img_id = _insert_image(conn, "ihash1")
+    insert_image_chunks(conn, img_id, [
+        ChunkInput(text="a cat", embedding=_emb(), chunk_index=0,
+                   content_type="image_description"),
+        ChunkInput(text="WELCOME", embedding=_emb(0.1), chunk_index=1,
+                   content_type="image_ocr"),
+    ])
+    rows = list(cur.execute(
+        "SELECT source_kind, source_id, content_type FROM chunks ORDER BY chunk_index"
+    ))
+    assert rows == [
+        ("image", img_id, "image_description"),
+        ("image", img_id, "image_ocr"),
+    ]
+    # FTS and vec stay in sync.
+    assert cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == 2
+    assert cur.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 2
+
+
+def test_delete_chunks_for_image(conn):
+    cur = conn.cursor()
+    img_id = _insert_image(conn, "ihash2")
+    insert_image_chunks(conn, img_id, [
+        ChunkInput(text="x", embedding=_emb(), chunk_index=0),
+    ])
+    assert delete_chunks_for(conn, "image", img_id) == 1
+    assert cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    assert cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == 0
+    assert cur.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == 0
+
+
+def test_images_file_hash_unique(conn):
+    _insert_image(conn, "dup")
+    with pytest.raises(apsw.ConstraintError):
+        _insert_image(conn, "dup")
+
+
+def test_document_images_pk_prevents_dup_occurrence(conn):
+    cur = conn.cursor()
+    doc_id = _insert_doc(conn, "dhash")
+    img_id = _insert_image(conn, "ihash3")
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (doc_id, img_id, 1, 0),
+    )
+    with pytest.raises(apsw.ConstraintError):
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, img_id, 1, 0),
+        )
+
+
+def test_document_images_allows_same_image_in_two_docs(conn):
+    cur = conn.cursor()
+    doc1 = _insert_doc(conn, "dhash1")
+    doc2 = _insert_doc(conn, "dhash2")
+    img_id = _insert_image(conn, "ihash4")
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (doc1, img_id, 1, 0),
+    )
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (doc2, img_id, 3, 2),
+    )
+    n = cur.execute(
+        "SELECT COUNT(*) FROM document_images WHERE image_id = ?", (img_id,)
+    ).fetchone()[0]
+    assert n == 2
+
+
+def test_document_images_cascades_on_document_delete(conn):
+    cur = conn.cursor()
+    doc_id = _insert_doc(conn, "dhash3")
+    img_id = _insert_image(conn, "ihash5")
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (doc_id, img_id, 1, 0),
+    )
+    cur.execute("DELETE FROM documents WHERE document_id = ?", (doc_id,))
+    n = cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0]
+    assert n == 0
+    # Image itself survives — it may belong to other documents.
+    assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+
+
+def test_document_images_cascades_on_image_delete(conn):
+    cur = conn.cursor()
+    doc_id = _insert_doc(conn, "dhash4")
+    img_id = _insert_image(conn, "ihash6")
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (doc_id, img_id, 1, 0),
+    )
+    cur.execute("DELETE FROM images WHERE image_id = ?", (img_id,))
+    n = cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0]
+    assert n == 0

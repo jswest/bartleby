@@ -29,10 +29,12 @@ A couple things to be aware of:
 ### Prerequisites
 
 ```
-brew install uv
+brew install uv tesseract
 ```
 
-That's it. Bartleby uses [Docling](https://docling-project.github.io/docling/) for document conversion, which bundles OCR and structural parsing — no separate Tesseract or Playwright install required.
+(`apt install tesseract-ocr` on Debian/Ubuntu; on Windows, use the official installer from UB Mannheim.)
+
+Tesseract is used for cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed. [Docling](https://docling-project.github.io/docling/) is available as an opt-in alternative backend (slower, but more structurally aware).
 
 ### Install Bartleby
 
@@ -43,6 +45,12 @@ uv tool install .
 ```
 
 This installs `bartleby` as a command-line tool in an isolated environment.
+
+To opt into the Docling backend (slower text extraction, but layout-aware; required for HTML/MD ingestion):
+
+```
+uv tool install '.[docling]'
+```
 
 For development:
 
@@ -62,15 +70,15 @@ See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
 
 ### A note on first-run latency
 
-The first time you run `bartleby scribe`, it will pause for several minutes while it downloads:
+The first time you run `bartleby scribe`, it will pause to download:
 
-- the Docling layout models (PDF table/structure detection, OCR weights),
 - the `BAAI/bge-base-en-v1.5` embedding model (~400 MB),
-- and the tokenizer assets that ride alongside both.
+- the tokenizer assets that ride alongside it,
+- and, if you opted into the `docling` backend, Docling's layout/OCR models on its first invocation.
 
-These are cached under `~/.cache/` and reused on every subsequent run, so the second ingest starts immediately. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model when it loads in a fresh process.
+These are cached under `~/.cache/` and reused on every subsequent run. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model.
 
-If you want to warm the caches before your first real ingest, run `bartleby embed "warm up"` once — that loads BGE — and `bartleby scribe --files <one small pdf>` once, which loads Docling.
+If you want to warm the caches before your first real ingest, run `bartleby embed "warm up"` once — that loads BGE.
 
 ---
 
@@ -98,7 +106,7 @@ This creates a project directory (foo in this case) and marks it active. Subsequ
 bartleby scribe --files /path/to/your/docs
 ```
 
-Point this at a file or directory of `.pdf`, `.html`, `.md`, or `.txt` files. Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. Everything goes into the project's SQLite database.
+Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image files (`.jpg`, `.png`, `.webp`, `.bmp`, `.tiff`). Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. With a vision provider configured, embedded images inside PDFs and standalone image files are also analyzed (OCR transcription + scene description) and chunked into the same searchable index. Everything goes into the project's SQLite database.
 
 ### 4. Start an agent session
 
@@ -116,26 +124,6 @@ bartleby session start --no-memory
 
 ## Architecture
 
-```
-                       ┌──────────────────┐
-                       │  bartleby ready  │
-                       │  bartleby scribe │   ← you, at the terminal
-                       └────────┬─────────┘
-                                │
-                                ▼
-                       ┌──────────────────┐
-                       │  SQLite database │
-                       │   (the contract) │
-                       └────────┬─────────┘
-                                │
-                                ▼
-                       ┌──────────────────┐
-                       │  bartleby skill  │   ← your agent, via your harness
-                       │  search / read / │
-                       │  save / cite     │
-                       └──────────────────┘
-```
-
 The CLI owns ingestion. The skill owns research. The database is the API between them. Each piece can be replaced independently as long as the schema contract holds.
 
 The database is self-describing — schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
@@ -146,8 +134,10 @@ The database is self-describing — schema version, embedding model, and `sqlite
 
 ```
 ~/.bartleby/projects/<name>/
-├── bartleby.db       # everything: chunks, summaries, findings, sessions, audit log
-└── archive/          # original PDF files, deduplicated by content hash
+├── bartleby.db       # everything: chunks, summaries, findings, sessions, audit log, images
+└── archive/          # original document files, dedup'd by content hash
+    ├── <doc_hash>/<doc_hash>.<ext>
+    └── images/<img_hash>.jpg   # extracted figures, scanned page renders, standalone images
 ```
 
 All queryable state lives in `bartleby.db`. Findings, audit logs, and agent-generated summaries are all stored as rows there — no sidecar files, no on-disk reports.
@@ -168,6 +158,12 @@ Interactive configuration wizard. Asks for:
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
+| PDF backend | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
+| Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
+| Vision provider | (off) | Optional VLM provider for image analysis: `anthropic`, `openai`, or `ollama` |
+| Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen2.5-vl:7b` |
+| Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |
+| Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
@@ -204,23 +200,27 @@ bartleby scribe --files <path> [options]
 | `--project <name>` | Target project (defaults to active) |
 | `--model <name>` | Override LLM model for summarization |
 | `--provider <name>` | Override LLM provider |
+| `--backend <name>` | Override PDF backend (`pdfplumber` or `docling`) |
 | `--verbose` | Show debug output |
 
-**Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`.
+**Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`).
 
-Ingestion runs sequentially. The embedding and Docling ML models are heavy, and small corpora don't benefit enough from parallelism to justify the warmup cost and complexity.
+Ingestion runs sequentially. The embedding model is heavy, and small corpora don't benefit enough from parallelism to justify the warmup cost and complexity.
 
 **Pipeline:**
 
 1. Hashes and archives the source file at `archive/<hash>/<hash>.<ext>` (dedup by content).
 2. Converts and chunks:
-   - `.pdf`, `.html`, `.md`: [Docling](https://docling-project.github.io/docling/) — layout-aware, structural, with internal OCR for image-based PDFs. Chunks carry `section_heading` and `content_type`.
-   - `.txt`: read as UTF-8, simple character chunker (Docling has no text reader).
+   - `.pdf`: pdfplumber by default — per-page text extraction; embedded images are extracted via page-render-crop. Pages whose extracted text is below `sparse_text_threshold` are treated as scanned: Tesseract OCR runs first (cheap), and only if confidence is below `ocr_min_confidence` does the page get routed to the VLM.
+   - `.pdf` with `--backend docling`: layout-aware, structural extraction with internal OCR for image-based PDFs.
+   - `.html`, `.htm`, `.md`: always Docling (requires the `[docling]` install).
+   - `.txt`: read as UTF-8, simple character chunker.
+   - Image files: routed directly to the VLM. OCR transcription and scene description are stored as separate chunks (`content_type='image_ocr'` and `'image_description'`).
 3. Computes a `tiktoken` token count for the document.
 4. Generates vector embeddings (BAAI/bge-base-en-v1.5, 768 dims).
-5. Generates a one-shot, whole-document summary per document (if summary depth is `one-shot`). The summarizer enforces structured JSON output across all providers (anthropic, openai, ollama) via Pydantic — useful when an open-source model might otherwise drift into "Here's your summary:" preambles.
+5. Generates a one-shot, whole-document summary per document (if summary depth is `one-shot`). The summarizer enforces structured JSON output across all providers (anthropic, openai, ollama) via Pydantic.
 6. For documents longer than `max_summarize_tokens`, the summarizer runs on the first N tokens only and a deterministic note is appended to the saved summary.
-7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec).
+7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec). Images dedupe at the byte level — the same icon embedded in five docs is one VLM call, not five.
 
 ### `bartleby session`
 
@@ -258,13 +258,24 @@ If no session is specified, shows the most recent session's logs.
 
 ## Supported LLM providers (for ingest summarization)
 
-| Provider | Default model | Notes |
-| --- | --- | --- |
-| Anthropic | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
-| OpenAI | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
-| Ollama | `gpt-oss:20b` | Local server. Structured output via the chat API's `format=` JSON schema. Pick a smaller model on smaller hardware. |
+| Provider | Default LLM | Default VLM | Notes |
+| --- | --- | --- | --- |
+| Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
+| OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
+| Ollama | `gpt-oss:20b` | `qwen2.5-vl:7b` | Local server. Structured output via the chat API's `format=` JSON schema. Pick a smaller model on smaller hardware. |
 
-Summarization is text-only in v1 — we pass the document's extracted text to the model, not images. These providers govern summarization at ingest only. Research is whatever model your harness is running the `bartleby` skill against.
+The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
+
+## Tech stack
+
+For readers who want to know what's actually under the hood before installing:
+
+- **Storage:** SQLite with FTS5 (full-text) and [`sqlite-vec`](https://github.com/asg017/sqlite-vec) (vector). One file per project.
+- **Embeddings:** [`BAAI/bge-base-en-v1.5`](https://huggingface.co/BAAI/bge-base-en-v1.5) via `sentence-transformers`. 768 dimensions, ~400 MB on first download.
+- **PDF text + image extraction:** [pdfplumber](https://github.com/jsvine/pdfplumber) (text per page, image bounding boxes), [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (page rendering for OCR + image crops).
+- **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
+- **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
+- **Opt-in alternative backend:** [Docling](https://docling-project.github.io/docling/) for layout-aware extraction with internal OCR. Activate via `--backend docling`. Required for HTML/MD ingest regardless of which backend is selected for PDFs.
 
 ---
 

@@ -112,6 +112,14 @@ def insert_finding_chunks(
     return _insert(conn, "finding", finding_id, chunks)
 
 
+def insert_image_chunks(
+    conn: apsw.Connection,
+    image_id: int,
+    chunks: list[ChunkInput],
+) -> list[int]:
+    return _insert(conn, "image", image_id, chunks)
+
+
 def delete_chunks_for(
     conn: apsw.Connection,
     source_kind: str,

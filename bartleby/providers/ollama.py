@@ -7,8 +7,11 @@ import os
 import ollama
 from pydantic import ValidationError
 
-from bartleby.providers.base import DocumentSummary
-from bartleby.providers.prompt import build_summary_messages
+from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.prompt import (
+    IMAGE_ANALYSIS_INSTRUCTIONS,
+    build_summary_messages,
+)
 
 
 class OllamaProvider:
@@ -31,12 +34,34 @@ class OllamaProvider:
             format=DocumentSummary.model_json_schema(),
             options={"temperature": temperature},
         )
-        content = response.message.content
-        if not content:
-            raise RuntimeError("Ollama returned an empty response.")
-        try:
-            return DocumentSummary.model_validate_json(content)
-        except ValidationError as e:
-            raise RuntimeError(
-                f"Ollama response failed schema validation: {e}"
-            ) from e
+        return _validate(response.message.content, DocumentSummary)
+
+    def analyze_image(
+        self,
+        image_bytes: bytes,
+        *,
+        model: str,
+        media_type: str = "image/jpeg",
+    ) -> ImageAnalysis:
+        # Ollama's chat API takes raw image bytes (or paths) via `images=`.
+        response = self._client.chat(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": IMAGE_ANALYSIS_INSTRUCTIONS,
+                "images": [image_bytes],
+            }],
+            format=ImageAnalysis.model_json_schema(),
+        )
+        return _validate(response.message.content, ImageAnalysis)
+
+
+def _validate(content, model_cls):
+    if not content:
+        raise RuntimeError(f"Ollama returned an empty response for {model_cls.__name__}.")
+    try:
+        return model_cls.model_validate_json(content)
+    except ValidationError as e:
+        raise RuntimeError(
+            f"Ollama response failed {model_cls.__name__} schema validation: {e}"
+        ) from e

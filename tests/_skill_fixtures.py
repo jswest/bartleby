@@ -7,7 +7,11 @@ import pytest
 import bartleby.config
 import bartleby.db.connection
 import bartleby.project
-from bartleby.db.chunks import ChunkInput, insert_document_chunks
+from bartleby.db.chunks import (
+    ChunkInput,
+    insert_document_chunks,
+    insert_image_chunks,
+)
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 
@@ -80,3 +84,34 @@ def seeded_project(project_env):
         conn.close()
 
     return {"project": project_env, "doc_a": doc_a, "doc_b": doc_b}
+
+
+def seed_image(conn, document_id: int, *, file_hash: str, file_path: str,
+               description: str = "A test image scene.",
+               ocr_text: str = "WELCOME",
+               page_number: int | None = 1,
+               image_index_on_page: int = 1) -> int:
+    """Helper for image-scope tests: insert an image, link it to a doc, chunk it."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO images "
+        "(file_hash, file_path, width, height, analysis_json, analysis_model) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (file_hash, file_path, 800, 600,
+         '{"kind":"scene","text":"' + ocr_text + '","description":"' + description + '","notes":""}',
+         "fake-vlm"),
+    )
+    image_id = conn.last_insert_rowid()
+    cur.execute(
+        "INSERT INTO document_images "
+        "(document_id, image_id, page_number, image_index_on_page) "
+        "VALUES (?, ?, ?, ?)",
+        (document_id, image_id, page_number, image_index_on_page),
+    )
+    insert_image_chunks(conn, image_id, [
+        ChunkInput(text=ocr_text, embedding=_emb(2.0), chunk_index=0,
+                   content_type="image_ocr"),
+        ChunkInput(text=description, embedding=_emb(2.1), chunk_index=1,
+                   content_type="image_description"),
+    ])
+    return image_id

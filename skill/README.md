@@ -125,7 +125,7 @@ No sidecar files. If you want to export a finding to disk, ask the agent to writ
 - Treating prior findings as hints, never as citable evidence
 - Stopping and asking when the user's intent is ambiguous
 
-If you want different defaults, edit `SKILL.md`. It's plain prose. That's the point.
+If you want different defaults, edit `SKILL.md`.
 
 ---
 

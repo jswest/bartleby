@@ -47,6 +47,9 @@ def test_ready_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypat
         "one-shot",            # Summary depth
         "0",                   # Temperature
         "50000",               # Max summarize tokens
+        "pdfplumber",          # Backend
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
     ready.main()
@@ -58,6 +61,11 @@ def test_ready_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypat
     assert cfg["temperature"] == 0
     assert cfg["max_summarize_tokens"] == 50000
     assert cfg["max_read_tokens"] == 50000
+    assert cfg["backend"] == "pdfplumber"
+    assert cfg["sparse_text_threshold"] == 100
+    # Vision opted out.
+    assert "vision_provider" not in cfg
+    assert "vision_model" not in cfg
     # Legacy keys must not appear.
     assert "max_workers" not in cfg
     assert "pdf_pages_to_summarize" not in cfg
@@ -74,6 +82,9 @@ def test_ready_with_summary_depth_none_omits_summarize_settings(
         "sk-x",
         "none",                # Summary depth → none
         # No temperature/max_summarize_tokens prompted.
+        "pdfplumber",          # Backend
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
         "60000",               # Max read tokens
     ])
     ready.main()
@@ -93,6 +104,9 @@ def test_ready_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypa
         "one-shot",
         "0",
         "50000",
+        "pdfplumber",          # Backend
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
         "50000",
     ])
     ready.main()
@@ -107,6 +121,9 @@ def test_ready_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypa
 def test_ready_without_llm_writes_summary_depth_none(isolated_config, monkeypatch):
     _scripted_inputs(monkeypatch, [
         "n",                   # No LLM
+        "pdfplumber",          # Backend
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
     ready.main()
@@ -114,6 +131,7 @@ def test_ready_without_llm_writes_summary_depth_none(isolated_config, monkeypatc
     assert cfg.get("provider") is None
     assert cfg["summary_depth"] == "none"
     assert cfg["max_read_tokens"] == 50000
+    assert cfg["backend"] == "pdfplumber"
 
 
 def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypatch):
@@ -127,6 +145,9 @@ def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypa
 
     _scripted_inputs(monkeypatch, [
         "n",                   # No LLM
+        "pdfplumber",          # Backend
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
     ready.main()
@@ -135,3 +156,59 @@ def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypa
     assert "pdf_pages_to_summarize" not in cfg
     # Non-legacy keys (active_project) are preserved.
     assert cfg["active_project"] == "alpha"
+
+
+def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
+    _scripted_inputs(monkeypatch, [
+        "y",                   # Configure LLM?
+        "openai",
+        "gpt-5-mini",
+        "sk-openai",
+        "one-shot",
+        "0",
+        "50000",
+        "pdfplumber",
+        "100",
+        "y",                   # Configure vision?
+        "openai",              # Vision provider (same as LLM → no fresh api key)
+        "gpt-5-mini",          # Vision model
+        "1024",                # vision_max_dimension
+        "30",                  # ocr_min_confidence
+        "50000",               # max_read_tokens
+    ])
+    ready.main()
+    cfg = _read_yaml(isolated_config)
+    assert cfg["vision_provider"] == "openai"
+    assert cfg["vision_model"] == "gpt-5-mini"
+    assert cfg["vision_max_dimension"] == 1024
+    assert cfg["ocr_min_confidence"] == 30
+    # openai_api_key already set from the LLM block; no double prompt.
+    assert cfg["openai_api_key"] == "sk-openai"
+
+
+def test_ready_vision_with_different_provider_prompts_for_fresh_key(
+    isolated_config, monkeypatch
+):
+    _scripted_inputs(monkeypatch, [
+        "y",
+        "openai",
+        "gpt-5-mini",
+        "sk-openai",
+        "one-shot",
+        "0",
+        "50000",
+        "pdfplumber",
+        "100",
+        "y",                   # Configure vision?
+        "anthropic",           # Different provider → prompt for key
+        "claude-haiku-4-5",
+        "sk-anthro",
+        "1024",
+        "30",
+        "50000",
+    ])
+    ready.main()
+    cfg = _read_yaml(isolated_config)
+    assert cfg["vision_provider"] == "anthropic"
+    assert cfg["openai_api_key"] == "sk-openai"
+    assert cfg["anthropic_api_key"] == "sk-anthro"
