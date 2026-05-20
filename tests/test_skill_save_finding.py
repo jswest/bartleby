@@ -43,6 +43,7 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
     save_finding.main([
         "--project", seeded_project["project"],
         "--title", "PM25 equity",
+        "--description", "Who bears the brunt of PM2.5 monitoring gaps.",
         "--body-file", str(body_file),
         "--citations", ",".join(str(c) for c in cited_ids),
     ])
@@ -55,11 +56,12 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
     conn = open_db(seeded_project["project"])
     try:
         cur = conn.cursor()
-        title, body = cur.execute(
-            "SELECT title, body FROM findings WHERE finding_id = ?",
+        title, description, body = cur.execute(
+            "SELECT title, description, body FROM findings WHERE finding_id = ?",
             (out["finding_id"],),
         ).fetchone()
         assert title == "PM25 equity"
+        assert description == "Who bears the brunt of PM2.5 monitoring gaps."
         assert "This is the body" in body
 
         n_citations = cur.execute(
@@ -77,6 +79,7 @@ def test_save_finding_without_citations(seeded_project, tmp_path, capsys):
     save_finding.main([
         "--project", seeded_project["project"],
         "--title", "no-citations",
+        "--description", "A finding with no citations attached.",
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
@@ -90,6 +93,7 @@ def test_save_finding_unknown_citation_chunk(seeded_project, tmp_path, capsys):
         save_finding.main([
             "--project", seeded_project["project"],
             "--title", "bad",
+            "--description", "x",
             "--body-file", str(body_file),
             "--citations", "999999",
         ])
@@ -103,6 +107,7 @@ def test_save_finding_missing_body_file(seeded_project, capsys):
         save_finding.main([
             "--project", seeded_project["project"],
             "--title", "x",
+            "--description", "x",
             "--body-file", "/tmp/does-not-exist-zzz.md",
         ])
     assert exc.value.code == 1

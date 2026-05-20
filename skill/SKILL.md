@@ -24,10 +24,12 @@ Concrete examples:
 ```
 bartleby skill list_documents
 bartleby skill search "PM2.5 health disparities" --limit 10
+bartleby skill search "monitoring gaps" --in-documents 4,7
 bartleby skill read_chunks --document 4 --offset 0 --limit 20
+bartleby skill read_chunks --chunks 4192,4188,9201
 bartleby skill read_document --document 4 --summary
-bartleby skill save_summary --document 4 --text "..."
-bartleby skill save_finding --title "..." --body-file /tmp/finding.md --citations 12,18,33
+bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
+bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md --citations 12,18,33
 ```
 
 Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
@@ -46,19 +48,28 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 
 | Script | When to call it |
 | --- | --- |
-| `list_documents` | Get the lay of the land — file names, sizes, summary status. Run this first when you don't know the corpus. |
-| `search "<query>"` | Find chunks that match. Defaults: documents only, semantic + full-text combined via RRF, one chunk of context on each side of each hit. `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--limit`, `--context`, `--full-text`, `--semantic` are the other useful knobs. |
-| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. |
+| `list_documents` | Get the lay of the land — file names, titles, descriptions, summary status, sizes. Run this first when you don't know the corpus. The `title` and `description` come from each document's summary and are the fastest way to triage what's in the corpus. |
+| `search "<query>"` | Find chunks that match. Defaults: documents only, semantic + full-text combined via RRF, one chunk of context on each side of each hit. `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--in-documents 12,38` scopes the search to specific documents (and their summaries; findings are dropped). `--limit`, `--context`, `--full-text`, `--semantic` are the other useful knobs. |
+| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. |
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
-| `save_summary --document <id> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. |
-| `save_finding --title <t> --body-file <path> [--citations <ids>]` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--citations` is a comma-separated list of `chunk_id`s — the chunks your conclusion actually rests on. |
+| `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. |
+| `save_finding --title <t> --description <d> --body-file <path> [--citations <ids>]` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook that future agents will see when triaging findings. `--citations` is a comma-separated list of `chunk_id`s — the chunks your conclusion actually rests on. |
 
 ## Default research loop
 
 1. **Search before reading.** A targeted `search` is almost always cheaper than reading a whole document.
 2. **Summaries before full text.** Call `read_document --summary` first. Escalate to `--full` only if the summary is insufficient.
-3. **Use `read_chunks` for structural scans.** If you need to walk a document section by section, paginated `read_chunks` beats loading the entire text.
+3. **Use `read_chunks` for structural scans.** If you need to walk a document section by section, paginated `read_chunks` beats loading the entire text. Use `read_chunks --chunks <ids>` to revisit specific chunks by `chunk_id` without re-running a search.
 4. **Cite as you go.** Every claim in your answer needs a `chunk_id` behind it. If you can't cite it, don't claim it.
+5. **Save interim findings when the work is long.** If you're accumulating chunk_ids worth remembering and the session is getting long, write a short `save_finding` (one-line body is fine — "key chunks for PM2.5 monitoring gaps") with those citations. Findings are durable storage; your context window is not.
+
+## Reading search results
+
+Each result carries three signals you can use to triage:
+
+- `rank` — 1-indexed position within this query's results. The most reliable triage signal.
+- `normalized_score` — `1.0` for the top hit, scaled down for the rest. Tells you whether result #5 is competitive with #1 (e.g. `0.92`) or a long way behind (e.g. `0.40`).
+- `score` — the raw RRF score. These are tiny by design (around `0.015–0.033`) and only comparable within a single query's results, not across queries. Prefer `rank` and `normalized_score`.
 
 ## Citation rule (read this twice)
 

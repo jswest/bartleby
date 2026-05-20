@@ -1,16 +1,22 @@
 """Shared prompt builder for the summarizer.
 
-The prompt is provider-agnostic. Schema-enforced JSON makes preamble/format
-instructions unnecessary — we focus on what makes a good summary.
+The prompt is provider-agnostic. Schema-enforced JSON makes format
+instructions unnecessary — we focus on what makes a good title,
+description, and summary.
 """
 
 from __future__ import annotations
 
 
 _SUMMARY_INSTRUCTIONS = (
-    "Write a concise, self-contained summary of the document below. "
-    "Cover its topic, key claims, and structural skeleton. "
-    "The summary should be readable on its own, without the original document."
+    "Read the document below and produce three things in one pass:\n"
+    "  - title: a short human-readable title (no filename, no quotes, "
+    "no trailing punctuation, 60 characters or fewer).\n"
+    "  - description: a one-sentence hook (~20 words) that tells a reader "
+    "what this document is and why they might care.\n"
+    "  - text: a concise, self-contained summary covering the topic, key "
+    "claims, and structural skeleton. Readable on its own, without the "
+    "original document."
 )
 
 

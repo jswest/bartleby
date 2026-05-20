@@ -22,13 +22,22 @@ def _emb(seed: float, n: int) -> list[list[float]]:
 class _StubProvider:
     name = "stub"
 
-    def __init__(self, text: str = "## Summary\n\nA stub summary."):
+    def __init__(
+        self,
+        text: str = "## Summary\n\nA stub summary.",
+        title: str = "Stub Title",
+        description: str = "Stub one-line description.",
+    ):
         self.text = text
+        self.title = title
+        self.description = description
         self.calls = 0
 
     def summarize(self, document_text, *, model, temperature):
         self.calls += 1
-        return DocumentSummary(text=self.text)
+        return DocumentSummary(
+            title=self.title, description=self.description, text=self.text,
+        )
 
 
 @pytest.fixture
@@ -142,11 +151,14 @@ def test_scribe_writes_summary_when_provider_configured(
     try:
         cur = conn.cursor()
         summaries = cur.execute(
-            "SELECT text, model FROM summaries"
+            "SELECT title, description, text, model FROM summaries"
         ).fetchall()
         assert len(summaries) == 1
-        assert summaries[0][0].startswith("## Stub summary")
-        assert summaries[0][1] == "test-model"
+        title, description, text, model = summaries[0]
+        assert title == "Stub Title"
+        assert description == "Stub one-line description."
+        assert text.startswith("## Stub summary")
+        assert model == "test-model"
 
         sum_chunks = cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='summary'"

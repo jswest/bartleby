@@ -116,7 +116,7 @@ The skill's scripts import from `bartleby.db` and `bartleby.providers` — there
 
 This is the canonical schema for v1. Implement it in `bartleby/db/schema.py` as a single DDL string plus a `SCHEMA_VERSION` constant.
 
-`SCHEMA_VERSION = 1`
+`SCHEMA_VERSION = 2`
 
 ### Tables
 
@@ -141,11 +141,13 @@ CREATE TABLE documents (
 CREATE TABLE summaries (
     summary_id INTEGER PRIMARY KEY,
     document_id INTEGER NOT NULL UNIQUE REFERENCES documents(document_id) ON DELETE CASCADE,
+    title TEXT NOT NULL,             -- short human title, surfaces in list_documents
+    description TEXT NOT NULL,       -- one-line hook, surfaces in list_documents
     text TEXT NOT NULL,
     model TEXT NOT NULL,             -- which model wrote it
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
--- Unique on document_id: at most one summary per document in v1.
+-- Unique on document_id: at most one summary per document.
 
 CREATE TABLE sessions (
     session_id INTEGER PRIMARY KEY,
@@ -159,6 +161,7 @@ CREATE TABLE findings (
     finding_id INTEGER PRIMARY KEY,
     session_id INTEGER NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     title TEXT NOT NULL,
+    description TEXT NOT NULL,       -- one-line hook for browsing prior findings
     body TEXT NOT NULL,              -- markdown
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -238,7 +241,7 @@ Also expose `init_db(project_name: str) -> None` which runs the DDL and populate
 
 ### 4.2 `bartleby/db/schema.py`
 
-Holds `SCHEMA_VERSION = 1` and `DDL: str` (the full schema from §3 as a single string). Also a `META_KEYS` list of required meta keys for sanity checking.
+Holds `SCHEMA_VERSION = 2` and `DDL: str` (the full schema from §3 as a single string). Also a `META_KEYS` list of required meta keys for sanity checking.
 
 ### 4.3 `bartleby/db/chunks.py`
 
@@ -370,26 +373,30 @@ Remove all code related to per-page summarization and the `pages_to_summarize` c
 
 #### 5.3.1 Summarization contract
 
-The summarizer is **structured-output only** across all providers. Even though the v1 schema stores a single text field, we enforce JSON to keep open-source models from drifting into "Here is your summary:" preambles, thinking tags, or stray markdown fences.
-
-Define a Pydantic model:
+The summarizer is **structured-output only** across all providers. We enforce JSON to keep open-source models from drifting into "Here is your summary:" preambles, thinking tags, or stray markdown fences, and we ask for three fields in one call so we never pay for the same document three times:
 
 ```python
 class DocumentSummary(BaseModel):
-    text: str
+    title: str        # short human-readable title (≤ 60 chars, no filename, no quotes)
+    description: str  # one-sentence hook (~20 words, ≤ 200 chars)
+    text: str         # concise self-contained summary
 ```
+
+The schema is rendered with field-level descriptions (via `Field(description=...)`) so providers that surface field descriptions in their structured-output mechanism see the guidance.
 
 Per-provider invocation:
 
 - **Anthropic**: tool-use with `DocumentSummary.model_json_schema()` as the tool's `input_schema`. Force the model to call that one tool. Parse `tool_use.input`.
-- **OpenAI**: `response_format={"type": "json_schema", "json_schema": {"name": "DocumentSummary", "schema": DocumentSummary.model_json_schema(), "strict": True}}`. Parse the message content.
+- **OpenAI**: `chat.completions.parse(response_format=DocumentSummary)` — the SDK converts the Pydantic model to a strict JSON schema. Read `message.parsed`.
 - **Ollama**: pass `format=DocumentSummary.model_json_schema()` to the chat call (Ollama supports JSON-schema-constrained output since v0.5). Parse the response content.
 
 All three: validate the parsed JSON against `DocumentSummary` before persisting. If validation fails, raise and let the document fail ingest with a clear error (do not silently insert a malformed summary).
 
+The `title` and `description` are stored on `summaries` and surfaced by `list_documents` so agents can triage the corpus without reading every summary `text`.
+
 #### 5.3.2 Long-document truncation
 
-If `len(tiktoken_encode(document_text)) > max_summarize_tokens`, truncate the input to the first `max_summarize_tokens` tokens before passing to the summarizer. After the LLM returns a valid `DocumentSummary`, append a deterministic note to `text`:
+If `len(tiktoken_encode(document_text)) > max_summarize_tokens`, truncate the input to the first `max_summarize_tokens` tokens before passing to the summarizer. After the LLM returns a valid `DocumentSummary`, append a deterministic note to the `text` field only (`title` and `description` are unaffected):
 
 ```
 \n\n_Note: this summary is based on the first {N} tokens of a {M}-token document._
@@ -473,6 +480,8 @@ Output:
     {
       "id": 12,
       "file_name": "WANG-ET-AL_2024.pdf",
+      "title": "Detection gaps in the new PM2.5 NAAQS",
+      "description": "Estimates how many people live in unmonitored hotspots under the tightened standard.",
       "page_count": 22,
       "token_count": 8430,
       "has_summary": true,
@@ -484,12 +493,15 @@ Output:
 }
 ```
 
+`title` and `description` come from the document's `summaries` row and are `null` until a summary is written (either at ingest time or via `save_summary`). They are how agents triage the corpus without reading every summary `text`.
+
 ### 6.2 `search.py`
 
 ```
 search "<query>" \
   [--documents] [--summaries] [--findings] \
   [--semantic] [--full-text] \
+  [--in-documents <id,id,...>] \
   [--context <n>] [--limit <n>] [--project <name>]
 ```
 
@@ -503,10 +515,12 @@ Defaults:
 Behavior:
 
 1. Resolve active session. If `--findings` is requested and `memory_enabled = 0`, silently drop the `--findings` flag and add a note to the response.
-2. For full-text mode, query `chunks_fts` filtered by `source_kind IN (...)`.
-3. For semantic mode, shell out to `bartleby embed "<query>"`, then query `chunks_vec` with the resulting vector, joined back to `chunks` and filtered by `source_kind`.
-4. If both modes are on, combine via Reciprocal Rank Fusion (RRF) with `k = 60`. Score is `sum(1 / (k + rank))` across the lists each result appears in. Sort descending.
-5. Take top N hits. For each hit, fetch the surrounding chunks within the same `(source_kind, source_id)` whose `chunk_index` falls in `[hit_index - context, hit_index + context]`, excluding the hit itself. Clamp at source boundaries.
+2. Resolve scope. If `--in-documents` is set: restrict `document` chunks to those `source_id`s; restrict `summary` chunks to summaries whose `document_id` is in the list; drop `finding` entirely (findings aren't tied to documents). Without `--in-documents`, every requested kind is unrestricted.
+3. For full-text mode, query `chunks_fts` filtered by the scope.
+4. For semantic mode, shell out to `bartleby embed "<query>"`, then query `chunks_vec` with the resulting vector, joined back to `chunks` and filtered by the scope.
+5. If both modes are on, combine via Reciprocal Rank Fusion (RRF) with `k = 60`. Score is `sum(1 / (k + rank))` across the lists each result appears in. Sort descending.
+6. Take top N hits. For each hit, fetch the surrounding chunks within the same `(source_kind, source_id)` whose `chunk_index` falls in `[hit_index - context, hit_index + context]`, excluding the hit itself. Clamp at source boundaries.
+7. Compute `rank` (1-indexed position) and `normalized_score` (`score / top_score`) for each hit so agents have a triage signal that's readable on its own.
 
 Output:
 
@@ -516,6 +530,7 @@ Output:
   "modes": ["semantic", "full-text"],
   "source_kinds": ["document"],
   "memory_excluded": false,
+  "in_documents": null,
   "context": 1,
   "results": [
     {
@@ -528,7 +543,9 @@ Output:
       "text": "the matched chunk",
       "context_before": ["chunk 17 text"],
       "context_after":  ["chunk 19 text"],
-      "score": 0.0341
+      "rank": 1,
+      "score": 0.0341,
+      "normalized_score": 1.0
     }
   ]
 }
@@ -540,21 +557,25 @@ Notes:
 - The agent **must cite the hit's `chunk_id`**, not anything drawn from the context arrays. The skill prompt (§7) makes this explicit.
 - Context fetching is per-hit, never across different `(source_kind, source_id)` pairs. A hit at the start of a document does not pull in the end of the previous document.
 - `--context 0` disables context entirely (returns the hit only, with empty arrays).
+- `rank` is 1-indexed within the returned `results` list. `normalized_score` is `score / max(score)` (so the top hit is always `1.0`); it makes the relative strength of lower hits legible. Raw `score` values are tiny by design (RRF range ~`0.015–0.033`) and only comparable within a single query; SKILL.md tells agents to triage with `rank` first and use `normalized_score` to gauge spread.
+- `in_documents` echoes the resolved `--in-documents` list (or `null` when unset) so the agent can confirm the scope it ran under.
 
 If `memory_excluded` is true, the agent knows the user is in a no-memory session and findings are unreachable.
 
 ### 6.3 `read_chunks.py`
 
+Two mutually exclusive modes (exactly one of `--document` or `--chunks` is required):
+
 ```
 read_chunks --document <id> [--offset <n>] [--limit <n>] [--project <name>]
+read_chunks --chunks <id,id,...> [--project <name>]
 ```
 
-Reads chunks from a single document, ordered by `chunk_index`. Default offset 0, default limit 50.
-
-Output:
+**Document mode** reads chunks from a single document, ordered by `chunk_index`. Default offset 0, default limit 50.
 
 ```json
 {
+  "mode": "document",
   "document": { "id": 12, "file_name": "WANG-ET-AL_2024.pdf" },
   "offset": 0,
   "limit": 50,
@@ -570,6 +591,30 @@ Output:
   ]
 }
 ```
+
+**Chunks mode** looks up specific chunk_ids directly, regardless of source. Each returned chunk carries its `source_kind` / `source_id` / `source_name` so the agent can locate it. The response also lists which requested ids were not found.
+
+```json
+{
+  "mode": "chunks",
+  "requested": [4192, 4188, 9201],
+  "missing": [],
+  "chunks": [
+    {
+      "chunk_id": 4192,
+      "source_kind": "document",
+      "source_id": 12,
+      "source_name": "WANG-ET-AL_2024.pdf",
+      "chunk_index": 18,
+      "section_heading": "Results: equity analysis",
+      "content_type": "text",
+      "text": "..."
+    }
+  ]
+}
+```
+
+Chunks are returned in the order requested (de-duplicated). Chunks mode does not paginate — the caller is expected to ask for what they want.
 
 ### 6.4 `read_document.py`
 
@@ -606,10 +651,12 @@ Successful output:
 ### 6.5 `save_summary.py`
 
 ```
-save_summary --document <id> --text <text> [--project <name>]
+save_summary --document <id> --title <title> --description <desc> --text <text> [--project <name>]
 ```
 
-Writes (or replaces) the agent-authored summary for a document. Inserts a row into `summaries`, chunks and embeds the text, then inserts via `insert_summary_chunks`. If a summary already exists for that document, delete the old summary's chunks (via `delete_chunks_for`) and replace.
+Writes (or replaces) the agent-authored summary for a document. Inserts a row into `summaries` with `title`, `description`, and `text` (all required and non-empty), chunks and embeds the `text`, then inserts via `insert_summary_chunks`. If a summary already exists for that document, delete the old summary's chunks (via `delete_chunks_for`) and replace.
+
+`title` and `description` are how the document shows up in `list_documents`, so the SKILL.md nudges agents to make them informative.
 
 Note: the ingest pipeline also writes summaries. Agent-saved summaries and ingest-time summaries share the same table. They're both tagged `source_kind = 'summary'` in chunks. We accept this — if the agent saves a "better" summary, it overwrites. If you want to differentiate later (v2), add a `created_by` column.
 
@@ -626,12 +673,12 @@ Output:
 ### 6.6 `save_finding.py`
 
 ```
-save_finding --title <title> --body-file <path> [--citations <chunk_id,chunk_id,...>] [--project <name>]
+save_finding --title <title> --description <desc> --body-file <path> [--citations <chunk_id,chunk_id,...>] [--project <name>]
 ```
 
 Why `--body-file` and not `--body`: findings are markdown, sometimes long, and shell-escaping them is a nightmare. Agents write the body to a tempfile and pass the path.
 
-Inserts a row into `findings` tied to the active session. Chunks and embeds the body using Docling's `HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=400)` — the same chunker used by `bartleby scribe`. Docling parses the finding's markdown structurally, so the resulting chunks carry `section_heading` and `content_type` metadata just like ingested documents.
+Inserts a row into `findings` tied to the active session, with `title`, `description`, and `body` (all required and non-empty). `description` is a one-line hook future agents see when triaging prior findings via `search --findings`. Chunks and embeds the body using Docling's `HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=400)` — the same chunker used by `bartleby scribe`. Docling parses the finding's markdown structurally, so the resulting chunks carry `section_heading` and `content_type` metadata just like ingested documents.
 
 Inserts via `insert_finding_chunks`. Inserts citation rows into `finding_citations` for each `chunk_id` in `--citations`.
 
@@ -735,3 +782,8 @@ Decisions taken during spec review, recorded here so future-you doesn't have to 
 - **Finding chunking**: uses Docling's `HybridChunker` with `max_tokens=400` (headroom against the 512 embedder limit). Same chunker as `bartleby scribe`.
 - **Search context window**: `search` results auto-include neighboring chunks (`--context`, default 1, range 0..5) under `context_before` / `context_after` arrays. Context never crosses `(source_kind, source_id)` boundaries. Agents must cite the hit's `chunk_id`, not anything from the context arrays. `read_chunks` is unchanged — its own offset/limit pagination already provides surrounding text.
 - **`documents.token_count`**: computed via `tiktoken.cl100k_base`. Approximate across providers; that's acceptable for a `--force` gate. README flags this.
+- **Schema v2 — title/description on summaries and findings**: `summaries` gains `title` and `description` (both `NOT NULL`); `findings` gains `description` (`NOT NULL`). `SCHEMA_VERSION` bumped to 2. Motivation: an agent using the skill reported it could only triage the corpus by filename + raw summary text, and that prior findings were similarly opaque. Surfacing a short title and one-line hook in `list_documents` (and in finding lookups) makes the corpus browsable. Per project policy: no migration code, users re-ingest. The summarizer now returns all three fields in one structured-output call, so we don't pay for the document text three times.
+- **`search --in-documents <id,id,...>`**: scopes a search to the listed documents' chunks (and to their summaries' chunks). `finding` source-kind is dropped when this flag is set because findings aren't tied to documents. Resolved scope echoes back in the response under `in_documents`. Motivation: agents identified candidate documents from `list_documents`/`search` and wanted to drill in without re-reading them whole.
+- **`search` result fields — `rank` and `normalized_score`**: each result now carries a 1-indexed `rank` plus `normalized_score = score / max(score)`. Raw RRF `score` is preserved but tiny by design (~`0.015–0.033`) and only comparable within one query. SKILL.md tells agents to triage with `rank` first and use `normalized_score` to gauge spread.
+- **`read_chunks --chunks <id,id,...>`**: a second mode for the same script (mutually exclusive with `--document`) that fetches arbitrary chunks by `chunk_id` regardless of source. Returns each chunk with its `source_kind` / `source_id` / `source_name` plus a `requested` and `missing` list. Useful for revisiting cited chunks without re-running a search.
+- **No running citation tracker**: the user-facing agent feedback proposed a `bartleby skill cite <chunk_id>` command + a `--use-tracked-citations` flag on `save_finding`. We pushed back: `save_finding` already provides a durable place to stash chunk_ids the agent doesn't want to lose, and adding a stateful buffer per session introduces a parallel mental model with its own edge cases (when does it clear? what if the session ends mid-research?). Instead, the SKILL.md instructs agents to write interim findings (one-line body is fine) when the context grows long.

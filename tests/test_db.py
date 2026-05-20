@@ -128,8 +128,9 @@ def test_summary_chunks_get_summary_source_kind(conn):
     cur = conn.cursor()
     doc_id = _insert_doc(conn, "h2")
     cur.execute(
-        "INSERT INTO summaries (document_id, text, model) VALUES (?, ?, ?)",
-        (doc_id, "summary text", "test-model"),
+        "INSERT INTO summaries (document_id, title, description, text, model) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (doc_id, "t", "d", "summary text", "test-model"),
     )
     summary_id = conn.last_insert_rowid()
     insert_summary_chunks(conn, summary_id, [
@@ -144,8 +145,9 @@ def test_finding_chunks_get_finding_source_kind(conn):
     cur.execute("INSERT INTO sessions (name) VALUES (?)", ("test-session",))
     session_id = conn.last_insert_rowid()
     cur.execute(
-        "INSERT INTO findings (session_id, title, body) VALUES (?, ?, ?)",
-        (session_id, "t", "b"),
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, "t", "d", "b"),
     )
     finding_id = conn.last_insert_rowid()
     insert_finding_chunks(conn, finding_id, [

@@ -4,7 +4,7 @@ The DDL string here is the canonical schema for v1 (see SPEC.md §3).
 Run it via ``init_db`` in ``bartleby.db.connection``.
 """
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 EMBEDDING_DIM = 768
 
@@ -29,6 +29,8 @@ CREATE TABLE documents (
 CREATE TABLE summaries (
     summary_id INTEGER PRIMARY KEY,
     document_id INTEGER NOT NULL UNIQUE REFERENCES documents(document_id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
     text TEXT NOT NULL,
     model TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -46,6 +48,7 @@ CREATE TABLE findings (
     finding_id INTEGER PRIMARY KEY,
     session_id INTEGER NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     title TEXT NOT NULL,
+    description TEXT NOT NULL,
     body TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

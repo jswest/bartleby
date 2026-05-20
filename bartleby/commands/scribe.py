@@ -107,8 +107,11 @@ def _write_summary(conn, document_id: int, summary: SummaryResult) -> int:
         cur.execute("DELETE FROM summaries WHERE summary_id = ?", (prior[0],))
 
     cur.execute(
-        "INSERT INTO summaries (document_id, text, model) VALUES (?, ?, ?)",
-        (document_id, summary.text, summary.model),
+        "INSERT INTO summaries "
+        "(document_id, title, description, text, model) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (document_id, summary.title, summary.description,
+         summary.text, summary.model),
     )
     summary_id = conn.last_insert_rowid()
 

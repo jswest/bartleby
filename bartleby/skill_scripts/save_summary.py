@@ -3,6 +3,9 @@
 
 Output:
     {"summary_id": int, "document_id": int, "chunk_ids": [int, ...]}
+
+Title and description are required so summaries written by the agent show up
+in ``list_documents`` the same way ingest-time summaries do.
 """
 
 from __future__ import annotations
@@ -25,12 +28,20 @@ _AUTHOR_MODEL = "agent"
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="save_summary")
     p.add_argument("--document", type=int, required=True, dest="document_id")
+    p.add_argument("--title", type=str, required=True)
+    p.add_argument("--description", type=str, required=True)
     p.add_argument("--text", type=str, required=True)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
+    if not args.title or not args.title.strip():
+        raise SkillError("EMPTY_TITLE", "Summary title must be non-empty.")
+    if not args.description or not args.description.strip():
+        raise SkillError(
+            "EMPTY_DESCRIPTION", "Summary description must be non-empty."
+        )
     if not args.text or not args.text.strip():
         raise SkillError("EMPTY_TEXT", "Summary text must be non-empty.")
 
@@ -54,8 +65,10 @@ def work(*, conn, args, session_id) -> dict:
         cur.execute("DELETE FROM summaries WHERE summary_id = ?", (prior[0],))
 
     cur.execute(
-        "INSERT INTO summaries (document_id, text, model) VALUES (?, ?, ?)",
-        (args.document_id, args.text, _AUTHOR_MODEL),
+        "INSERT INTO summaries "
+        "(document_id, title, description, text, model) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (args.document_id, args.title, args.description, args.text, _AUTHOR_MODEL),
     )
     summary_id = conn.last_insert_rowid()
 

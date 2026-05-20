@@ -23,31 +23,20 @@ from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.ingest.chunk import chunk_markdown_string
 from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError, run
-
-
-def _parse_citations(s: str | None) -> list[int]:
-    if s is None or not s.strip():
-        return []
-    out: list[int] = []
-    for piece in s.split(","):
-        piece = piece.strip()
-        if not piece:
-            continue
-        try:
-            out.append(int(piece))
-        except ValueError:
-            raise SkillError(
-                "INVALID_CITATIONS",
-                f"Citation '{piece}' is not an integer chunk_id.",
-            ) from None
-    return out
+from bartleby.skill_scripts._common import comma_int_list
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="save_finding")
     p.add_argument("--title", type=str, required=True)
+    p.add_argument("--description", type=str, required=True)
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
-    p.add_argument("--citations", type=str, default=None)
+    p.add_argument(
+        "--citations",
+        type=comma_int_list("chunk_id"),
+        default=None,
+        help="Comma-separated chunk_ids the finding rests on.",
+    )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
@@ -55,6 +44,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def work(*, conn, args, session_id) -> dict:
     if not args.title or not args.title.strip():
         raise SkillError("EMPTY_TITLE", "Finding title must be non-empty.")
+    if not args.description or not args.description.strip():
+        raise SkillError(
+            "EMPTY_DESCRIPTION", "Finding description must be non-empty."
+        )
 
     body_path = Path(args.body_file)
     if not body_path.exists() or not body_path.is_file():
@@ -66,7 +59,7 @@ def work(*, conn, args, session_id) -> dict:
     if not body.strip():
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
-    citations = _parse_citations(args.citations)
+    citations: list[int] = args.citations or []
 
     cur = conn.cursor()
 
@@ -90,8 +83,9 @@ def work(*, conn, args, session_id) -> dict:
             )
 
     cur.execute(
-        "INSERT INTO findings (session_id, title, body) VALUES (?, ?, ?)",
-        (session_id, args.title, body),
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, args.title, args.description, body),
     )
     finding_id = conn.last_insert_rowid()
 

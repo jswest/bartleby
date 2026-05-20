@@ -23,8 +23,13 @@ def test_list_documents_happy_path(seeded_project, capsys):
     by_name = {d["file_name"]: d for d in out["documents"]}
     assert by_name["alpha.pdf"]["has_summary"] is True
     assert by_name["alpha.pdf"]["chunk_count"] == 4
+    assert by_name["alpha.pdf"]["title"] == "Alpha"
+    assert by_name["alpha.pdf"]["description"] == "Test summary of alpha document."
     assert by_name["beta.txt"]["has_summary"] is False
     assert by_name["beta.txt"]["chunk_count"] == 2
+    # Unsummarized doc reports title/description as null.
+    assert by_name["beta.txt"]["title"] is None
+    assert by_name["beta.txt"]["description"] is None
 
 
 def test_list_documents_limit_and_offset(seeded_project, capsys):

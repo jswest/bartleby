@@ -30,6 +30,8 @@ def test_save_summary_creates_new_summary(seeded_project, capsys):
     save_summary.main([
         "--project", seeded_project["project"],
         "--document", str(seeded_project["doc_b"]),
+        "--title", "Beta paper",
+        "--description", "An agent's take on beta's main argument.",
         "--text", "Agent-authored summary of beta.",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -39,11 +41,15 @@ def test_save_summary_creates_new_summary(seeded_project, capsys):
 
     conn = open_db(seeded_project["project"])
     try:
-        text = conn.cursor().execute(
-            "SELECT text FROM summaries WHERE document_id = ?",
+        row = conn.cursor().execute(
+            "SELECT title, description, text FROM summaries WHERE document_id = ?",
             (seeded_project["doc_b"],),
-        ).fetchone()[0]
-        assert text == "Agent-authored summary of beta."
+        ).fetchone()
+        assert row == (
+            "Beta paper",
+            "An agent's take on beta's main argument.",
+            "Agent-authored summary of beta.",
+        )
     finally:
         conn.close()
 
@@ -53,6 +59,8 @@ def test_save_summary_replaces_existing(seeded_project, capsys):
     save_summary.main([
         "--project", seeded_project["project"],
         "--document", str(seeded_project["doc_a"]),
+        "--title", "Alpha v2",
+        "--description", "Replacement description for alpha.",
         "--text", "Replacement summary for alpha.",
     ])
     capsys.readouterr()  # discard
@@ -60,11 +68,11 @@ def test_save_summary_replaces_existing(seeded_project, capsys):
     conn = open_db(seeded_project["project"])
     try:
         rows = conn.cursor().execute(
-            "SELECT text FROM summaries WHERE document_id = ?",
+            "SELECT title, text FROM summaries WHERE document_id = ?",
             (seeded_project["doc_a"],),
         ).fetchall()
         assert len(rows) == 1
-        assert rows[0][0] == "Replacement summary for alpha."
+        assert rows[0] == ("Alpha v2", "Replacement summary for alpha.")
     finally:
         conn.close()
 
@@ -74,6 +82,8 @@ def test_save_summary_unknown_document(seeded_project, capsys):
         save_summary.main([
             "--project", seeded_project["project"],
             "--document", "999",
+            "--title", "x",
+            "--description", "x",
             "--text", "irrelevant",
         ])
     assert exc.value.code == 1

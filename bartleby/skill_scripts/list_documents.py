@@ -4,12 +4,17 @@
 Output:
     {
       "documents": [{
-        "id": int, "file_name": str, "page_count": int|null,
-        "token_count": int|null, "has_summary": bool,
-        "chunk_count": int, "created_at": str,
+        "id": int, "file_name": str,
+        "title": str|null, "description": str|null,
+        "page_count": int|null, "token_count": int|null,
+        "has_summary": bool, "chunk_count": int,
+        "created_at": str,
       }, ...],
       "total": int
     }
+
+``title`` and ``description`` come from the document's summary row and are
+null until one is written (either at ingest time or via ``save_summary``).
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ def work(*, conn, args, session_id) -> dict:
 
     rows = cur.execute(
         "SELECT d.document_id, d.file_name, d.page_count, d.token_count, d.created_at, "
+        "       s.title AS summary_title, s.description AS summary_description, "
         "       (s.summary_id IS NOT NULL) AS has_summary, "
         "       COALESCE(cc.n, 0) AS chunk_count "
         "FROM documents d "
@@ -48,6 +54,8 @@ def work(*, conn, args, session_id) -> dict:
         {
             "id": doc_id,
             "file_name": file_name,
+            "title": title,
+            "description": description,
             "page_count": page_count,
             "token_count": token_count,
             "has_summary": bool(has_summary),
@@ -55,7 +63,7 @@ def work(*, conn, args, session_id) -> dict:
             "created_at": created_at,
         }
         for doc_id, file_name, page_count, token_count, created_at,
-            has_summary, chunk_count in rows
+            title, description, has_summary, chunk_count in rows
     ]
 
     return {"documents": documents, "total": total}

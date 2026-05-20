@@ -16,6 +16,8 @@ from bartleby.providers import DocumentSummary, Provider
 
 @dataclass
 class SummaryResult:
+    title: str
+    description: str
     text: str
     model: str
     truncated_from_tokens: int | None  # None when not truncated
@@ -76,6 +78,8 @@ def summarize(
         text = text.rstrip() + _truncation_note(max_summarize_tokens, total_tokens)
 
     return SummaryResult(
+        title=summary.title,
+        description=summary.description,
         text=text,
         model=model,
         truncated_from_tokens=total_tokens if truncated else None,

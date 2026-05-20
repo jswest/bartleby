@@ -71,8 +71,10 @@ def seeded_project(project_env):
 
         # Summary for doc A
         cur.execute(
-            "INSERT INTO summaries (document_id, text, model) VALUES (?, ?, ?)",
-            (doc_a, "A summary of alpha.", "test"),
+            "INSERT INTO summaries (document_id, title, description, text, model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (doc_a, "Alpha", "Test summary of alpha document.",
+             "A summary of alpha.", "test"),
         )
     finally:
         conn.close()

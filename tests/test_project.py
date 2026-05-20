@@ -77,8 +77,9 @@ def test_project_info_reports_v1_stats(projects_root):
         cur.execute("INSERT INTO sessions (name) VALUES (?)", ("test-sess",))
         sid = conn.last_insert_rowid()
         cur.execute(
-            "INSERT INTO findings (session_id, title, body) VALUES (?, ?, ?)",
-            (sid, "t", "b"),
+            "INSERT INTO findings (session_id, title, description, body) "
+            "VALUES (?, ?, ?, ?)",
+            (sid, "t", "d", "b"),
         )
     finally:
         conn.close()

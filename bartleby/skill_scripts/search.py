@@ -10,6 +10,7 @@ Output:
       "modes": [str, ...],
       "source_kinds": [str, ...],
       "memory_excluded": bool,
+      "in_documents": [int, ...]|null,
       "context": int,
       "results": [{
         "chunk_id": int, "source_kind": str, "source_id": int,
@@ -17,7 +18,9 @@ Output:
         "section_heading": str|null, "content_type": str|null,
         "text": str,
         "context_before": [str, ...], "context_after": [str, ...],
-        "score": float,
+        "rank": int,                  # 1-indexed within this query's results
+        "score": float,               # raw RRF score (small, don't compare across queries)
+        "normalized_score": float,    # top hit = 1.0, others scaled to that
       }, ...]
     }
 """
@@ -32,6 +35,7 @@ import subprocess
 
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, run
+from bartleby.skill_scripts._common import comma_int_list, source_names
 
 
 RRF_K = 60
@@ -66,6 +70,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--findings", action="store_true")
     p.add_argument("--semantic", action="store_true")
     p.add_argument("--full-text", action="store_true", dest="full_text")
+    p.add_argument(
+        "--in-documents",
+        type=comma_int_list("document_id"),
+        default=None,
+        dest="in_documents",
+        help=(
+            "Comma-separated document_ids. Scopes the search to those "
+            "documents' chunks and their summaries' chunks. Findings are "
+            "dropped (they are not tied to documents)."
+        ),
+    )
     p.add_argument("--context", type=_context_value, default=DEFAULT_CONTEXT)
     p.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
@@ -86,12 +101,8 @@ def _resolve_source_kinds(args: argparse.Namespace) -> list[str]:
 def _resolve_modes(args: argparse.Namespace) -> list[str]:
     if not args.semantic and not args.full_text:
         return ["semantic", "full-text"]
-    modes = []
-    if args.semantic:
-        modes.append("semantic")
-    if args.full_text:
-        modes.append("full-text")
-    return modes
+    return [m for flag, m in
+            [(args.semantic, "semantic"), (args.full_text, "full-text")] if flag]
 
 
 def _fts_query(query: str) -> str:
@@ -104,24 +115,84 @@ def _fts_query(query: str) -> str:
     return " ".join(pieces)
 
 
+def _scope_clause(
+    scope: dict[str, list[int] | None],
+) -> tuple[str, list]:
+    """Build a SQL predicate over ``chunks`` that matches any allowed
+    (source_kind, source_id) combination.
+
+    ``scope`` maps source_kind → either a list of allowed source_ids
+    (filtered scope) or ``None`` (unrestricted — match all of that kind).
+    """
+    if not scope:
+        return "0", []
+    parts: list[str] = []
+    params: list = []
+    for kind, ids in scope.items():
+        if ids is None:
+            parts.append("chunks.source_kind = ?")
+            params.append(kind)
+        else:
+            if not ids:
+                continue
+            placeholders = ",".join("?" * len(ids))
+            parts.append(
+                f"(chunks.source_kind = ? AND chunks.source_id IN ({placeholders}))"
+            )
+            params.append(kind)
+            params.extend(ids)
+    if not parts:
+        return "0", []
+    return "(" + " OR ".join(parts) + ")", params
+
+
+def _build_scope(
+    conn,
+    source_kinds: list[str],
+    in_documents: list[int] | None,
+) -> dict[str, list[int] | None]:
+    """Resolve the scope dict consumed by ``_scope_clause``.
+
+    Without ``in_documents``, every requested kind is unrestricted.
+    With ``in_documents``: 'document' is restricted to those ids; 'summary'
+    is restricted to summaries whose document_id is in those ids; 'finding'
+    is excluded entirely (findings aren't tied to documents).
+    """
+    if in_documents is None:
+        return {kind: None for kind in source_kinds}
+
+    scope: dict[str, list[int] | None] = {}
+    if "document" in source_kinds:
+        scope["document"] = list(in_documents)
+    if "summary" in source_kinds:
+        placeholders = ",".join("?" * len(in_documents))
+        rows = conn.cursor().execute(
+            f"SELECT summary_id FROM summaries "
+            f"WHERE document_id IN ({placeholders})",
+            in_documents,
+        )
+        scope["summary"] = [row[0] for row in rows]
+    return scope
+
+
 def _fts_search(
     conn,
     query: str,
-    source_kinds: list[str],
+    scope: dict[str, list[int] | None],
     limit: int,
 ) -> list[int]:
     fts_query = _fts_query(query)
     if not fts_query:
         return []
-    placeholders = ",".join("?" * len(source_kinds))
+    scope_sql, scope_params = _scope_clause(scope)
     rows = conn.cursor().execute(
         f"SELECT chunks_fts.rowid "
         f"FROM chunks_fts "
         f"JOIN chunks ON chunks.chunk_id = chunks_fts.rowid "
-        f"WHERE chunks_fts MATCH ? AND chunks.source_kind IN ({placeholders}) "
+        f"WHERE chunks_fts MATCH ? AND {scope_sql} "
         f"ORDER BY chunks_fts.rank "
         f"LIMIT ?",
-        [fts_query, *source_kinds, limit],
+        [fts_query, *scope_params, limit],
     )
     return [row[0] for row in rows]
 
@@ -158,10 +229,13 @@ def _embed_query(query: str) -> bytes:
 def _semantic_search(
     conn,
     query_bytes: bytes,
-    source_kinds: list[str],
+    scope: dict[str, list[int] | None],
     limit: int,
 ) -> list[int]:
-    placeholders = ",".join("?" * len(source_kinds))
+    # sqlite-vec's MATCH operator cannot accept extra WHERE predicates on the
+    # vec0 virtual table, so we over-fetch nearest neighbors and filter them
+    # in the outer query against the chunks table.
+    scope_sql, scope_params = _scope_clause(scope)
     rows = conn.cursor().execute(
         f"WITH nn AS ( "
         f"  SELECT rowid AS chunk_id, distance FROM chunks_vec "
@@ -169,11 +243,11 @@ def _semantic_search(
         f"  ORDER BY distance "
         f") "
         f"SELECT nn.chunk_id FROM nn "
-        f"JOIN chunks c ON c.chunk_id = nn.chunk_id "
-        f"WHERE c.source_kind IN ({placeholders}) "
+        f"JOIN chunks ON chunks.chunk_id = nn.chunk_id "
+        f"WHERE {scope_sql} "
         f"ORDER BY nn.distance "
         f"LIMIT ?",
-        [query_bytes, limit, *source_kinds, limit],
+        [query_bytes, limit, *scope_params, limit],
     )
     return [row[0] for row in rows]
 
@@ -184,13 +258,6 @@ def _rrf(rankings: list[list[int]], k: int = RRF_K) -> list[tuple[int, float]]:
         for rank, chunk_id in enumerate(lst, start=1):
             scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank)
     return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-
-
-def _single_mode_scored(ranking: list[int], k: int = RRF_K) -> list[tuple[int, float]]:
-    return [
-        (chunk_id, 1.0 / (k + rank))
-        for rank, chunk_id in enumerate(ranking, start=1)
-    ]
 
 
 def _fetch_context(
@@ -215,92 +282,53 @@ def _fetch_context(
     return before, after
 
 
-def _source_names(conn, source_keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
-    out: dict[tuple[str, int], str] = {}
-    by_kind: dict[str, set[int]] = {}
-    for kind, sid in source_keys:
-        by_kind.setdefault(kind, set()).add(sid)
-    cur = conn.cursor()
-    for kind, ids in by_kind.items():
-        ids_list = list(ids)
-        ph = ",".join("?" * len(ids_list))
-        if kind == "document":
-            for did, fname in cur.execute(
-                f"SELECT document_id, file_name FROM documents "
-                f"WHERE document_id IN ({ph})",
-                ids_list,
-            ):
-                out[("document", did)] = fname
-        elif kind == "summary":
-            for sid, fname in cur.execute(
-                f"SELECT s.summary_id, d.file_name "
-                f"FROM summaries s "
-                f"JOIN documents d USING (document_id) "
-                f"WHERE s.summary_id IN ({ph})",
-                ids_list,
-            ):
-                out[("summary", sid)] = f"summary of {fname}"
-        elif kind == "finding":
-            for fid, title in cur.execute(
-                f"SELECT finding_id, title FROM findings "
-                f"WHERE finding_id IN ({ph})",
-                ids_list,
-            ):
-                out[("finding", fid)] = title
-    return out
-
-
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
+    in_documents = args.in_documents
 
-    memory_excluded = False
     memory_enabled = conn.cursor().execute(
         "SELECT memory_enabled FROM sessions WHERE session_id = ?", (session_id,)
     ).fetchone()[0]
-    if "finding" in source_kinds and not memory_enabled:
+    # Findings drop out when memory is off OR when --in-documents is set
+    # (findings have no document anchor). memory_excluded reports only the
+    # memory case — that's the signal documented in SKILL.md.
+    memory_excluded = "finding" in source_kinds and not memory_enabled
+    drop_findings = memory_excluded or in_documents is not None
+    if drop_findings:
         source_kinds = [k for k in source_kinds if k != "finding"]
-        memory_excluded = True
 
-    if not source_kinds:
-        return {
-            "query": args.query,
-            "modes": modes,
-            "source_kinds": [],
-            "memory_excluded": memory_excluded,
-            "context": args.context,
-            "results": [],
-        }
-
-    overfetch = max(args.limit * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR)
-
-    rankings: list[list[int]] = []
-    if "full-text" in modes:
-        rankings.append(_fts_search(conn, args.query, source_kinds, overfetch))
-    if "semantic" in modes:
-        query_bytes = _embed_query(args.query)
-        rankings.append(_semantic_search(conn, query_bytes, source_kinds, overfetch))
-
-    if len(rankings) > 1:
-        scored = _rrf(rankings)
-    elif len(rankings) == 1:
-        scored = _single_mode_scored(rankings[0])
-    else:
-        scored = []
-    scored = scored[: args.limit]
-
-    if not scored:
+    def _response(results: list) -> dict:
         return {
             "query": args.query,
             "modes": modes,
             "source_kinds": source_kinds,
             "memory_excluded": memory_excluded,
+            "in_documents": in_documents,
             "context": args.context,
-            "results": [],
+            "results": results,
         }
+
+    if not source_kinds:
+        return _response([])
+
+    scope = _build_scope(conn, source_kinds, in_documents)
+    overfetch = max(args.limit * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR)
+
+    rankings: list[list[int]] = []
+    if "full-text" in modes:
+        rankings.append(_fts_search(conn, args.query, scope, overfetch))
+    if "semantic" in modes:
+        rankings.append(
+            _semantic_search(conn, _embed_query(args.query), scope, overfetch)
+        )
+
+    scored = _rrf(rankings)[: args.limit]
+    if not scored:
+        return _response([])
 
     chunk_ids = [cid for cid, _ in scored]
     placeholders = ",".join("?" * len(chunk_ids))
@@ -313,16 +341,12 @@ def work(*, conn, args, session_id) -> dict:
             chunk_ids,
         )
     }
+    names = source_names(conn, {(r[1], r[2]) for r in rows.values()})
 
-    source_keys = {(rows[cid][1], rows[cid][2]) for cid in chunk_ids if cid in rows}
-    names = _source_names(conn, source_keys)
-
+    top_score = scored[0][1]
     results = []
-    for chunk_id, score in scored:
-        row = rows.get(chunk_id)
-        if row is None:
-            continue
-        _, source_kind, source_id, chunk_index, section_heading, content_type, text = row
+    for rank, (chunk_id, score) in enumerate(scored, start=1):
+        _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
         before, after = _fetch_context(
             conn, source_kind, source_id, chunk_index, args.context
         )
@@ -330,24 +354,19 @@ def work(*, conn, args, session_id) -> dict:
             "chunk_id": chunk_id,
             "source_kind": source_kind,
             "source_id": source_id,
-            "source_name": names.get((source_kind, source_id), ""),
+            "source_name": names[(source_kind, source_id)],
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,
             "text": text,
             "context_before": before,
             "context_after": after,
+            "rank": rank,
             "score": score,
+            "normalized_score": score / top_score,
         })
 
-    return {
-        "query": args.query,
-        "modes": modes,
-        "source_kinds": source_kinds,
-        "memory_excluded": memory_excluded,
-        "context": args.context,
-        "results": results,
-    }
+    return _response(results)
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -123,8 +123,9 @@ def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
         )
         other_sess = conn.last_insert_rowid()
         cur.execute(
-            "INSERT INTO findings (session_id, title, body) VALUES (?, ?, ?)",
-            (other_sess, "test", "body about pm25"),
+            "INSERT INTO findings (session_id, title, description, body) "
+            "VALUES (?, ?, ?, ?)",
+            (other_sess, "test", "a one-line description", "body about pm25"),
         )
         finding_id = conn.last_insert_rowid()
         emb = [0.01 * i for i in range(EMBEDDING_DIM)]
@@ -217,3 +218,95 @@ def test_fts_query_quotes_each_token():
     # Quote chars within a word are stripped
     assert search_script._fts_query('he"llo') == '"hello"'
     assert search_script._fts_query("   ") == ""
+
+
+def test_search_results_have_rank_and_normalized_score(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"], "expected at least one hit for 'alpha'"
+    # rank is 1-indexed and consecutive.
+    assert [r["rank"] for r in out["results"]] == list(
+        range(1, len(out["results"]) + 1)
+    )
+    # First result has normalized_score == 1.0; raw score is positive.
+    assert out["results"][0]["normalized_score"] == pytest.approx(1.0)
+    assert out["results"][0]["score"] > 0
+    # All normalized scores in (0, 1].
+    for r in out["results"]:
+        assert 0 < r["normalized_score"] <= 1.0
+
+
+def test_search_in_documents_filters_to_listed_docs(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--in-documents", str(seeded_project["doc_b"]),
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    # "alpha" appears in doc_a's chunks, but we scoped to doc_b — no hits.
+    assert out["in_documents"] == [seeded_project["doc_b"]]
+    assert out["results"] == []
+
+
+def test_search_in_documents_returns_hits_in_scope(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--in-documents", str(seeded_project["doc_a"]),
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"]
+    for r in out["results"]:
+        assert r["source_kind"] == "document"
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
+def test_search_in_documents_drops_findings(seeded_project, capsys):
+    # Seed a finding so we can verify it gets dropped even when --findings asked.
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
+            ("with-findings", 1),
+        )
+        sess = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO findings (session_id, title, description, body) "
+            "VALUES (?, ?, ?, ?)",
+            (sess, "f", "f", "body talking about alpha"),
+        )
+        finding_id = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_finding_chunks(conn, finding_id, [
+            ChunkInput(text="finding body about alpha", embedding=emb, chunk_index=0),
+        ])
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "--findings",
+        "--in-documents", str(seeded_project["doc_a"]),
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert "finding" not in out["source_kinds"]
+    assert all(r["source_kind"] != "finding" for r in out["results"])
+
+
+def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--in-documents", "99999",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["in_documents"] == [99999]
+    assert out["results"] == []
