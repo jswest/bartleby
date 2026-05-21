@@ -9,6 +9,7 @@ Output:
     {
       "finding_id": int,
       "session_id": int, "session_name": str,
+      "body": str,
       "chunk_ids": [int, ...],
       "citations": [{
         "chunk_id": int,
@@ -17,6 +18,10 @@ Output:
         "page_number": int|null,
       }, ...]
     }
+
+``body`` is the exact markdown that landed in ``findings.body``. The agent
+is expected to echo it verbatim back to the user — see SKILL.md for the
+single-source-of-truth contract.
 """
 
 from __future__ import annotations
@@ -126,6 +131,7 @@ def work(*, conn, args, session_id) -> dict:
         "finding_id": finding_id,
         "session_id": session_id,
         "session_name": session_name,
+        "body": body,
         "chunk_ids": chunk_ids,
         "citations": _resolve_citations(conn, citations),
     }

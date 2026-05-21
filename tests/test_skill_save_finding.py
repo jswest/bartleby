@@ -38,7 +38,8 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
         conn.close()
 
     body_file = tmp_path / "finding.md"
-    body_file.write_text("# A finding\n\nThis is the body.", encoding="utf-8")
+    body_text = "# A finding\n\nThis is the body."
+    body_file.write_text(body_text, encoding="utf-8")
 
     save_finding.main([
         "--project", seeded_project["project"],
@@ -52,6 +53,7 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
     assert len(out["citations"]) == 2
     assert len(out["chunk_ids"]) == 1
     assert out["session_name"]
+    assert out["body"] == body_text
     # Each enriched citation carries source_name + file_name, and the seeded
     # alpha doc's section_heading isn't a 'page N' string, so page_number=None.
     for c in out["citations"]:
@@ -70,7 +72,11 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
         ).fetchone()
         assert title == "PM25 equity"
         assert description == "Who bears the brunt of PM2.5 monitoring gaps."
-        assert "This is the body" in body
+        # The returned body must match the DB byte-for-byte — that's the
+        # single-source-of-truth contract the agent relies on to echo it back
+        # to the user without drift.
+        assert body == body_text
+        assert out["body"] == body
 
         n_citations = cur.execute(
             "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
