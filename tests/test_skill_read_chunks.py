@@ -62,6 +62,34 @@ def _doc_chunk_ids(project: str, document_id: int) -> list[int]:
     return [r[0] for r in rows]
 
 
+def test_read_chunks_document_mode_includes_page_number(seeded_project, capsys):
+    """page_number is parsed from a 'page N' section_heading and is null otherwise."""
+    from bartleby.db.connection import open_db
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+    conn = open_db(seeded_project["project"])
+    try:
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_document_chunks(conn, seeded_project["doc_a"], [
+            ChunkInput(
+                text="alpha page 5 body",
+                embedding=emb, chunk_index=4,
+                section_heading=None, page_number=5, content_type="text",
+            ),
+        ])
+    finally:
+        conn.close()
+
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    pages = [c["page_number"] for c in out["chunks"]]
+    # The four seeded chunks have no page_number; the new one is page 5.
+    assert pages == [None, None, None, None, 5]
+
+
 def test_read_chunks_by_id_returns_requested(seeded_project, capsys):
     chunk_ids = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])
     target = [chunk_ids[2], chunk_ids[0]]  # arbitrary order
@@ -80,6 +108,8 @@ def test_read_chunks_by_id_returns_requested(seeded_project, capsys):
         assert c["source_kind"] == "document"
         assert c["source_id"] == seeded_project["doc_a"]
         assert c["source_name"] == "alpha.pdf"
+        assert c["file_name"] == "alpha.pdf"
+        assert c["page_number"] is None    # seeded headings aren't 'page N'
         assert "chunk_index" in c
 
 

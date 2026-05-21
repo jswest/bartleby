@@ -374,6 +374,149 @@ def test_scribe_skips_image_when_no_vision_provider(
         conn.close()
 
 
+def test_scribe_persists_page_number_for_pdfplumber_chunks(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Document chunks from pdfplumber carry a real page_number column."""
+    from bartleby.db.connection import open_db
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100,
+            "ocr_min_confidence": 30,
+        },
+    )
+
+    pdf = tmp_path / "multi.pdf"
+    _pdf_with_image(pdf, _png_bytes(), text="Page-one body text " * 10)
+    scribe.main(project="test_proj", files=str(pdf))
+
+    conn = open_db("test_proj")
+    try:
+        rows = conn.cursor().execute(
+            "SELECT page_number, section_heading FROM chunks "
+            "WHERE source_kind='document'"
+        ).fetchall()
+        assert rows
+        # All pdfplumber-derived document chunks have a real page_number and
+        # a NULL section_heading (the old 'page N' hack is gone).
+        for page_number, section_heading in rows:
+            assert page_number == 1
+            assert section_heading is None
+    finally:
+        conn.close()
+
+
+def test_scribe_stage_callback_progresses_through_phases(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """on_stage fires through extracting → embedding → analyzing → summarizing."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    stub_summary = _StubProvider()
+    monkeypatch.setattr(
+        scribe_module, "load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100, "ocr_min_confidence": 30,
+            "vision_provider": "stub", "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    monkeypatch.setattr(
+        scribe_module, "get_provider",
+        lambda name, **kwargs: stub_summary if name == "anthropic" else _StubVisionProvider(),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        scribe_module, "chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    pdf = tmp_path / "img.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    stages: list[str] = []
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        scribe_module._process_one(
+            conn, pdf, archive_root,
+            backend="pdfplumber",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_max_dimension=1024,
+            llm_provider=stub_summary, llm_model="m",
+            temperature=0.0, max_summarize_tokens=50_000,
+            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            on_stage=stages.append,
+        )
+    finally:
+        conn.close()
+
+    # Every phase fires in order; "extracting" is set by _process_one before
+    # the pdfplumber dispatcher, then the dispatcher fires embedding +
+    # analyzing images, then _process_one tops it off with summarizing.
+    assert stages[0] == "extracting"
+    assert "embedding" in stages
+    assert "analyzing images" in stages
+    assert stages[-1] == "summarizing"
+
+
+def test_scribe_image_progress_callback_fires_per_image(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """_run_image_routes invokes on_progress(0, N) then once per image."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    monkeypatch.setattr(
+        scribe_module, "load_config",
+        lambda: {
+            "summary_depth": "none",
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100,
+            "vision_provider": "stub", "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    monkeypatch.setattr(
+        scribe_module, "get_provider",
+        lambda name, **kwargs: _StubVisionProvider(),
+    )
+
+    pdf = tmp_path / "img.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    seen: list[tuple[int, int]] = []
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        scribe_module._process_one(
+            conn, pdf, archive_root,
+            backend="pdfplumber",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_max_dimension=1024,
+            llm_provider=None, llm_model=None,
+            temperature=0.0, max_summarize_tokens=1000,
+            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            on_image_progress=lambda done, total: seen.append((done, total)),
+        )
+    finally:
+        conn.close()
+
+    assert seen, "expected at least one progress callback for one embedded image"
+    assert seen[0] == (0, 1)
+    assert seen[-1] == (1, 1)
+
+
 def test_scribe_truncation_note_in_summary(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):

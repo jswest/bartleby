@@ -372,6 +372,34 @@ def test_search_in_documents_filters_image_chunks(seeded_project, capsys):
         assert "image in alpha.pdf" in r["source_name"]
 
 
+def test_search_hits_include_file_name_and_page_number(seeded_project, capsys):
+    """Hits should carry first-class file_name + page_number fields."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    conn = open_db(seeded_project["project"])
+    try:
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        # Add a chunk with a first-class page_number.
+        insert_document_chunks(conn, seeded_project["doc_b"], [
+            ChunkInput(
+                text="beta page-seven keyword",
+                embedding=emb, chunk_index=2,
+                section_heading=None, page_number=7, content_type="text",
+            ),
+        ])
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "page-seven",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    [hit] = out["results"]
+    assert hit["file_name"] == "beta.txt"
+    assert hit["page_number"] == 7
+
+
 def test_search_image_source_name_notes_multiple_docs(seeded_project, capsys):
     """An image attached to two documents shows '+1 other docs' in source_name."""
     from tests._skill_fixtures import seed_image

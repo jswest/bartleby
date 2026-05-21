@@ -19,7 +19,9 @@ Paginated output:
       "offset": int, "limit": int, "total": int,
       "chunks": [{
         "chunk_id": int, "chunk_index": int,
-        "section_heading": str|null, "content_type": str|null,
+        "section_heading": str|null,
+        "page_number": int|null,        # first-class column; null for non-paginated chunks
+        "content_type": str|null,
         "text": str,
       }, ...]
     }
@@ -32,6 +34,8 @@ Direct-lookup output:
       "chunks": [{
         "chunk_id": int,
         "source_kind": str, "source_id": int, "source_name": str,
+        "file_name": str|null,          # originating doc (None for findings)
+        "page_number": int|null,        # first-class on doc chunks; image join for image chunks
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
@@ -44,7 +48,9 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, run
-from bartleby.skill_scripts._common import comma_int_list, source_names
+from bartleby.skill_scripts._common import (
+    chunk_locations, comma_int_list, source_names,
+)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -83,6 +89,7 @@ def _read_by_chunk_ids(conn, chunk_ids: list[int]) -> dict:
         )
     }
     names = source_names(conn, {(r[1], r[2]) for r in rows.values()})
+    locations = chunk_locations(conn, list(rows.keys()))
 
     missing = [cid for cid in ordered if cid not in rows]
     chunks = []
@@ -90,11 +97,14 @@ def _read_by_chunk_ids(conn, chunk_ids: list[int]) -> dict:
         if cid not in rows:
             continue
         _, sk, sid, chunk_index, section_heading, content_type, text = rows[cid]
+        loc = locations.get(cid, {"file_name": None, "page_number": None})
         chunks.append({
             "chunk_id": cid,
             "source_kind": sk,
             "source_id": sid,
             "source_name": names.get((sk, sid), ""),
+            "file_name": loc["file_name"],
+            "page_number": loc["page_number"],
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,
@@ -128,7 +138,8 @@ def _read_by_document(conn, args) -> dict:
     ).fetchone()[0]
 
     rows = list(cur.execute(
-        "SELECT chunk_id, chunk_index, section_heading, content_type, text "
+        "SELECT chunk_id, chunk_index, section_heading, page_number, "
+        "       content_type, text "
         "FROM chunks "
         "WHERE source_kind = 'document' AND source_id = ? "
         "ORDER BY chunk_index LIMIT ? OFFSET ?",
@@ -140,10 +151,12 @@ def _read_by_document(conn, args) -> dict:
             "chunk_id": chunk_id,
             "chunk_index": chunk_index,
             "section_heading": section_heading,
+            "page_number": page_number,
             "content_type": content_type,
             "text": text,
         }
-        for chunk_id, chunk_index, section_heading, content_type, text in rows
+        for chunk_id, chunk_index, section_heading, page_number,
+        content_type, text in rows
     ]
 
     return {

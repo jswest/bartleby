@@ -25,6 +25,7 @@ class ChunkInput:
     embedding: list[float]
     chunk_index: int
     section_heading: str | None = None
+    page_number: int | None = None
     content_type: str | None = None
 
 
@@ -70,10 +71,11 @@ def _insert(
         for c in chunks:
             cur.execute(
                 "INSERT INTO chunks "
-                "(source_kind, source_id, chunk_index, text, section_heading, content_type) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(source_kind, source_id, chunk_index, text, "
+                " section_heading, page_number, content_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (source_kind, source_id, c.chunk_index, c.text,
-                 c.section_heading, c.content_type),
+                 c.section_heading, c.page_number, c.content_type),
             )
             chunk_id = conn.last_insert_rowid()
             inserted_ids.append(chunk_id)

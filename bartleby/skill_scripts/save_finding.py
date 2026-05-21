@@ -10,7 +10,12 @@ Output:
       "finding_id": int,
       "session_id": int, "session_name": str,
       "chunk_ids": [int, ...],
-      "citation_count": int
+      "citations": [{
+        "chunk_id": int,
+        "source_kind": str, "source_name": str,
+        "file_name": str|null,
+        "page_number": int|null,
+      }, ...]
     }
 """
 
@@ -23,7 +28,9 @@ from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.ingest.chunk import chunk_markdown_string
 from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError, run
-from bartleby.skill_scripts._common import comma_int_list
+from bartleby.skill_scripts._common import (
+    chunk_locations, comma_int_list, source_names,
+)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -120,8 +127,35 @@ def work(*, conn, args, session_id) -> dict:
         "session_id": session_id,
         "session_name": session_name,
         "chunk_ids": chunk_ids,
-        "citation_count": len(citations),
+        "citations": _resolve_citations(conn, citations),
     }
+
+
+def _resolve_citations(conn, chunk_ids: list[int]) -> list[dict]:
+    """Enrich each cited chunk_id with source_name/file_name/page_number.
+
+    The agent gets this back so it can render human-readable citations in its
+    reply alongside the structural chunk_id.
+    """
+    if not chunk_ids:
+        return []
+    locations = chunk_locations(conn, chunk_ids)
+    names = source_names(
+        conn, {(loc["source_kind"], loc["source_id"]) for loc in locations.values()},
+    )
+    out = []
+    for cid in chunk_ids:
+        loc = locations.get(cid)
+        if loc is None:    # citation chunk vanished between validation and here
+            continue
+        out.append({
+            "chunk_id": cid,
+            "source_kind": loc["source_kind"],
+            "source_name": names.get((loc["source_kind"], loc["source_id"]), ""),
+            "file_name": loc["file_name"],
+            "page_number": loc["page_number"],
+        })
+    return out
 
 
 def main(argv: list[str] | None = None) -> None:

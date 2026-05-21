@@ -62,7 +62,7 @@ def test_convert_text_only_pdf(tmp_path):
         ("This is page one of a small PDF. " * 6),
         ("Page two also has text. " * 8),
     ])
-    result = pp.convert(src, sparse_text_threshold=100)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
 
     assert result.page_count == 2
     assert len(result.pages) == 2
@@ -79,7 +79,7 @@ def test_convert_text_only_pdf(tmp_path):
 def test_convert_extracts_embedded_image(tmp_path):
     src = tmp_path / "withimg.pdf"
     _pdf_with_embedded_image(src, _png_image())
-    result = pp.convert(src, sparse_text_threshold=100)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
 
     assert result.page_count == 1
     page = result.pages[0]
@@ -97,12 +97,16 @@ def test_convert_extracts_embedded_image(tmp_path):
 def test_convert_marks_sparse_pages_and_saves_render(tmp_path):
     src = tmp_path / "sparse.pdf"
     _sparse_pdf(src)
-    result = pp.convert(src, sparse_text_threshold=100)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
 
     assert result.page_count == 1
     page = result.pages[0]
     assert page.is_sparse
-    assert page.text == "abc"
+    # OCR on a page with just "abc" cannot clear the 100-char threshold, so
+    # content_type=None and text="" — the caller will route the page render
+    # through the VLM instead.
+    assert page.content_type is None
+    assert page.text == ""
     assert page.page_render_png is not None
     assert page.page_render_png.startswith(b"\x89PNG")
 
@@ -112,6 +116,25 @@ def test_convert_does_not_render_text_pages_without_images(tmp_path):
     # neither sparse text nor embedded images should skip rendering entirely.
     src = tmp_path / "text.pdf"
     _text_pdf(src, [("Plenty of text to clear the sparse threshold easily. " * 4)])
-    result = pp.convert(src, sparse_text_threshold=100)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
     assert result.pages[0].page_render_png is None
     assert result.pages[0].embedded_images == []
+
+
+def test_convert_calls_on_progress_with_total_then_each_page(tmp_path):
+    src = tmp_path / "multi.pdf"
+    _text_pdf(src, [
+        ("Page one body. " * 12),
+        ("Page two body. " * 12),
+        ("Page three body. " * 12),
+    ])
+    seen: list[tuple[int, int]] = []
+    pp.convert(
+        src,
+        sparse_text_threshold=100,
+        ocr_min_confidence=30,
+        on_progress=lambda done, total: seen.append((done, total)),
+    )
+    # First call signals the total; later calls report each page.
+    assert seen[0] == (0, 3)
+    assert seen[1:] == [(1, 3), (2, 3), (3, 3)]

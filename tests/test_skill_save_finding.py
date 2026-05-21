@@ -49,9 +49,17 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["finding_id"] >= 1
-    assert out["citation_count"] == 2
+    assert len(out["citations"]) == 2
     assert len(out["chunk_ids"]) == 1
     assert out["session_name"]
+    # Each enriched citation carries source_name + file_name, and the seeded
+    # alpha doc's section_heading isn't a 'page N' string, so page_number=None.
+    for c in out["citations"]:
+        assert c["source_kind"] == "document"
+        assert c["source_name"] == "alpha.pdf"
+        assert c["file_name"] == "alpha.pdf"
+        assert c["page_number"] is None
+    assert [c["chunk_id"] for c in out["citations"]] == cited_ids
 
     conn = open_db(seeded_project["project"])
     try:
@@ -83,7 +91,50 @@ def test_save_finding_without_citations(seeded_project, tmp_path, capsys):
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["citation_count"] == 0
+    assert out["citations"] == []
+
+
+def test_save_finding_citations_include_page_number_when_available(
+    seeded_project, tmp_path, capsys, monkeypatch
+):
+    """A pdfplumber-style 'page N' section_heading surfaces as page_number."""
+    from bartleby.db.connection import open_db
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+
+    conn = open_db(seeded_project["project"])
+    try:
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        # Append a chunk with a first-class page_number. chunk_index must
+        # beat the existing 4 alpha chunks.
+        insert_document_chunks(conn, seeded_project["doc_a"], [
+            ChunkInput(
+                text="alpha chunk four on page 7",
+                embedding=emb, chunk_index=4,
+                section_heading=None, page_number=7, content_type="text",
+            ),
+        ])
+        new_chunk_id = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id=? AND chunk_index=4",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text("Cited from page 7.", encoding="utf-8")
+    save_finding.main([
+        "--project", seeded_project["project"],
+        "--title", "page test",
+        "--description", "Testing page number propagation.",
+        "--body-file", str(body_file),
+        "--citations", str(new_chunk_id),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    [cite] = out["citations"]
+    assert cite["file_name"] == "alpha.pdf"
+    assert cite["page_number"] == 7
 
 
 def test_save_finding_unknown_citation_chunk(seeded_project, tmp_path, capsys):

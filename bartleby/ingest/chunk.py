@@ -33,6 +33,7 @@ class ChunkRow:
     text: str
     section_heading: str | None
     content_type: str | None
+    page_number: int | None = None
 
 
 @dataclass

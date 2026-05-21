@@ -17,9 +17,12 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import pdfplumber
 from PIL import Image
+
+from bartleby.ingest import ocr as ocr_module
 
 
 PAGE_RENDER_DPI = 150
@@ -34,7 +37,8 @@ class EmbeddedImage:
 @dataclass
 class PdfPage:
     page_number: int           # 1-indexed
-    text: str                  # extracted text (may be empty or sparse)
+    text: str                  # extracted text (may be empty, OCR, or raw PDF text)
+    content_type: str | None   # 'text' | 'ocr' | None (caller routes None pages to VLM)
     is_sparse: bool
     page_render_png: bytes | None  # populated only when is_sparse
     embedded_images: list[EmbeddedImage] = field(default_factory=list)
@@ -47,11 +51,31 @@ class PdfResult:
     pages: list[PdfPage]
 
 
-def convert(path: Path, *, sparse_text_threshold: int) -> PdfResult:
+def convert(
+    path: Path,
+    *,
+    sparse_text_threshold: int,
+    ocr_min_confidence: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> PdfResult:
+    """Extract text + embedded images from a PDF, with OCR fallback for sparse pages.
+
+    OCR runs inline per-page so each page is fully resolved before its
+    ``on_progress`` tick fires — the progress bar never lies about being done
+    while Tesseract grinds in the background.
+
+    ``on_progress(pages_done, total)`` is called once with ``(0, total)`` after
+    the PDF is opened so callers can size a progress bar, then again after
+    every page with ``(page_number, total)``.
+    """
     pages: list[PdfPage] = []
     full_text_parts: list[str] = []
 
     with pdfplumber.open(str(path)) as pdf:
+        page_count = len(pdf.pages)
+        if on_progress is not None:
+            on_progress(0, page_count)
+
         for ix, page in enumerate(pdf.pages):
             page_number = ix + 1
             raw_text = page.extract_text() or ""
@@ -68,22 +92,54 @@ def convert(path: Path, *, sparse_text_threshold: int) -> PdfResult:
                 if page.images:
                     embedded_images = _crop_embedded_images(rendered, page)
 
-            full_text_parts.append(raw_text)
+            if is_sparse:
+                text, content_type = _ocr_sparse_page(
+                    page_render_png,
+                    sparse_text_threshold=sparse_text_threshold,
+                    ocr_min_confidence=ocr_min_confidence,
+                )
+            else:
+                content_type = "text"
+
+            full_text_parts.append(text or raw_text)
             pages.append(PdfPage(
                 page_number=page_number,
                 text=text,
+                content_type=content_type,
                 is_sparse=is_sparse,
                 page_render_png=page_render_png,
                 embedded_images=embedded_images,
             ))
 
-        page_count = len(pdf.pages)
+            if on_progress is not None:
+                on_progress(page_number, page_count)
 
     return PdfResult(
         full_text="\n\f\n".join(full_text_parts),
         page_count=page_count,
         pages=pages,
     )
+
+
+def _ocr_sparse_page(
+    page_render_png: bytes | None,
+    *,
+    sparse_text_threshold: int,
+    ocr_min_confidence: int,
+) -> tuple[str, str | None]:
+    """Tesseract pass on a sparse page render. Returns (text, content_type).
+
+    Returns ``("", None)`` if the OCR text doesn't clear the same length and
+    confidence thresholds we apply to native PDF text — the caller routes
+    None-content pages to the VLM via the page render.
+    """
+    if page_render_png is None:
+        return "", None
+    result = ocr_module.run(page_render_png)
+    if (len(result.text) >= sparse_text_threshold
+            and result.avg_confidence >= ocr_min_confidence):
+        return result.text, "ocr"
+    return "", None
 
 
 def _to_png_bytes(img: Image.Image) -> bytes:

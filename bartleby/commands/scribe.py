@@ -16,6 +16,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 from rich.console import Console
@@ -37,7 +38,6 @@ from bartleby.db.chunks import (
 )
 from bartleby.db.connection import open_db
 from bartleby.ingest import images as image_pipeline
-from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
@@ -132,6 +132,7 @@ def _build_chunk_inputs(
             embedding=emb,
             chunk_index=start_index + i,
             section_heading=row.section_heading,
+            page_number=row.page_number,
             content_type=row.content_type,
         )
         for i, (row, emb) in enumerate(zip(rows, embeddings))
@@ -175,9 +176,12 @@ def _maybe_summarize(
     model: str | None,
     temperature: float,
     max_summarize_tokens: int,
+    on_stage: Callable[[str], None] | None = None,
 ) -> None:
     if provider is None or not model or not full_text or not full_text.strip():
         return
+    if on_stage is not None:
+        on_stage("summarizing")
     result = summarize(
         full_text,
         provider=provider,
@@ -263,8 +267,11 @@ def _ingest_text_document(
     *,
     file_hash: str,
     file_name: str,
+    on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
     """txt / html / md via the existing convert_and_chunk path."""
+    if on_stage is not None:
+        on_stage("extracting")
     result = convert_and_chunk(archived)
     document_id = _insert_document(
         conn,
@@ -294,9 +301,17 @@ def _ingest_pdf_pdfplumber(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    on_page_progress: Callable[[int, int], None] | None = None,
+    on_image_progress: Callable[[int, int], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
+    if on_stage is not None:
+        on_stage("extracting")
     result = pdfplumber_pipeline.convert(
-        archived, sparse_text_threshold=sparse_text_threshold,
+        archived,
+        sparse_text_threshold=sparse_text_threshold,
+        ocr_min_confidence=ocr_min_confidence,
+        on_progress=on_page_progress,
     )
     document_id = _insert_document(
         conn,
@@ -311,20 +326,16 @@ def _ingest_pdf_pdfplumber(
     image_routes: list[_ImageRoute] = []
 
     for page in result.pages:
-        page_text, content_type = _resolve_page_text(
-            page,
-            sparse_text_threshold=sparse_text_threshold,
-            ocr_min_confidence=ocr_min_confidence,
-        )
-        if page_text:
-            for piece in chunk_text(page_text):
+        if page.content_type is not None:
+            for piece in chunk_text(page.text):
                 doc_chunks.append(ChunkRow(
                     text=piece,
-                    section_heading=f"page {page.page_number}",
-                    content_type=content_type,
+                    section_heading=None,
+                    content_type=page.content_type,
+                    page_number=page.page_number,
                 ))
-        elif page.is_sparse and page.page_render_png is not None:
-            # OCR didn't clear the bar; fall back to VLM on the page render.
+        elif page.page_render_png is not None:
+            # Sparse page where OCR didn't clear the bar — fall back to VLM.
             image_routes.append(_ImageRoute(
                 bytes_=page.page_render_png,
                 page_number=page.page_number,
@@ -338,18 +349,23 @@ def _ingest_pdf_pdfplumber(
                 image_index_on_page=emb.image_index_on_page,
             ))
 
+    if on_stage is not None:
+        on_stage("embedding")
     if doc_chunks:
         embeddings = embed_texts([r.text for r in doc_chunks])
         insert_document_chunks(
             conn, document_id, _build_chunk_inputs(doc_chunks, embeddings),
         )
 
+    if on_stage is not None and image_routes:
+        on_stage("analyzing images")
     _run_image_routes(
         conn, document_id, image_routes,
         archive_root=archive_root,
         vision_provider=vision_provider,
         vision_model=vision_model,
         vision_max_dimension=vision_max_dimension,
+        on_progress=on_image_progress,
     )
 
     return document_id, result.full_text
@@ -366,9 +382,13 @@ def _ingest_pdf_docling(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    on_image_progress: Callable[[int, int], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
     from bartleby.ingest import docling as docling_pipeline
 
+    if on_stage is not None:
+        on_stage("extracting")
     docling_result = docling_pipeline.convert(archived)
     document_id = _insert_document(
         conn,
@@ -379,6 +399,8 @@ def _ingest_pdf_docling(
         full_text=docling_result.full_text,
     )
     if docling_result.chunks:
+        if on_stage is not None:
+            on_stage("embedding")
         rows = [
             ChunkRow(text=c.text, section_heading=c.section_heading,
                      content_type=c.content_type)
@@ -391,8 +413,12 @@ def _ingest_pdf_docling(
 
     # Side-pass for embedded images so docling users still get image search.
     if vision_provider is not None:
+        if on_stage is not None:
+            on_stage("analyzing images")
         pdf_result = pdfplumber_pipeline.convert(
-            archived, sparse_text_threshold=sparse_text_threshold,
+            archived,
+            sparse_text_threshold=sparse_text_threshold,
+            ocr_min_confidence=0,    # text discarded; OCR doesn't matter
         )
         image_routes = [
             _ImageRoute(
@@ -409,6 +435,7 @@ def _ingest_pdf_docling(
             vision_provider=vision_provider,
             vision_model=vision_model,
             vision_max_dimension=vision_max_dimension,
+            on_progress=on_image_progress,
         )
 
     return document_id, docling_result.full_text
@@ -424,7 +451,10 @@ def _ingest_image_file(
     vision_provider: Provider,
     vision_model: str,
     vision_max_dimension: int,
+    on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
+    if on_stage is not None:
+        on_stage("analyzing image")
     document_id = _insert_document(
         conn,
         file_hash=file_hash,
@@ -459,29 +489,6 @@ def _ingest_image_file(
     return document_id, full_text
 
 
-def _resolve_page_text(
-    page: pdfplumber_pipeline.PdfPage,
-    *,
-    sparse_text_threshold: int,
-    ocr_min_confidence: int,
-) -> tuple[str, str | None]:
-    """Decide what text (if any) to chunk from a pdfplumber page.
-
-    Returns ``(text, content_type)``; an empty string in ``text`` means "no
-    text-track chunks for this page" — the caller may still route the page
-    render through the image pipeline.
-    """
-    if not page.is_sparse:
-        return page.text, "text"
-    if page.page_render_png is None:
-        return "", None
-    ocr_result = ocr_module.run(page.page_render_png)
-    if (len(ocr_result.text) >= sparse_text_threshold
-            and ocr_result.avg_confidence >= ocr_min_confidence):
-        return ocr_result.text, "ocr"
-    return "", None
-
-
 def _run_image_routes(
     conn,
     document_id: int,
@@ -491,6 +498,7 @@ def _run_image_routes(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> None:
     if not routes:
         return
@@ -499,7 +507,10 @@ def _run_image_routes(
             f"Skipping {len(routes)} image(s) — no vision provider configured."
         )
         return
-    for route in routes:
+    total = len(routes)
+    if on_progress is not None:
+        on_progress(0, total)
+    for i, route in enumerate(routes, start=1):
         try:
             _process_image(
                 conn, document_id, route,
@@ -511,6 +522,9 @@ def _run_image_routes(
         except Exception as e:
             page_str = f" (page {route.page_number})" if route.page_number else ""
             console.warn(f"Image analysis failed{page_str}: {e}")
+        finally:
+            if on_progress is not None:
+                on_progress(i, total)
 
 
 # -------------------- top-level orchestrator --------------------
@@ -531,6 +545,9 @@ def _process_one(
     max_summarize_tokens: int,
     vision_provider: Provider | None,
     vision_model: str | None,
+    on_page_progress: Callable[[int, int], None] | None = None,
+    on_image_progress: Callable[[int, int], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> None:
     file_hash = _hash_file(path)
     if _document_already_ingested(conn, file_hash) is not None:
@@ -551,6 +568,7 @@ def _process_one(
             archive_root=archive_root,
             vision_provider=vision_provider, vision_model=vision_model,
             vision_max_dimension=vision_max_dimension,
+            on_stage=on_stage,
         )
     elif ext in PDF_EXTENSIONS:
         if backend == "docling":
@@ -561,6 +579,8 @@ def _process_one(
                 sparse_text_threshold=sparse_text_threshold,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
+                on_image_progress=on_image_progress,
+                on_stage=on_stage,
             )
         else:
             document_id, full_text = _ingest_pdf_pdfplumber(
@@ -571,16 +591,21 @@ def _process_one(
                 ocr_min_confidence=ocr_min_confidence,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
+                on_page_progress=on_page_progress,
+                on_image_progress=on_image_progress,
+                on_stage=on_stage,
             )
     else:
         document_id, full_text = _ingest_text_document(
             conn, archived, file_hash=file_hash, file_name=path.name,
+            on_stage=on_stage,
         )
 
     _maybe_summarize(
         conn, document_id, full_text,
         provider=llm_provider, model=llm_model,
         temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+        on_stage=on_stage,
     )
 
 
@@ -686,8 +711,26 @@ def main(
             console=Console(file=sys.stderr),
         ) as bar:
             task = bar.add_task("files", total=len(sources), label="Ingesting")
+            sub = bar.add_task(
+                "sub", total=None, label="", visible=False,
+            )
+
+            def _phase_callback(phase: str) -> Callable[[int, int], None]:
+                def cb(done: int, total: int) -> None:
+                    if done == 0:
+                        bar.reset(
+                            sub, total=total, completed=0,
+                            visible=True, label=phase,
+                        )
+                    else:
+                        bar.update(sub, completed=done, total=total)
+                return cb
+
             for src in sources:
-                bar.update(task, label=f"Ingesting {src.name}")
+                def _set_stage(stage: str, _src=src) -> None:
+                    bar.update(task, label=f"Ingesting {_src.name} · {stage}")
+
+                _set_stage("starting")
                 try:
                     _process_one(
                         conn, src, archive_root,
@@ -700,12 +743,16 @@ def main(
                         max_summarize_tokens=max_summarize_tokens,
                         vision_provider=vision_provider,
                         vision_model=vision_model,
+                        on_page_progress=_phase_callback(f"  pages ({src.name})"),
+                        on_image_progress=_phase_callback(f"  images ({src.name})"),
+                        on_stage=_set_stage,
                     )
                 except Exception as e:
                     console.error(f"Failed: {src.name}: {e}")
                     if verbose:
                         logger.exception(e)
                 finally:
+                    bar.update(sub, visible=False)
                     bar.advance(task)
     finally:
         conn.close()

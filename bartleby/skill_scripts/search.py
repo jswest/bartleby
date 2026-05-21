@@ -15,7 +15,10 @@ Output:
       "context": int,
       "results": [{
         "chunk_id": int, "source_kind": str, "source_id": int,
-        "source_name": str, "chunk_index": int,
+        "source_name": str,
+        "file_name": str|null,        # the originating doc (None for findings)
+        "page_number": int|null,      # first-class column; populated for pdfplumber + image chunks
+        "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
         "context_before": [str, ...], "context_after": [str, ...],
@@ -38,7 +41,9 @@ import subprocess
 
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, run
-from bartleby.skill_scripts._common import comma_int_list, source_names
+from bartleby.skill_scripts._common import (
+    chunk_locations, comma_int_list, source_names,
+)
 
 
 RRF_K = 60
@@ -362,6 +367,7 @@ def work(*, conn, args, session_id) -> dict:
     image_paths = _image_paths(
         conn, [r[2] for r in rows.values() if r[1] == "image"]
     )
+    locations = chunk_locations(conn, list(rows.keys()))
 
     top_score = scored[0][1]
     results = []
@@ -370,11 +376,14 @@ def work(*, conn, args, session_id) -> dict:
         before, after = _fetch_context(
             conn, source_kind, source_id, chunk_index, args.context
         )
+        loc = locations.get(chunk_id, {"file_name": None, "page_number": None})
         hit = {
             "chunk_id": chunk_id,
             "source_kind": source_kind,
             "source_id": source_id,
             "source_name": names[(source_kind, source_id)],
+            "file_name": loc["file_name"],
+            "page_number": loc["page_number"],
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,

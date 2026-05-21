@@ -106,7 +106,15 @@ If `search` returns `"memory_excluded": true`, you are already in a no-memory se
 
 ## Output
 
-Respond in markdown. Cite inline using a convention that reads naturally — `[chunk 4192]` or `(chunk 4192)` both work. When the user asks for a structured deliverable (table, comparison, timeline), produce it directly.
+Respond in markdown. Cite inline so a reader can immediately see *which document and where* you're drawing from, with the `chunk_id` along for machine traceability:
+
+- Preferred form: `(foo.pdf p.5, chunk 4192)`.
+- If a chunk has no `page_number` (Docling-extracted chunks, image-only docs, summaries, findings), drop the `p.N` and use `(foo.pdf, chunk 4192)`.
+- If a chunk has neither (a finding chunk, say), fall back to `(chunk 4192)`.
+
+`search` and `read_chunks` hits now carry `file_name` and `page_number` directly — use those, not the section_heading string. `save_finding` returns the same shape under `citations`, so you can echo it back in your reply.
+
+When the user asks for a structured deliverable (table, comparison, timeline), produce it directly.
 
 When you've reached a conclusion worth preserving — even a partial one — call `save_finding`. The body is your markdown answer; `--citations` is the list of `chunk_id`s your conclusion rests on. Findings are how the next agent builds on your work.
 

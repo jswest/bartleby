@@ -5,7 +5,7 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 EMBEDDING_DIM = 768
 
@@ -82,6 +82,7 @@ CREATE TABLE chunks (
     chunk_index INTEGER NOT NULL,
     text TEXT NOT NULL,
     section_heading TEXT,
+    page_number INTEGER,
     content_type TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (source_kind, source_id, chunk_index)
