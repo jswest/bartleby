@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""save_finding — persist a finding (markdown + structural citations).
+"""save_finding — persist a finding (markdown with inline `[^chunk_id]` citations).
 
 The body comes from ``--body-file`` (not ``--body``) because findings can be
-long markdown and shell-escaping them is a nightmare. The citation list is
-comma-separated chunk_ids.
+long markdown and shell-escaping them is a nightmare.
+
+Citations are derived from the body itself: every ``[^N]`` marker in the
+prose is a citation, where ``N`` is a chunk_id. The body is the single source
+of truth — there is no separate ``--citations`` argument.
 
 Output:
     {
@@ -27,15 +30,18 @@ single-source-of-truth contract.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.ingest.chunk import chunk_markdown_string
 from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError, run
-from bartleby.skill_scripts._common import (
-    chunk_locations, comma_int_list, source_names,
-)
+from bartleby.skill_scripts._common import chunk_locations, source_names
+
+
+# Inline citation marker: standard markdown footnote syntax with a chunk_id.
+_CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -43,14 +49,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
-    p.add_argument(
-        "--citations",
-        type=comma_int_list("chunk_id"),
-        default=None,
-        help="Comma-separated chunk_ids the finding rests on.",
-    )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
+
+
+def _extract_citations(body: str) -> list[int]:
+    """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
+    seen: dict[int, None] = {}
+    for m in _CITATION_MARKER.finditer(body):
+        seen[int(m.group(1))] = None
+    return list(seen)
 
 
 def work(*, conn, args, session_id) -> dict:
@@ -71,28 +79,32 @@ def work(*, conn, args, session_id) -> dict:
     if not body.strip():
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
-    citations: list[int] = args.citations or []
+    citations = _extract_citations(body)
+    if not citations:
+        raise SkillError(
+            "NO_INLINE_CITATIONS",
+            "Finding body must include at least one inline citation marker "
+            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
+        )
 
     cur = conn.cursor()
 
-    # Verify cited chunk_ids exist; the FK would catch it, but a clear error
-    # at this layer is friendlier.
-    if citations:
-        placeholders = ",".join("?" * len(citations))
-        seen = {
-            row[0]
-            for row in cur.execute(
-                f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({placeholders})",
-                citations,
-            )
-        }
-        missing = sorted(set(citations) - seen)
-        if missing:
-            raise SkillError(
-                "UNKNOWN_CITATIONS",
-                f"Unknown chunk_ids: {missing}",
-                unknown_chunk_ids=missing,
-            )
+    placeholders = ",".join("?" * len(citations))
+    seen = {
+        row[0]
+        for row in cur.execute(
+            f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({placeholders})",
+            citations,
+        )
+    }
+    missing = sorted(set(citations) - seen)
+    if missing:
+        raise SkillError(
+            "UNKNOWN_CITATIONS",
+            f"Inline citations reference unknown chunk_ids: {missing}. "
+            "Each [^N] marker must be a real chunk_id in this project.",
+            unknown_chunk_ids=missing,
+        )
 
     cur.execute(
         "INSERT INTO findings (session_id, title, description, body) "
@@ -117,11 +129,10 @@ def work(*, conn, args, session_id) -> dict:
         ]
         chunk_ids = insert_finding_chunks(conn, finding_id, chunk_inputs)
 
-    if citations:
-        cur.executemany(
-            "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
-            [(finding_id, cid) for cid in citations],
-        )
+    cur.executemany(
+        "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
+        [(finding_id, cid) for cid in citations],
+    )
 
     session_name = cur.execute(
         "SELECT name FROM sessions WHERE session_id = ?", (session_id,)

@@ -25,7 +25,7 @@ def mock_embed(monkeypatch):
     )
 
 
-def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
+def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
     conn = open_db(seeded_project["project"])
     try:
         cited = conn.cursor().execute(
@@ -38,7 +38,10 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
         conn.close()
 
     body_file = tmp_path / "finding.md"
-    body_text = "# A finding\n\nThis is the body."
+    body_text = (
+        f"# A finding\n\nFirst claim[^{cited_ids[0]}].\n\n"
+        f"Second claim[^{cited_ids[1]}]."
+    )
     body_file.write_text(body_text, encoding="utf-8")
 
     save_finding.main([
@@ -46,7 +49,6 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
         "--title", "PM25 equity",
         "--description", "Who bears the brunt of PM2.5 monitoring gaps.",
         "--body-file", str(body_file),
-        "--citations", ",".join(str(c) for c in cited_ids),
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["finding_id"] >= 1
@@ -54,8 +56,6 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
     assert len(out["chunk_ids"]) == 1
     assert out["session_name"]
     assert out["body"] == body_text
-    # Each enriched citation carries source_name + file_name, and the seeded
-    # alpha doc's section_heading isn't a 'page N' string, so page_number=None.
     for c in out["citations"]:
         assert c["source_kind"] == "document"
         assert c["source_name"] == "alpha.pdf"
@@ -87,23 +87,35 @@ def test_save_finding_with_citations(seeded_project, tmp_path, capsys):
         conn.close()
 
 
-def test_save_finding_without_citations(seeded_project, tmp_path, capsys):
+def test_save_finding_dedupes_repeated_markers(seeded_project, tmp_path, capsys):
+    """Same chunk cited twice → one finding_citations row, preserving order."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cited = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 2",
+            (seeded_project["doc_a"],),
+        ).fetchall()
+        a, b = (r[0] for r in cited)
+    finally:
+        conn.close()
+
     body_file = tmp_path / "f.md"
-    body_file.write_text("Just a note.", encoding="utf-8")
+    body_file.write_text(f"X[^{a}] Y[^{b}] Z[^{a}].", encoding="utf-8")
     save_finding.main([
         "--project", seeded_project["project"],
-        "--title", "no-citations",
-        "--description", "A finding with no citations attached.",
+        "--title", "dedup",
+        "--description", "x",
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["citations"] == []
+    assert [c["chunk_id"] for c in out["citations"]] == [a, b]
 
 
 def test_save_finding_citations_include_page_number_when_available(
     seeded_project, tmp_path, capsys, monkeypatch
 ):
-    """A pdfplumber-style 'page N' section_heading surfaces as page_number."""
+    """A first-class page_number on the chunk surfaces in citations."""
     from bartleby.db.connection import open_db
     from bartleby.db.chunks import ChunkInput, insert_document_chunks
     from bartleby.db.schema import EMBEDDING_DIM
@@ -111,8 +123,6 @@ def test_save_finding_citations_include_page_number_when_available(
     conn = open_db(seeded_project["project"])
     try:
         emb = [0.01 * i for i in range(EMBEDDING_DIM)]
-        # Append a chunk with a first-class page_number. chunk_index must
-        # beat the existing 4 alpha chunks.
         insert_document_chunks(conn, seeded_project["doc_a"], [
             ChunkInput(
                 text="alpha chunk four on page 7",
@@ -129,13 +139,12 @@ def test_save_finding_citations_include_page_number_when_available(
         conn.close()
 
     body_file = tmp_path / "f.md"
-    body_file.write_text("Cited from page 7.", encoding="utf-8")
+    body_file.write_text(f"Cited from page 7[^{new_chunk_id}].", encoding="utf-8")
     save_finding.main([
         "--project", seeded_project["project"],
         "--title", "page test",
         "--description", "Testing page number propagation.",
         "--body-file", str(body_file),
-        "--citations", str(new_chunk_id),
     ])
     out = json.loads(capsys.readouterr().out)
     [cite] = out["citations"]
@@ -143,20 +152,36 @@ def test_save_finding_citations_include_page_number_when_available(
     assert cite["page_number"] == 7
 
 
-def test_save_finding_unknown_citation_chunk(seeded_project, tmp_path, capsys):
+def test_save_finding_no_inline_citations(seeded_project, tmp_path, capsys):
+    """Bodies without [^N] markers are rejected — citations are mandatory."""
     body_file = tmp_path / "f.md"
-    body_file.write_text("body", encoding="utf-8")
+    body_file.write_text("Just prose without any citations.", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        save_finding.main([
+            "--project", seeded_project["project"],
+            "--title", "no cites",
+            "--description", "x",
+            "--body-file", str(body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "NO_INLINE_CITATIONS"
+
+
+def test_save_finding_unknown_inline_marker(seeded_project, tmp_path, capsys):
+    body_file = tmp_path / "f.md"
+    body_file.write_text("body[^999999].", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         save_finding.main([
             "--project", seeded_project["project"],
             "--title", "bad",
             "--description", "x",
             "--body-file", str(body_file),
-            "--citations", "999999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "UNKNOWN_CITATIONS"
+    assert out["unknown_chunk_ids"] == [999999]
 
 
 def test_save_finding_missing_body_file(seeded_project, capsys):

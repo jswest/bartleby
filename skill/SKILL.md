@@ -30,7 +30,7 @@ bartleby skill read_chunks --document 4 --offset 0 --limit 20
 bartleby skill read_chunks --chunks 4192,4188,9201
 bartleby skill read_document --document 4 --summary
 bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
-bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md --citations 12,18,33
+bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md
 ```
 
 Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
@@ -54,7 +54,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. Works for image chunks too. |
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. |
-| `save_finding --title <t> --description <d> --body-file <path> [--citations <ids>]` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook that future agents will see when triaging findings. `--citations` is a comma-separated list of `chunk_id`s — the chunks your conclusion actually rests on. |
+| `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
 
 ## Default research loop
 
@@ -62,7 +62,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 2. **Summaries before full text.** Call `read_document --summary` first. Escalate to `--full` only if the summary is insufficient.
 3. **Use `read_chunks` for structural scans.** If you need to walk a document section by section, paginated `read_chunks` beats loading the entire text. Use `read_chunks --chunks <ids>` to revisit specific chunks by `chunk_id` without re-running a search.
 4. **Cite as you go.** Every claim in your answer needs a `chunk_id` behind it. If you can't cite it, don't claim it.
-5. **Save interim findings when the work is long.** If you're accumulating chunk_ids worth remembering and the session is getting long, write a short `save_finding` (one-line body is fine — "key chunks for PM2.5 monitoring gaps") with those citations. Findings are durable storage; your context window is not.
+5. **Save interim findings when the work is long.** If you're accumulating chunk_ids worth remembering and the session is getting long, write a short `save_finding` body with inline `[^N]` markers for those chunks. Findings are durable storage; your context window is not.
 
 ## Reading search results
 
@@ -106,17 +106,24 @@ If `search` returns `"memory_excluded": true`, you are already in a no-memory se
 
 ## Output
 
-Respond in markdown. Cite inline so a reader can immediately see *which document and where* you're drawing from, with the `chunk_id` along for machine traceability:
+Respond in markdown. **Cite inline** using the marker `[^<chunk_id>]` next to every claim you draw from a chunk:
 
-- Preferred form: `(foo.pdf p.5, chunk 4192)`.
-- If a chunk has no `page_number` (Docling-extracted chunks, image-only docs, summaries, findings), drop the `p.N` and use `(foo.pdf, chunk 4192)`.
-- If a chunk has neither (a finding chunk, say), fall back to `(chunk 4192)`.
+```
+Central Hudson is requesting a $47.2M electric revenue increase[^3751] for the rate
+year ending June 30, 2026. Three drivers — capex, labor, and uncollectibles —
+account for more than 80% of the ask[^8701].
+```
 
-`search` and `read_chunks` hits now carry `file_name` and `page_number` directly — use those, not the section_heading string. `save_finding` returns the same shape under `citations`, so you can echo it back in your reply.
+Rules:
 
-When the user asks for a structured deliverable (table, comparison, timeline), produce it directly.
+- Place the marker immediately after the claim it supports (no space before the `[`).
+- One marker per chunk per claim. If a single claim rests on two chunks, write `claim[^123][^456]`.
+- The chunk_id must be one returned by `search` or `read_chunks` in this session. Invented IDs fail loudly.
+- **Never cite a finding chunk** (`source_kind == "finding"`). Findings are derivative; cite the underlying document chunk instead.
 
-When you've reached a conclusion worth preserving — even a partial one — call `save_finding`. The body is your markdown answer; `--citations` is the list of `chunk_id`s your conclusion rests on. Findings are how the next agent builds on your work.
+When the user asks for a structured deliverable (table, comparison, timeline), produce it directly — with `[^N]` markers in each cell as needed.
+
+When you've reached a conclusion worth preserving — even a partial one — call `save_finding`. The body is your markdown answer with `[^N]` markers throughout; **no separate citations argument exists**, and a body without any markers is rejected. Findings are how the next agent builds on your work.
 
 ## The saved finding is what you deliver — verbatim
 
