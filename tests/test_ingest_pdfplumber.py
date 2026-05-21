@@ -186,6 +186,39 @@ def test_convert_skips_subpixel_embedded_images(tmp_path):
     assert decoded.size[0] > 0 and decoded.size[1] > 0
 
 
+def test_convert_skips_decorative_small_and_thin_images(tmp_path):
+    """Filter decorative icons (too small on long edge) and thin strips
+    (pass long-edge but tiny area). Real content survives."""
+    src = tmp_path / "decorative.pdf"
+    c = canvas.Canvas(str(src), pagesize=letter)
+    # Real chart-sized image — should survive.
+    real = _png_image(width=300, height=200, color=(10, 100, 200))
+    rbuf = io.BytesIO(); real.save(rbuf, format="PNG"); rbuf.seek(0)
+    c.drawImage(ImageReader(rbuf), 100, 500, width=300, height=200)
+    # Small decorative icon (small in both dims) — skipped by long-edge rule.
+    icon = _png_image(width=40, height=40, color=(0, 0, 0))
+    ibuf = io.BytesIO(); icon.save(ibuf, format="PNG"); ibuf.seek(0)
+    c.drawImage(ImageReader(ibuf), 100, 450, width=20, height=20)
+    # Thin decorative bar (passes long edge, fails area) — skipped by area rule.
+    # 400pt × 4pt at 150 DPI → ~833 × 8 px = 6,664 px²... wait need to ensure
+    # this falls under 5000 px². Use 300pt × 1pt → ~625 × 2 px = 1,250 px².
+    bar = _png_image(width=300, height=2, color=(128, 128, 128))
+    bbuf = io.BytesIO(); bar.save(bbuf, format="PNG"); bbuf.seek(0)
+    c.drawImage(ImageReader(bbuf), 100, 430, width=300, height=1)
+    c.setFont("Helvetica", 12)
+    t = c.beginText(72, 700)
+    for _ in range(6):
+        t.textLine("Plenty of text so the page is not sparse.")
+    c.drawText(t)
+    c.showPage()
+    c.save()
+
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+    page = result.pages[0]
+    # Only the real chart survives — the icon and thin bar are dropped.
+    assert len(page.embedded_images) == 1
+
+
 def test_convert_calls_on_progress_with_total_then_each_page(tmp_path):
     src = tmp_path / "multi.pdf"
     _text_pdf(src, [

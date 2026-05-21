@@ -35,6 +35,14 @@ PAGE_RENDER_DPI = 150
 # the sparse-page render fallback still captures it.
 PAGE_SUBSTRATE_AREA_RATIO = 0.9
 
+# Embedded images smaller than this are almost always decorative — bullet
+# icons, checkmarks, page-number ornaments. ~0.85" on the long edge at our
+# 150 DPI render. Combined with the area floor, the rule also catches thin
+# decorative strips (e.g. 300×15 = 4,500 px²) that pass the long-edge check.
+# Real signatures, letterheads, tax stamps, and figures clear both bars.
+MIN_EMBEDDED_IMAGE_LONG_EDGE_PX = 128
+MIN_EMBEDDED_IMAGE_AREA_PX = 5000
+
 
 @dataclass
 class EmbeddedImage:
@@ -172,7 +180,11 @@ def _crop_embedded_images(rendered: Image.Image, page) -> list[EmbeddedImage]:
         iy0 = max(0, int(im["top"] * scale))
         ix1 = min(page_w, int(im["x1"] * scale))
         iy1 = min(page_h, int(im["bottom"] * scale))
-        if ix1 - ix0 < 1 or iy1 - iy0 < 1:
+        crop_w, crop_h = ix1 - ix0, iy1 - iy0
+        if crop_w < 1 or crop_h < 1:
+            continue
+        if (max(crop_w, crop_h) < MIN_EMBEDDED_IMAGE_LONG_EDGE_PX
+                or crop_w * crop_h < MIN_EMBEDDED_IMAGE_AREA_PX):
             continue
         crop = rendered.crop((ix0, iy0, ix1, iy1))
         out.append(EmbeddedImage(
