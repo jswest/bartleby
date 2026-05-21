@@ -121,6 +121,71 @@ def test_convert_does_not_render_text_pages_without_images(tmp_path):
     assert result.pages[0].embedded_images == []
 
 
+def test_convert_skips_page_substrate_image(tmp_path):
+    """OCR'd-scan PDFs embed a full-page raster under an OCR text overlay.
+    That raster's content is already covered by extract_text(), so the
+    cropper should drop it instead of routing it through the VLM."""
+    src = tmp_path / "ocr_overlay.pdf"
+    c = canvas.Canvas(str(src), pagesize=letter)
+    page_w, page_h = letter
+    # First the substrate: a page-sized image underneath everything.
+    substrate = _png_image(width=int(page_w), height=int(page_h), color=(220, 220, 220))
+    buf = io.BytesIO()
+    substrate.save(buf, format="PNG")
+    buf.seek(0)
+    c.drawImage(ImageReader(buf), 0, 0, width=page_w, height=page_h)
+    # Then a small "real" image on top of it (a signature box, say).
+    sig = _png_image(width=120, height=40, color=(50, 50, 200))
+    sbuf = io.BytesIO()
+    sig.save(sbuf, format="PNG")
+    sbuf.seek(0)
+    c.drawImage(ImageReader(sbuf), 72, 100, width=120, height=40)
+    # And real text so pdfplumber extracts the page (matches the OCR-overlay shape).
+    c.setFont("Helvetica", 12)
+    t = c.beginText(72, 700)
+    for _ in range(8):
+        t.textLine("Plenty of selectable text on this page from the OCR overlay.")
+    c.drawText(t)
+    c.showPage()
+    c.save()
+
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+    page = result.pages[0]
+    # The substrate is dropped; only the small signature crop survives.
+    assert len(page.embedded_images) == 1
+
+
+def test_convert_skips_subpixel_embedded_images(tmp_path):
+    """Sub-pixel-tall bbox would truncate to 0 height after PIL crop and
+    crash JPEG encoding with 'cannot write empty image'. Skip them upfront."""
+    src = tmp_path / "subpixel.pdf"
+    c = canvas.Canvas(str(src), pagesize=letter)
+    page_w, page_h = letter
+    # A normal-sized embedded image, plus an extremely thin one (0.5pt tall)
+    # that pdfplumber will register as a separate image entry.
+    normal = _png_image(width=200, height=100)
+    nbuf = io.BytesIO(); normal.save(nbuf, format="PNG"); nbuf.seek(0)
+    c.drawImage(ImageReader(nbuf), 100, 400, width=200, height=100)
+    thin = _png_image(width=400, height=2)
+    tbuf = io.BytesIO(); thin.save(tbuf, format="PNG"); tbuf.seek(0)
+    c.drawImage(ImageReader(tbuf), 100, 350, width=400, height=0.4)
+    c.setFont("Helvetica", 12)
+    t = c.beginText(72, 700)
+    for _ in range(6):
+        t.textLine("Enough text to keep the page out of the sparse path.")
+    c.drawText(t)
+    c.showPage()
+    c.save()
+
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+    page = result.pages[0]
+    # Only the normal image survives — the sub-pixel thin one is skipped.
+    assert len(page.embedded_images) == 1
+    # And the surviving crop is real — Pillow can open it and it has >0 area.
+    decoded = Image.open(io.BytesIO(page.embedded_images[0].png_bytes))
+    assert decoded.size[0] > 0 and decoded.size[1] > 0
+
+
 def test_convert_calls_on_progress_with_total_then_each_page(tmp_path):
     src = tmp_path / "multi.pdf"
     _text_pdf(src, [

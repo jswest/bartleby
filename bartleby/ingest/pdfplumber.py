@@ -27,6 +27,14 @@ from bartleby.ingest import ocr as ocr_module
 
 PAGE_RENDER_DPI = 150
 
+# OCR'd-scan PDFs embed a single page-sized raster on each page with the OCR
+# text floating above it as a selectable layer. pdfplumber sees that raster as
+# an "embedded image" and we'd otherwise crop it and pump it through the VLM —
+# which would just transcribe text we already extracted. Skip embedded images
+# whose bbox covers nearly the whole page; if the page is genuinely image-only,
+# the sparse-page render fallback still captures it.
+PAGE_SUBSTRATE_AREA_RATIO = 0.9
+
 
 @dataclass
 class EmbeddedImage:
@@ -143,20 +151,30 @@ def _crop_embedded_images(rendered: Image.Image, page) -> list[EmbeddedImage]:
     """Crop each pdfplumber `page.images` entry out of the rendered page.
 
     pdfplumber image bboxes are in PDF points (1 pt = 1/72 in); the rendered
-    image is at PAGE_RENDER_DPI, so points → pixels = DPI/72.
+    image is at PAGE_RENDER_DPI, so points → pixels = DPI/72. Page-substrate
+    images (full-page scans underneath an OCR text overlay) are dropped — see
+    ``PAGE_SUBSTRATE_AREA_RATIO``.
     """
     scale = PAGE_RENDER_DPI / 72.0
     page_w, page_h = rendered.size
+    page_area_pt = max(1.0, page.width * page.height)
     out: list[EmbeddedImage] = []
     for i, im in enumerate(page.images):
-        x0 = max(0.0, im["x0"]) * scale
-        y0 = max(0.0, im["top"]) * scale
-        x1 = min(page.width, im["x1"]) * scale
-        y1 = min(page.height, im["bottom"]) * scale
-        # Skip zero-area or out-of-bounds crops rather than letting PIL error.
-        if x1 <= x0 or y1 <= y0 or x0 >= page_w or y0 >= page_h:
+        bbox_area_pt = max(0.0, im["x1"] - im["x0"]) * max(0.0, im["bottom"] - im["top"])
+        if bbox_area_pt / page_area_pt >= PAGE_SUBSTRATE_AREA_RATIO:
             continue
-        crop = rendered.crop((x0, y0, min(x1, page_w), min(y1, page_h)))
+        # Truncate to integer pixel coords (PIL crop does this anyway). Skip
+        # crops that degenerate to zero in either dimension — happens when
+        # pdfplumber registers a thin horizontal/vertical PDF rule as an
+        # "image" with a sub-pixel bbox, and downstream JPEG encoding bails
+        # with "cannot write empty image."
+        ix0 = max(0, int(im["x0"] * scale))
+        iy0 = max(0, int(im["top"] * scale))
+        ix1 = min(page_w, int(im["x1"] * scale))
+        iy1 = min(page_h, int(im["bottom"] * scale))
+        if ix1 - ix0 < 1 or iy1 - iy0 < 1:
+            continue
+        crop = rendered.crop((ix0, iy0, ix1, iy1))
         out.append(EmbeddedImage(
             image_index_on_page=i + 1,
             png_bytes=_to_png_bytes(crop),
