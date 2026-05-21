@@ -71,6 +71,11 @@ def main():
     logs_parser.add_argument("--limit", type=int, default=50)
     logs_parser.add_argument("--project", type=str, default=None)
 
+    subparsers.add_parser(
+        "serve",
+        help="Launch a local SvelteKit UI for browsing the active project's findings.",
+    )
+
     # Stub so `bartleby --help` lists `skill`; the real dispatch is above.
     subparsers.add_parser(
         "skill",
@@ -90,6 +95,7 @@ def main():
         "session": lambda: _session(args, session_parser),
         "embed": lambda: _embed(args),
         "logs": lambda: _logs(args),
+        "serve": lambda: _serve(),
     }
     dispatchers[args.command]()
 
@@ -125,6 +131,11 @@ def _embed(args):
 def _logs(args):
     from bartleby.commands.logs import main as logs_main
     logs_main(session=args.session, limit=args.limit, project=args.project)
+
+
+def _serve():
+    from bartleby.commands.serve import main as serve_main
+    serve_main()
 
 
 def _project(args, parser):

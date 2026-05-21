@@ -1,0 +1,49 @@
+:root {
+  --unit: 18px;
+  --color-off: #698879;
+  --font-display: "Departure Mono";
+  --font-sans: "Source Sans 3";
+  --font-serif: "Source Serif 4";
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-size: var(--unit);
+}
+
+.display {
+  font-family: var(--font-display);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-family: var(--font-sans);
+  line-height: 1;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+h2 {
+  font-size: 1.5rem;
+}
+
+li,
+p {
+  font-family: var(--font-serif);
+  line-height: 1.5;
+}
+
+p.meta {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 200;
+  color: var(--color-off);
+}
