@@ -12,15 +12,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.base import DocumentSummary, VlmDescription
 
 
 _SUMMARY_INPUT = {
     "title": "T", "description": "D", "text": "Some summary text.",
 }
-_IMAGE_INPUT = {
-    "kind": "scene", "text": "WELCOME", "description": "A cat sitting.", "notes": "",
-}
+_VLM_INPUT = {"description": "A cat sitting.", "notes": ""}
 
 
 # ---------- Anthropic ----------
@@ -73,7 +71,7 @@ def test_anthropic_summarize_validates_tool_input(monkeypatch):
 
 def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
     response = _FakeAnthropicResponse([
-        _block("tool_use", name="save_image_analysis", input_=_IMAGE_INPUT),
+        _block("tool_use", name="save_image_description", input_=_VLM_INPUT),
     ])
     fake = _install_anthropic(monkeypatch, response)
 
@@ -81,13 +79,12 @@ def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
     p = AnthropicProvider()
     result = p.analyze_image(b"\xff\xd8\xff", model="claude-haiku-4-5")
 
-    assert isinstance(result, ImageAnalysis)
-    assert result.kind == "scene"
-    assert result.text == "WELCOME"
+    assert isinstance(result, VlmDescription)
+    assert result.description == "A cat sitting."
     # Image is passed as a base64 block.
     content = fake.last_call["messages"][0]["content"]
     assert any(b.get("type") == "image" for b in content)
-    assert fake.last_call["tool_choice"]["name"] == "save_image_analysis"
+    assert fake.last_call["tool_choice"]["name"] == "save_image_description"
 
 
 def test_anthropic_missing_tool_use_raises(monkeypatch):
@@ -100,9 +97,9 @@ def test_anthropic_missing_tool_use_raises(monkeypatch):
 
 
 def test_anthropic_invalid_tool_input_raises(monkeypatch):
-    bad = {"kind": "scene"}  # missing text/description/notes
+    bad = {"notes": "x"}  # missing description
     response = _FakeAnthropicResponse([
-        _block("tool_use", name="save_image_analysis", input_=bad),
+        _block("tool_use", name="save_image_description", input_=bad),
     ])
     _install_anthropic(monkeypatch, response)
     from bartleby.providers.anthropic import AnthropicProvider
@@ -155,13 +152,13 @@ def test_openai_summarize_returns_parsed_pydantic(monkeypatch):
 
 
 def test_openai_analyze_image_returns_parsed_pydantic(monkeypatch):
-    parsed = ImageAnalysis(**_IMAGE_INPUT)
+    parsed = VlmDescription(**_VLM_INPUT)
     fake = _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
     from bartleby.providers.openai import OpenAIProvider
     p = OpenAIProvider()
     result = p.analyze_image(b"\xff\xd8\xff", model="gpt-5-mini")
     assert result is parsed
-    assert fake.last_call["response_format"] is ImageAnalysis
+    assert fake.last_call["response_format"] is VlmDescription
     # Image is passed as a data URL in the content blocks.
     content = fake.last_call["messages"][0]["content"]
     image_blocks = [b for b in content if b.get("type") == "image_url"]
@@ -214,15 +211,15 @@ def test_ollama_summarize_validates_json(monkeypatch):
 
 def test_ollama_analyze_image_passes_bytes(monkeypatch):
     fake = _install_ollama(monkeypatch,
-                           _FakeOllamaResponse(content=json.dumps(_IMAGE_INPUT)))
+                           _FakeOllamaResponse(content=json.dumps(_VLM_INPUT)))
     from bartleby.providers.ollama import OllamaProvider
     p = OllamaProvider(base_url="http://test:11434")
     result = p.analyze_image(b"\xff\xd8\xff", model="qwen2.5-vl:7b")
-    assert isinstance(result, ImageAnalysis)
-    assert result.text == "WELCOME"
+    assert isinstance(result, VlmDescription)
+    assert result.description == "A cat sitting."
     msg = fake.last_call["messages"][0]
     assert msg["images"] == [b"\xff\xd8\xff"]
-    assert fake.last_call["format"] == ImageAnalysis.model_json_schema()
+    assert fake.last_call["format"] == VlmDescription.model_json_schema()
 
 
 def test_ollama_empty_content_raises(monkeypatch):
@@ -234,7 +231,7 @@ def test_ollama_empty_content_raises(monkeypatch):
 
 
 def test_ollama_malformed_json_raises(monkeypatch):
-    _install_ollama(monkeypatch, _FakeOllamaResponse(content='{"kind": "scene"}'))
+    _install_ollama(monkeypatch, _FakeOllamaResponse(content='{"notes": "x"}'))
     from bartleby.providers.ollama import OllamaProvider
     p = OllamaProvider(base_url="http://test:11434")
     with pytest.raises(RuntimeError, match="failed .* validation"):

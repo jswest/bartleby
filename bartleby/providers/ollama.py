@@ -7,9 +7,9 @@ import os
 import ollama
 from pydantic import ValidationError
 
-from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
-    IMAGE_ANALYSIS_INSTRUCTIONS,
+    IMAGE_DESCRIPTION_INSTRUCTIONS,
     build_summary_messages,
 )
 
@@ -42,18 +42,18 @@ class OllamaProvider:
         *,
         model: str,
         media_type: str = "image/jpeg",
-    ) -> ImageAnalysis:
+    ) -> VlmDescription:
         # Ollama's chat API takes raw image bytes (or paths) via `images=`.
         response = self._client.chat(
             model=model,
             messages=[{
                 "role": "user",
-                "content": IMAGE_ANALYSIS_INSTRUCTIONS,
+                "content": IMAGE_DESCRIPTION_INSTRUCTIONS,
                 "images": [image_bytes],
             }],
-            format=ImageAnalysis.model_json_schema(),
+            format=VlmDescription.model_json_schema(),
         )
-        return _validate(response.message.content, ImageAnalysis)
+        return _validate(response.message.content, VlmDescription)
 
 
 def _validate(content, model_cls):

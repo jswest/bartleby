@@ -36,37 +36,21 @@ class DocumentSummary(BaseModel):
     )
 
 
-class ImageAnalysis(BaseModel):
-    """Schema for a single image analyzed by the VLM.
+class VlmDescription(BaseModel):
+    """Schema the VLM produces for a single image.
 
-    The ``content_type`` discipline elsewhere in the system needs to know
-    which signal is *transcription* (primary source) and which is
-    *interpretation*. Splitting ``text`` (OCR) from ``description`` (scene)
-    in the model output preserves that distinction all the way to the
-    chunks table.
+    Description-only. OCR (the ``text`` field on the orchestrator-level
+    ``ImageAnalysis``) is owned by Tesseract — the VLM is never asked to
+    transcribe. Splitting the responsibilities keeps the VLM output bounded
+    (~200 words) so per-image latency stays predictable on local models.
     """
 
-    kind: Literal["text", "scene"] = Field(
-        description=(
-            "Your judgment of which signal is primary in this image: "
-            "'text' if the image is mostly a passage of writing (a page, a sign, "
-            "a screenshot of text); 'scene' if it is mostly visual content "
-            "(a photo, a diagram, a chart)."
-        ),
-    )
-    text: str = Field(
-        description=(
-            "Verbatim transcription of every legible piece of text in the image. "
-            "Empty string if there is no visible text. Preserve line breaks "
-            "where they carry meaning."
-        ),
-    )
     description: str = Field(
         description=(
             "A factual description of the visual content for an investigative "
-            "journalist: subjects, setting, composition, anything a reader "
-            "would need to validate a claim against the image. Do not invent "
-            "details you cannot see. Empty string if the image is pure text."
+            "journalist: subjects, setting, composition, chart type, layout. "
+            "Mention salient text (titles, axis labels) only where needed for "
+            "coherence; never produce a full transcription."
         ),
     )
     notes: str = Field(
@@ -74,6 +58,33 @@ class ImageAnalysis(BaseModel):
             "What you could not determine and why (illegible regions, ambiguous "
             "subjects, missing context). Empty string if nothing notable."
         ),
+    )
+
+
+class ImageAnalysis(BaseModel):
+    """Orchestrator-level merged result for one image.
+
+    The image pipeline runs Tesseract first; if Tesseract returns substantial
+    text at decent confidence the image is classified ``kind='text'`` and the
+    VLM is never called (``text`` is the Tesseract output; ``description`` and
+    ``notes`` stay empty). Otherwise the image is ``kind='scene'``, the VLM
+    fills ``description`` + ``notes``, and ``text`` stays empty.
+
+    This shape is what gets persisted to ``images.analysis_json`` and what the
+    chunker reads to decide which ``image_*`` content_type chunks to emit.
+    """
+
+    kind: Literal["text", "scene"] = Field(
+        description="Set by the orchestrator based on Tesseract dispositioning.",
+    )
+    text: str = Field(
+        description="Tesseract OCR output (empty for scene-images).",
+    )
+    description: str = Field(
+        description="VLM scene description (empty for text-images).",
+    )
+    notes: str = Field(
+        description="VLM caveats (empty for text-images).",
     )
 
 
@@ -94,4 +105,4 @@ class Provider(Protocol):
         *,
         model: str,
         media_type: str = "image/jpeg",
-    ) -> ImageAnalysis: ...
+    ) -> VlmDescription: ...

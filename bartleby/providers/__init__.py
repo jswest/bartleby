@@ -6,7 +6,9 @@ text. Adding a fourth provider means writing one class plus an entry here.
 
 from __future__ import annotations
 
-from bartleby.providers.base import DocumentSummary, ImageAnalysis, Provider
+from bartleby.providers.base import (
+    DocumentSummary, ImageAnalysis, Provider, VlmDescription,
+)
 
 _VALID = ("anthropic", "openai", "ollama")
 
@@ -24,4 +26,7 @@ def get_provider(name: str, *, ollama_base_url: str | None = None) -> Provider:
     raise ValueError(f"Unknown provider {name!r}; expected one of {_VALID}")
 
 
-__all__ = ["DocumentSummary", "ImageAnalysis", "Provider", "get_provider"]
+__all__ = [
+    "DocumentSummary", "ImageAnalysis", "Provider", "VlmDescription",
+    "get_provider",
+]

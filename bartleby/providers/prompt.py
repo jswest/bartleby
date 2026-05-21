@@ -29,18 +29,17 @@ def build_summary_messages(document_text: str) -> list[dict]:
     ]
 
 
-IMAGE_ANALYSIS_INSTRUCTIONS = (
-    "You are analyzing an image for an investigative journalist who needs to "
-    "cite this image as evidence. Return four things:\n"
-    "  - kind: 'text' if the image is primarily writing (a document page, "
-    "screenshot, sign); 'scene' if it is primarily visual content.\n"
-    "  - text: a verbatim transcription of every legible piece of text in the "
-    "image. Empty string if there is none. Preserve line breaks where they "
-    "carry meaning.\n"
-    "  - description: a factual, observational description of the visual "
-    "content. Subjects, setting, composition, anything a reader would need to "
-    "validate a claim against the image. Do not invent details you cannot see. "
-    "Empty string if the image is pure text.\n"
+IMAGE_DESCRIPTION_INSTRUCTIONS = (
+    "You are describing an image so an investigative journalist can decide "
+    "whether to look at the original. OCR is handled separately by Tesseract — "
+    "do NOT transcribe text. Your job is interpretation, not transcription.\n\n"
+    "Return two things:\n"
+    "  - description: a factual, observational paragraph describing the visual "
+    "content. Cover subjects, setting, composition, layout, chart type (if "
+    "any), and what's notable. You may mention salient text — titles, axis "
+    "labels, captions, on-screen labels — where it's needed to make the "
+    "description coherent, but quote sparingly and never produce a full "
+    "transcription. Keep it under ~200 words.\n"
     "  - notes: anything you could not determine and why (illegible regions, "
     "ambiguous subjects, missing context). Empty string if nothing notable."
 )

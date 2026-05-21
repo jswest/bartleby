@@ -6,9 +6,9 @@ import base64
 
 from openai import OpenAI
 
-from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
-    IMAGE_ANALYSIS_INSTRUCTIONS,
+    IMAGE_DESCRIPTION_INSTRUCTIONS,
     build_summary_messages,
 )
 
@@ -40,23 +40,23 @@ class OpenAIProvider:
         *,
         model: str,
         media_type: str = "image/jpeg",
-    ) -> ImageAnalysis:
+    ) -> VlmDescription:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
         response = self._client.chat.completions.parse(
             model=model,
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": IMAGE_ANALYSIS_INSTRUCTIONS},
+                    {"type": "text", "text": IMAGE_DESCRIPTION_INSTRUCTIONS},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:{media_type};base64,{b64}"},
                     },
                 ],
             }],
-            response_format=ImageAnalysis,
+            response_format=VlmDescription,
         )
-        return _require_parsed(response, ImageAnalysis)
+        return _require_parsed(response, VlmDescription)
 
 
 def _require_parsed(response, model_cls):

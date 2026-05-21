@@ -38,6 +38,7 @@ from bartleby.db.chunks import (
 )
 from bartleby.db.connection import open_db
 from bartleby.ingest import images as image_pipeline
+from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
@@ -201,6 +202,9 @@ class _ImageRoute:
     bytes_: bytes
     page_number: int | None       # None for standalone files
     image_index_on_page: int      # 0 for page-renders, 1+ for embedded; 0 for standalone too
+    # For sparse-page renders we already ran Tesseract at the page level — pass
+    # that result down so the image pipeline can skip its own Tesseract pre-pass.
+    prefetched_ocr: ocr_module.OcrResult | None = None
 
 
 def _process_image(
@@ -235,6 +239,7 @@ def _process_image(
         archived = image_pipeline.archive_image(prepared, archive_root)
         analysis = image_pipeline.analyze(
             vision_provider, prepared, model=vision_model,
+            prefetched_ocr=route.prefetched_ocr,
         )
         cur.execute(
             "INSERT INTO images "
@@ -336,10 +341,13 @@ def _ingest_pdf_pdfplumber(
                 ))
         elif page.page_render_png is not None:
             # Sparse page where OCR didn't clear the bar — fall back to VLM.
+            # Page-level Tesseract already ran; hand the result down so the
+            # image pipeline doesn't re-OCR the same bytes.
             image_routes.append(_ImageRoute(
                 bytes_=page.page_render_png,
                 page_number=page.page_number,
                 image_index_on_page=0,
+                prefetched_ocr=page.ocr_result,
             ))
 
         for emb in page.embedded_images:

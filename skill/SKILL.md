@@ -86,12 +86,12 @@ The context arrays exist because Docling sometimes produces small chunks and the
 
 Some corpora include image-derived chunks (figures, photos, scanned pages, standalone image files). Search returns them alongside text chunks. They carry an extra `image_id` and `image_file_path` so you can validate against the source image directly if needed. `source_name` reads `image in <filename>, p.<N>` when the image is embedded in a PDF.
 
-Two `content_type` values distinguish image chunks:
+Two `content_type` values distinguish image chunks, and each image produces exactly one of them (not both):
 
-- `image_ocr` — verbatim text the model transcribed from the image. Treat this like primary source text; cite it the same way.
-- `image_description` — the model's scene description. **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
+- `image_ocr` — text recovered from the image via Tesseract OCR. Used when the image is dominated by text (a slide of bullets, a screenshot of a document, a scanned page). Treat this like primary source text; cite it the same way.
+- `image_description` — the VLM's scene description. Used when the image is dominated by visual content (a chart, a photo, a diagram). **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
 
-Image chunks often have empty `context_before` / `context_after` arrays — most images produce only one or two chunks, so there are no neighbors.
+Image chunks have empty `context_before` / `context_after` arrays — each image produces a single chunk, so there are no neighbors.
 
 ## Memory rules
 

@@ -7,15 +7,15 @@ import base64
 from anthropic import Anthropic
 from pydantic import ValidationError
 
-from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
-    IMAGE_ANALYSIS_INSTRUCTIONS,
+    IMAGE_DESCRIPTION_INSTRUCTIONS,
     build_summary_messages,
 )
 
 
 _SUMMARY_TOOL = "save_summary"
-_IMAGE_TOOL = "save_image_analysis"
+_IMAGE_TOOL = "save_image_description"
 
 
 class AnthropicProvider:
@@ -52,7 +52,7 @@ class AnthropicProvider:
         *,
         model: str,
         media_type: str = "image/jpeg",
-    ) -> ImageAnalysis:
+    ) -> VlmDescription:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
         response = self._client.messages.create(
             model=model,
@@ -68,17 +68,17 @@ class AnthropicProvider:
                             "data": b64,
                         },
                     },
-                    {"type": "text", "text": IMAGE_ANALYSIS_INSTRUCTIONS},
+                    {"type": "text", "text": IMAGE_DESCRIPTION_INSTRUCTIONS},
                 ],
             }],
             tools=[{
                 "name": _IMAGE_TOOL,
-                "description": "Save the image analysis.",
-                "input_schema": ImageAnalysis.model_json_schema(),
+                "description": "Save the image description.",
+                "input_schema": VlmDescription.model_json_schema(),
             }],
             tool_choice={"type": "tool", "name": _IMAGE_TOOL},
         )
-        return _extract_tool_input(response, _IMAGE_TOOL, ImageAnalysis)
+        return _extract_tool_input(response, _IMAGE_TOOL, VlmDescription)
 
 
 def _extract_tool_input(response, tool_name, model_cls):

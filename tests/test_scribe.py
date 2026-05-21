@@ -16,7 +16,7 @@ import bartleby.project
 from bartleby.commands import scribe
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from bartleby.providers.base import DocumentSummary, ImageAnalysis
+from bartleby.providers.base import DocumentSummary, VlmDescription
 
 
 def _emb(seed: float, n: int) -> list[list[float]]:
@@ -77,9 +77,9 @@ def mock_embed(monkeypatch):
 class _StubVisionProvider:
     name = "stub-vision"
 
-    def __init__(self, analysis: ImageAnalysis | None = None):
-        self.analysis = analysis or ImageAnalysis(
-            kind="scene", text="WELCOME", description="A test image.", notes="",
+    def __init__(self, description: VlmDescription | None = None):
+        self.description = description or VlmDescription(
+            description="A test image.", notes="",
         )
         self.calls = 0
 
@@ -88,7 +88,7 @@ class _StubVisionProvider:
 
     def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
         self.calls += 1
-        return self.analysis
+        return self.description
 
 
 def _png_bytes(width=100, height=60, color=(20, 200, 50)) -> bytes:
@@ -253,8 +253,9 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
         n_image_chunks = cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
         ).fetchone()[0]
-        # Stub vision returns text='WELCOME' + description='A test image.'
-        assert n_image_chunks == 2
+        # Binary classification: a tiny color-block image has no Tesseract text
+        # → kind='scene' → one image_description chunk per image.
+        assert n_image_chunks == 1
         # Vision provider called at least once for the embedded image.
         assert vision.calls >= 1
     finally:
@@ -342,7 +343,9 @@ def test_scribe_ingests_standalone_image_file(
         n_image_chunks = cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
         ).fetchone()[0]
-        assert n_image_chunks == 2
+        # Binary classification: standalone PNG with no recognizable text →
+        # kind='scene' → one image_description chunk.
+        assert n_image_chunks == 1
         # document_images row has NULL page_number for standalone files.
         row = cur.execute(
             "SELECT page_number, image_index_on_page FROM document_images"

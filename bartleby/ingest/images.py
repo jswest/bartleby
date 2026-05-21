@@ -1,4 +1,4 @@
-"""Image ingestion pipeline — hash, scale, archive, VLM-analyze, chunk.
+"""Image ingestion pipeline — hash, scale, archive, OCR-or-VLM, chunk.
 
 Pure functions and IO helpers. No DB writes — the scribe orchestrator handles
 those so the polymorphic-chunks invariant stays at one chokepoint.
@@ -9,7 +9,9 @@ The flow per image:
      for both the VLM call and the archive (so the analysis matches what's
      on disk).
   3. ``archive_image`` writes them to ``<archive_root>/images/<hash>.jpg``.
-  4. ``analyze`` calls the provider's ``analyze_image``.
+  4. ``analyze`` decides text-image vs scene-image: Tesseract first; if it
+     clears the text-image threshold the VLM is skipped, otherwise the VLM
+     is called for a bounded description.
   5. ``analysis_to_chunk_inputs`` builds typed ChunkInput rows ready for
      ``insert_image_chunks``.
 
@@ -27,11 +29,19 @@ from pathlib import Path
 from PIL import Image
 
 from bartleby.db.chunks import ChunkInput
+from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest.embed import embed_texts
 from bartleby.providers import ImageAnalysis, Provider
 
 
 JPEG_QUALITY = 82
+
+# Tesseract-on-image dispositioning thresholds. Stricter than the page-level
+# sparse threshold (100 chars / 30 confidence) so a labeled chart — which has
+# real OCR-able text but isn't text-dominated — still routes to the VLM for a
+# proper description.
+IMAGE_TEXT_MIN_CHARS = 300
+IMAGE_TEXT_MIN_CONFIDENCE = 60
 
 
 @dataclass
@@ -97,37 +107,57 @@ def analyze(
     prepared: PreparedImage,
     *,
     model: str,
+    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageAnalysis:
-    return provider.analyze_image(
+    """Decide text-image vs scene-image and produce the merged analysis.
+
+    Runs Tesseract first (or reuses ``prefetched_ocr`` when the caller has
+    already OCR'd the same bytes — sparse-page renders pass theirs down to
+    avoid double-Tesseracting). If the OCR clears the text-image threshold,
+    classification is ``'text'`` and the VLM is skipped entirely. Otherwise
+    classification is ``'scene'`` and the VLM produces a bounded description.
+    """
+    ocr_result = prefetched_ocr or ocr_module.run(prepared.jpeg_bytes)
+    if _is_text_image(ocr_result):
+        return ImageAnalysis(
+            kind="text",
+            text=ocr_result.text,
+            description="",
+            notes="",
+        )
+    vlm = provider.analyze_image(
         prepared.jpeg_bytes, model=model, media_type="image/jpeg",
+    )
+    return ImageAnalysis(
+        kind="scene",
+        text="",
+        description=vlm.description,
+        notes=vlm.notes,
     )
 
 
+def _is_text_image(ocr_result: ocr_module.OcrResult) -> bool:
+    return (len(ocr_result.text) >= IMAGE_TEXT_MIN_CHARS
+            and ocr_result.avg_confidence >= IMAGE_TEXT_MIN_CONFIDENCE)
+
+
 def analysis_to_chunk_inputs(analysis: ImageAnalysis) -> list[ChunkInput]:
-    """Embed and wrap the non-empty fields of an ImageAnalysis as ChunkInputs.
+    """Embed the populated field of an ImageAnalysis as a single ChunkInput.
 
-    Returns up to two rows: an ``image_ocr`` chunk if ``text`` is non-empty
-    and an ``image_description`` chunk if ``description`` is non-empty. Both
-    share the same image source (the caller passes ``image_id`` to
-    ``insert_image_chunks``).
+    Under the binary classification each image yields at most one chunk:
+    ``image_ocr`` for text-images, ``image_description`` for scene-images.
+    An empty payload (no OCR text *and* no VLM description) returns an empty
+    list — the image row still exists, it just has no searchable chunks.
     """
-    payloads: list[tuple[str, str]] = []
-    if analysis.text and analysis.text.strip():
-        payloads.append(("image_ocr", analysis.text.strip()))
-    if analysis.description and analysis.description.strip():
-        payloads.append(("image_description", analysis.description.strip()))
-
-    if not payloads:
+    if analysis.kind == "text" and analysis.text.strip():
+        content_type, text = "image_ocr", analysis.text.strip()
+    elif analysis.kind == "scene" and analysis.description.strip():
+        content_type, text = "image_description", analysis.description.strip()
+    else:
         return []
 
-    embeddings = embed_texts([text for _, text in payloads])
-    return [
-        ChunkInput(
-            text=text,
-            embedding=emb,
-            chunk_index=i,
-            section_heading=None,
-            content_type=content_type,
-        )
-        for i, ((content_type, text), emb) in enumerate(zip(payloads, embeddings))
-    ]
+    [embedding] = embed_texts([text])
+    return [ChunkInput(
+        text=text, embedding=embedding, chunk_index=0,
+        section_heading=None, content_type=content_type,
+    )]
