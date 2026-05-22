@@ -1,8 +1,6 @@
 # Bartleby, the Scrivener: A Tool of Wall Street
 
-An AI-powered tool for processing document corpora and researching them with an agentic assistant.
-
-Made with love by [John West](https://github.com/jswest), [Brian Whitton](https://github.com/noslouch), and [Rob Barry](https://github.com/robbarry).
+An AI-powered tool for processing document corpora and researching them with an agentic assistant--or in otherwords, a scrivener who might prefer not to. Made with love by [John West](https://github.com/jswest), [Brian Whitton](https://github.com/noslouch), and [Rob Barry](https://github.com/robbarry).
 
 ---
 
@@ -13,13 +11,13 @@ At the _Wall Street Journal_, we have found it useful to let an AI agent run wil
 It's split into two pieces that share a SQLite database:
 
 - **The `bartleby` CLI** scribes (parses, chunks, embeds, and indexes) documents. It also exposes helper commands that agents use during research sessions. Run on its own, it gives you a rich, queryable corpus regardless of whether you ever point an agent at it.
-- **The `bartleby` skill** (in [`./skill`](./skill)) is a skill you drop into Claude Code, Cowork, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
+- **The `bartleby` skill** (in [`./skill`](./skill)) is a skill you drop into Claude Code, Cowork, Goose, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
 
 A SQLite database binds these two together. The CLI writes it, the skill romps through it, writing findings back into it as it cavorts.
 
 A couple things to be aware of:
 
-- Token costs can add up. For ingestion, summarization is the main driver (you can also turn it off or use a local model). For research, costs are governed by whatever model you're running the skill against.
+- Token costs can add up. For ingestion, summarization and image description are the drivers (you can also turn either off or use local models). For research, costs are governed by whatever model you're running the skill against.
 - This uses the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
 
 ---
@@ -78,8 +76,6 @@ The first time you run `bartleby scribe`, it will pause to download:
 
 These are cached under `~/.cache/` and reused on every subsequent run. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model.
 
-If you want to warm the caches before your first real ingest, run `bartleby embed "warm up"` once — that loads BGE.
-
 ---
 
 ## Quick start
@@ -98,7 +94,7 @@ The setup wizard asks for LLM provider/model, API keys, summary depth, temperatu
 bartleby project create foo
 ```
 
-This creates a project directory (foo in this case) and marks it active. Subsequent commands use the active project unless you pass `--project`.
+This creates a project directory (`foo` in this case) and marks it active. Subsequent commands use the active project unless you pass `--project`.
 
 ### 3. Ingest documents
 
@@ -120,13 +116,36 @@ bartleby session start --no-memory
 
 (More on sessions and memory in the skill README.)
 
+### 5. Browse what you've got
+
+```
+bartleby serve
+```
+
+Spins up a local SvelteKit UI for the active project. `/documents` shows every ingested file alongside its summary and the original PDF; `/findings` shows every saved research note with inline citation chips that jump to the cited page in the source. Safe to leave running alongside an ingest or a research session — it opens the database read-only. Requires Node.js and npm on `PATH`.
+
 ---
 
 ## Architecture
 
-The CLI owns ingestion. The skill owns research. The database is the API between them. Each piece can be replaced independently as long as the schema contract holds.
+The CLI ingests. The skill researches. The database acts as the API between them. Each piece can be replaced independently as long as the schema contract holds. The database is self-describing--schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
 
-The database is self-describing--schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
+The core tables (see [`bartleby/db/schema.py`](./bartleby/db/schema.py) for the DDL):
+
+| Table | What lives here |
+| --- | --- |
+| `documents` | One row per ingested file, deduped by content hash. |
+| `summaries` | One row per `document` (1:1) — title, description, and body. |
+| `images` | One row per *unique* image, deduped by byte hash. The same icon embedded in five docs is one row. |
+| `document_images` | Join: which images appear in which document, at which page. |
+| `findings` | Agent-authored research notes from `save_finding`. Each owned by a `session`. |
+| `sessions` | Agent sessions, with a memory flag. |
+| `chunks` | Polymorphic — one row per embeddable text chunk regardless of source. `source_kind` is one of `'document'`, `'summary'`, `'finding'`, `'image'`. |
+| `chunks_fts`, `chunks_vec` | Virtual tables shadowing `chunks` for full-text (FTS5) and vector (sqlite-vec) search. One query covers all four source kinds at once. |
+| `audit_logs` | One row per skill-script call, scoped to a session. |
+| `meta` | Schema version + embedding model fingerprint; the skill refuses to start against an incompatible DB. |
+
+The `chunks` table is polymorphic on purpose: documents, summaries, findings, and images all produce searchable text, and folding them into one indexed table means one search query covers all of it. The trade-off is that `chunks.source_id` isn't a foreign key to any specific table — discipline lives in the typed insert helpers in [`bartleby/db/chunks.py`](./bartleby/db/chunks.py).
 
 ---
 
@@ -330,4 +349,4 @@ MIT.
 
 ## Anything else?
 
-"Ah Bartleby! Ah Humanity!"
+"Ah Bartleby! Ah humanity!"
