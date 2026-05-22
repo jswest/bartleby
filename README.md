@@ -254,6 +254,22 @@ bartleby logs [--session <name>] [--limit <n>]
 
 If no session is specified, shows the most recent session's logs.
 
+### `bartleby serve`
+
+Launch a local SvelteKit UI for browsing the active project — findings and documents, with inline citations that link straight into the archived PDFs at the right page.
+
+```
+bartleby serve
+```
+
+Three views:
+
+- `/` — landing page with counts for the active project.
+- `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page.
+- `/documents` — every ingested document, alphabetized by summary title. Click through to a split view: the one-shot summary on the left, the original document on the right.
+
+Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. The UI opens the project database read-only, so it's safe to leave running alongside an ingest or a research session — and it picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at.
+
 ---
 
 ## Supported LLM providers (for ingest summarization)
