@@ -19,7 +19,7 @@ A SQLite database binds these two together. The CLI writes it, the skill romps t
 
 A couple things to be aware of:
 
-- Token costs can add up. For ingestion, summarization is the main driver (you can also turn it off). For research, costs are governed by whatever model you're running the skill against.
+- Token costs can add up. For ingestion, summarization is the main driver (you can also turn it off or use a local model). For research, costs are governed by whatever model you're running the skill against.
 - This uses the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
 
 ---
@@ -126,7 +126,7 @@ bartleby session start --no-memory
 
 The CLI owns ingestion. The skill owns research. The database is the API between them. Each piece can be replaced independently as long as the schema contract holds.
 
-The database is self-describing — schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
+The database is self-describing--schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
 
 ---
 
@@ -160,7 +160,7 @@ Interactive configuration wizard. Asks for:
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
 | PDF backend | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
-| Vision provider | (off) | Optional VLM provider for image analysis: `anthropic`, `openai`, or `ollama` |
+| Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
@@ -168,9 +168,7 @@ Interactive configuration wizard. Asks for:
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
-**A note on Ollama defaults.** The default Ollama model (`qwen3-vl:30b`) handles both summarization and image analysis from a single ~19GB pull. It's a Mixture-of-Experts model, so wall-clock speed is closer to a dense ~8B than its raw 31B parameter count would suggest — roughly 6s per document summary and 8s per image on a recent Apple Silicon machine. On smaller hardware, `gemma4:e2b` is a much lighter alternative (~7GB, ~6s summarize, ~5s image) — be aware it can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow ingest run rather than an error. The "right" local default is determined by your machine, not by us; override during `bartleby ready`.
-
-**A note on token counts.** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of the LLM provider you're using. It's a rough estimate — accurate enough for the `read_document --force` gate, but not authoritative across providers.
+For local-only setups, see [Running fully local](#running-fully-local-for-sensitive-work) for the recommended model picks by hardware tier.
 
 Config saves to `~/.bartleby/config.yaml`.
 
@@ -188,7 +186,7 @@ bartleby project delete <name>    # Delete a project and all its data (-y to ski
 
 ### `bartleby scribe`
 
-Ingest HTML, MD, PDF, and TXT documents into the project database. (Previously named `bartleby read` — renamed in v1 because the scribe writes the corpus; the agent reads it.)
+Ingest HTML, MD, PDF, and TXT documents into the project database.
 
 ```
 bartleby scribe --files <path> [options]
@@ -284,35 +282,35 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 
 ## Tech stack
 
-For readers who want to know what's actually under the hood before installing:
-
 - **Storage:** SQLite with FTS5 (full-text) and [`sqlite-vec`](https://github.com/asg017/sqlite-vec) (vector). One file per project.
 - **Embeddings:** [`BAAI/bge-base-en-v1.5`](https://huggingface.co/BAAI/bge-base-en-v1.5) via `sentence-transformers`. 768 dimensions, ~400 MB on first download.
 - **PDF text + image extraction:** [pdfplumber](https://github.com/jsvine/pdfplumber) (text per page, image bounding boxes), [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (page rendering for OCR + image crops).
 - **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
 - **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
 - **Opt-in alternative backend:** [Docling](https://docling-project.github.io/docling/) for layout-aware extraction with internal OCR. Activate via `--backend docling`. Required for HTML/MD ingest regardless of which backend is selected for PDFs.
+- **Token counting:** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of which LLM provider you're using. A rough estimate — accurate enough for the `read_document --force` gate, not authoritative across providers.
 
 ---
 
 ## Running fully local (for sensitive work)
 
-Bartleby is built to run end-to-end without an internet connection. This is the path for journalists working with sensitive material:
+Bartleby is built to run end-to-end without an internet connection — the path for journalists working with sensitive material. Two pieces, both pointed at the same local Ollama:
 
-1. **Ingest** — Run `bartleby ready`, set `provider: ollama`, and pick a model your hardware can run. Ingestion, embeddings, and summarization stay on the machine.
-2. **Research** — Install [Goose](https://goose-docs.ai/) (Block's open-source agent, Apache 2.0) and point it at the same local Ollama in its provider settings. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged.
+1. **Ingest** — Run `bartleby ready`, set `provider: ollama` (and `vision_provider: ollama` if you want image analysis), and pick a model your hardware can run.
+2. **Research** — Install [Goose](https://goose-docs.ai/) (Apache 2.0; originally Block's, now governed by the Linux Foundation's Agentic AI Foundation) and point it at the same local Ollama. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged.
 
 No prompts, source text, or research notes leave the machine.
 
-**A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them.
+### Picking models for your hardware
 
-| Hardware | What to expect |
-| --- | --- |
-| ~16 GB unified memory | `gpt-oss:20b` or `llama3.1:8b` works; spot-check the agent's citations. |
-| 32 GB+ | `llama3.3:70b` or `qwen2.5:32b` quantized — closer to trustworthy citation discipline. |
-| Under 16 GB | Either run ingest locally and use a cloud model for research, or accept noticeably worse citations. |
+| Hardware | Ingest (LLM + VLM) | Research (Goose) |
+| --- | --- | --- |
+| 32 GB+ unified memory | `qwen3-vl:30b` — Mixture-of-Experts, ~19 GB pull, handles summarization and image analysis from one model. Wall-clock speed is closer to a dense ~8B than its 31B parameter count would suggest — roughly 6s/doc and 8s/image on recent Apple Silicon. | `gpt-oss:120b` |
+| ~16 GB unified memory | `gemma4:e2b` — much lighter (~7 GB), ~6s summarize, ~5s image. Can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow run rather than an error. | `gpt-oss:20b` |
 
-The tradeoff between fully-local and cloud-research-with-local-ingest is real: privacy vs. citation reliability. Pick by project.
+**A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them. `gpt-oss:120b` is reasonably disciplined; with `gpt-oss:20b` you'll want to spot-check.
+
+If you can't fit either tier, the middle path is **local ingest + cloud research**: keep `provider: ollama` for the deterministic ingest pipeline, but point Goose (or Claude Code) at a frontier API for the agent layer. Source documents still never leave the machine; only the agent's queries do.
 
 ---
 
