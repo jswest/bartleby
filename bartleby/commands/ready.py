@@ -13,13 +13,13 @@ ALLOWED_BACKENDS = ["pdfplumber", "docling"]
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-5-mini",
-    "ollama": "gpt-oss:20b",
+    "ollama": "qwen3-vl:30b",
 }
 
 VISION_PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-5-mini",
-    "ollama": "qwen2.5-vl:7b",
+    "ollama": "qwen3-vl:30b",
 }
 
 DEFAULT_SUMMARY_DEPTH = "one-shot"

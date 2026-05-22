@@ -153,7 +153,7 @@ Interactive configuration wizard. Asks for:
 | Setting | Default | Description |
 | --- | --- | --- |
 | LLM provider | anthropic | `anthropic`, `openai`, or `ollama` |
-| Model | varies by provider | Model name (e.g., `claude-haiku-4-5`, `gpt-5-mini`, `gpt-oss:20b`) |
+| Model | varies by provider | Model name (e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b`) |
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
@@ -161,14 +161,14 @@ Interactive configuration wizard. Asks for:
 | PDF backend | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
 | Vision provider | (off) | Optional VLM provider for image analysis: `anthropic`, `openai`, or `ollama` |
-| Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen2.5-vl:7b` |
+| Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
-**A note on Ollama defaults.** The default Ollama model (`gpt-oss:20b`) assumes you have ~16GB of GPU/unified memory free. If you're on smaller hardware, override it during `bartleby ready` — anything in the Ollama library that handles summarization well will work. The "right" local default is determined by your machine, not by us.
+**A note on Ollama defaults.** The default Ollama model (`qwen3-vl:30b`) handles both summarization and image analysis from a single ~19GB pull. It's a Mixture-of-Experts model, so wall-clock speed is closer to a dense ~8B than its raw 31B parameter count would suggest — roughly 6s per document summary and 8s per image on a recent Apple Silicon machine. On smaller hardware, `gemma4:e2b` is a much lighter alternative (~7GB, ~6s summarize, ~5s image) — be aware it can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow ingest run rather than an error. The "right" local default is determined by your machine, not by us; override during `bartleby ready`.
 
 **A note on token counts.** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of the LLM provider you're using. It's a rough estimate — accurate enough for the `read_document --force` gate, but not authoritative across providers.
 
@@ -262,7 +262,7 @@ If no session is specified, shows the most recent session's logs.
 | --- | --- | --- | --- |
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
-| Ollama | `gpt-oss:20b` | `qwen2.5-vl:7b` | Local server. Structured output via the chat API's `format=` JSON schema. Pick a smaller model on smaller hardware. |
+| Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative — see the Ollama-defaults note above. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
 
