@@ -78,10 +78,10 @@ Each result carries three signals you can use to triage:
 `search` results have three text fields per hit:
 
 - `text` — the chunk that matched. **Cite this chunk's `chunk_id`.**
-- `context_before` — the chunks immediately before the hit, in document order. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
-- `context_after` — the chunks immediately after the hit, in document order. Same rule.
+- `context_before` — the chunks immediately before the hit, in document order, each as `{chunk_id, chunk_index, text}`. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
+- `context_after` — the chunks immediately after the hit, in document order. Same shape, same rule.
 
-The context arrays exist because Docling sometimes produces small chunks and the hit alone may not be self-explanatory. Reading them is fine; presenting them as your matched evidence is not. If you discover the passage you actually want is in `context_before` or `context_after`, run a fresh `search` whose hit lands on that chunk, then cite it properly.
+The context arrays exist because Docling sometimes produces small chunks and the hit alone may not be self-explanatory. Reading them is fine; presenting them as your matched evidence is not. If you discover the passage you actually want is in `context_before` or `context_after`, fetch it directly with `read_chunks --chunks <chunk_id>` using the neighbor's `chunk_id`, verify the text, and then cite that `chunk_id`. (Don't re-search and hope for the right hit — the neighbor's id is already in your hand.) Citations must represent chunks you've read and verified, whether they came in as a hit or as a context entry.
 
 ## Image chunks
 

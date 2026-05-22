@@ -21,7 +21,8 @@ Output:
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
-        "context_before": [str, ...], "context_after": [str, ...],
+        "context_before": [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
+        "context_after":  [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
         "rank": int,                  # 1-indexed within this query's results
         "score": float,               # raw RRF score (small, don't compare across queries)
         "normalized_score": float,    # top hit = 1.0, others scaled to that
@@ -288,19 +289,28 @@ def _fetch_context(
     source_id: int,
     hit_index: int,
     context: int,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[dict], list[dict]]:
+    """Return neighbor chunks as {chunk_id, chunk_index, text} dicts so the
+    agent can fetch a neighbor directly via ``read_chunks --chunks <id>``
+    instead of guessing the id from chunk_index ordering."""
     if context <= 0:
         return [], []
     lo = hit_index - context
     hi = hit_index + context
     rows = list(conn.cursor().execute(
-        "SELECT chunk_index, text FROM chunks "
+        "SELECT chunk_id, chunk_index, text FROM chunks "
         "WHERE source_kind = ? AND source_id = ? AND chunk_index BETWEEN ? AND ? "
         "ORDER BY chunk_index",
         (source_kind, source_id, lo, hi),
     ))
-    before = [text for idx, text in rows if idx < hit_index]
-    after = [text for idx, text in rows if idx > hit_index]
+    before = [
+        {"chunk_id": cid, "chunk_index": idx, "text": text}
+        for cid, idx, text in rows if idx < hit_index
+    ]
+    after = [
+        {"chunk_id": cid, "chunk_index": idx, "text": text}
+        for cid, idx, text in rows if idx > hit_index
+    ]
     return before, after
 
 

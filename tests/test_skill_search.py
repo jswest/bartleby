@@ -55,8 +55,36 @@ def test_search_returns_context_before_and_after(seeded_project, capsys):
     assert out["context"] == 1
     hit = next(r for r in out["results"] if "equity" in r["text"])
     # The "equity" chunk is chunk_index=1 in alpha; neighbors are 0 and 2.
-    assert hit["context_before"] == ["alpha chunk zero about pm25"]
-    assert hit["context_after"] == ["alpha chunk two on results"]
+    assert len(hit["context_before"]) == 1
+    assert hit["context_before"][0]["text"] == "alpha chunk zero about pm25"
+    assert hit["context_before"][0]["chunk_index"] == 0
+    assert isinstance(hit["context_before"][0]["chunk_id"], int)
+    assert len(hit["context_after"]) == 1
+    assert hit["context_after"][0]["text"] == "alpha chunk two on results"
+    assert hit["context_after"][0]["chunk_index"] == 2
+    assert isinstance(hit["context_after"][0]["chunk_id"], int)
+
+
+def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
+    """A neighbor's chunk_id should round-trip through read_chunks."""
+    from bartleby.skill_scripts import read_chunks
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "equity",
+        "--context", "1",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    neighbor = next(
+        r for r in out["results"] if "equity" in r["text"]
+    )["context_after"][0]
+
+    capsys.readouterr()  # drain previous output
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(neighbor["chunk_id"]),
+    ])
+    fetched = json.loads(capsys.readouterr().out)
+    assert fetched["chunks"][0]["text"] == neighbor["text"]
 
 
 def test_search_context_zero_means_empty_arrays(seeded_project, capsys):
@@ -81,7 +109,8 @@ def test_search_context_clamps_at_source_boundary(seeded_project, capsys):
     # "hello" is in beta chunk 0 (the start) — only chunk 1 follows.
     hit = next(r for r in out["results"] if r["source_name"] == "beta.txt")
     assert hit["context_before"] == []
-    assert hit["context_after"] == ["beta chunk one says farewell"]
+    assert len(hit["context_after"]) == 1
+    assert hit["context_after"][0]["text"] == "beta chunk one says farewell"
 
 
 def test_search_context_does_not_cross_source_boundary(seeded_project, capsys):
@@ -96,7 +125,7 @@ def test_search_context_does_not_cross_source_boundary(seeded_project, capsys):
     # alpha chunk 3 is the last in alpha — no chunks after it within alpha.
     assert hit["context_after"] == []
     # context_before pulls from earlier chunks in the same document only.
-    assert all("alpha" in t for t in hit["context_before"])
+    assert all("alpha" in c["text"] for c in hit["context_before"])
 
 
 def test_search_default_modes_are_semantic_and_fulltext(seeded_project, capsys):
