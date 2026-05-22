@@ -96,3 +96,34 @@ export function getDocumentFilePath(documentId) {
   ).get(documentId);
   return row ? row.file_path : null;
 }
+
+// Documents list — LEFT JOIN summaries so unsummarized docs still show up
+// (rendered with the file name as a fallback title).
+export function listDocuments() {
+  const { db } = getDb();
+  return db.prepare(`
+    SELECT d.document_id, d.file_name, d.page_count, d.created_at,
+           s.title, s.description
+    FROM documents d
+    LEFT JOIN summaries s USING (document_id)
+    ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
+  `).all();
+}
+
+export function getDocument(documentId) {
+  const { db } = getDb();
+  return db.prepare(`
+    SELECT d.document_id, d.file_name, d.page_count, d.created_at,
+           s.title, s.description, s.text AS summary_text, s.model
+    FROM documents d
+    LEFT JOIN summaries s USING (document_id)
+    WHERE d.document_id = ?
+  `).get(documentId);
+}
+
+export function getCounts() {
+  const { db } = getDb();
+  const documents = db.prepare('SELECT COUNT(*) AS n FROM documents').get().n;
+  const findings = db.prepare('SELECT COUNT(*) AS n FROM findings').get().n;
+  return { documents, findings };
+}

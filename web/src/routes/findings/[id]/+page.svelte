@@ -69,7 +69,7 @@
     </p>
     <p class="desc">{data.finding.description}</p>
 
-    <div class="body">
+    <div class="body markdown-body">
       {@html bodyHtml}
     </div>
   </article>
@@ -88,50 +88,9 @@
 </div>
 
 <style>
-  .split {
-    display: grid;
-    grid-template-columns: minmax(0, 40rem) minmax(0, 1fr);
-    gap: 1.5rem;
-    align-items: start;
-  }
-  .report {
-    min-width: 0;
-  }
-  .viewer {
-    position: sticky;
-    top: 1rem;
-    height: calc(100vh - 2rem);
-  }
-  .viewer iframe {
-    width: 100%;
-    height: 100%;
-    border: 1px solid #ccc;
-  }
   .placeholder {
     color: var(--color-off);
     font-style: italic;
-  }
-  .desc {
-    font-style: italic;
-  }
-  .body {
-    margin: 1.5rem 0;
-  }
-  :global(.body p) {
-    margin-bottom: 1.5rem;
-  }
-  :global(.body h1) {
-    font-size: 1.5rem;
-    font-weight: 900;
-  }
-  :global(.body h2) {
-    font-size: 1.5rem;
-    font-weight: 200;
-  }
-  :global(.body ul),
-  :global(.body ol) {
-    margin-left: 1rem;
-    margin-bottom: 1.5rem;
   }
   :global(.cite-chip) {
     display: inline-block;

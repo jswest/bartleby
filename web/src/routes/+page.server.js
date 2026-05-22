@@ -1,5 +1,5 @@
-import { listFindings } from '$lib/server/queries.js';
+import { getCounts } from '$lib/server/queries.js';
 
 export function load() {
-  return { findings: listFindings() };
+  return { counts: getCounts() };
 }
