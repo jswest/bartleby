@@ -520,6 +520,169 @@ def test_scribe_image_progress_callback_fires_per_image(
     assert seen[-1] == (1, 1)
 
 
+def test_document_already_ingested_skips_partial_row(isolated_project):
+    """A documents row with no chunks/images is treated as not-yet-ingested."""
+    conn = open_db("test_proj")
+    try:
+        conn.cursor().execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("abc123", "stranded.txt", "/tmp/stranded.txt", None, 0),
+        )
+        assert scribe._document_already_ingested(conn, "abc123") is None
+    finally:
+        conn.close()
+
+
+def test_document_already_ingested_recognizes_complete_text_doc(
+    isolated_project, tmp_path, mock_embed
+):
+    """A document with at least one text chunk is recognized as complete."""
+    src = _write_txt(tmp_path / "doc.txt", "Some content for ingestion.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        file_hash, doc_id = conn.cursor().execute(
+            "SELECT file_hash, document_id FROM documents"
+        ).fetchone()
+        assert scribe._document_already_ingested(conn, file_hash) == doc_id
+    finally:
+        conn.close()
+
+
+def test_document_already_ingested_recognizes_image_only_doc(isolated_project):
+    """A document with only document_images attached (no doc chunks) is complete."""
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("imghash", "image.jpg", "/tmp/image.jpg", None, 0),
+        )
+        doc_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
+            ("imgblob", "/tmp/image.jpg", 100, 100, "{}", "m"),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, None, 0),
+        )
+        assert scribe._document_already_ingested(conn, "imghash") == doc_id
+    finally:
+        conn.close()
+
+
+def test_scribe_reingests_after_partial_crash(
+    isolated_project, tmp_path, mock_embed
+):
+    """A stranded documents row from a crashed run is cleaned up + re-ingested."""
+    src = _write_txt(tmp_path / "doc.txt", "Content that should land on retry.")
+    # Simulate an interrupted previous run: hash matches the file but no
+    # chunks were ever written. The row holds the file_hash UNIQUE slot.
+    file_hash = scribe._hash_file(src)
+    conn = open_db("test_proj")
+    try:
+        # The stranded row's file_path points at a non-existent location and
+        # its token_count is 0 — the canonical "partial" fingerprint.
+        conn.cursor().execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_hash, "doc.txt", "/tmp/missing.txt", None, 0),
+        )
+    finally:
+        conn.close()
+
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Exactly one row for this hash, and it now looks like a real ingest:
+        # the stranded "/tmp/missing.txt" path was replaced with a real archive
+        # path and tokens were counted.
+        rows = cur.execute(
+            "SELECT file_path, token_count FROM documents WHERE file_hash = ?",
+            (file_hash,),
+        ).fetchall()
+        assert len(rows) == 1
+        archive_path, token_count = rows[0]
+        assert archive_path != "/tmp/missing.txt"
+        assert token_count > 0
+        # Chunks landed this time.
+        n_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0]
+        assert n_chunks >= 1
+    finally:
+        conn.close()
+
+
+def test_cleanup_partial_document_preserves_shared_image(isolated_project):
+    """Cleaning up a partial doc drops its joins but leaves shared images alive."""
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Two documents share one image
+        for fh, name in (("h_partial", "partial.pdf"), ("h_other", "other.pdf")):
+            cur.execute(
+                "INSERT INTO documents "
+                "(file_hash, file_name, file_path, page_count, token_count) "
+                "VALUES (?, ?, ?, 1, 0)", (fh, name, f"/tmp/{name}"),
+            )
+        partial_id, other_id = [r[0] for r in cur.execute(
+            "SELECT document_id FROM documents ORDER BY document_id"
+        )]
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
+            ("img_shared", "/tmp/img.jpg", 100, 100, "{}", "m"),
+        )
+        image_id = conn.last_insert_rowid()
+        for doc_id in (partial_id, other_id):
+            cur.execute(
+                "INSERT INTO document_images "
+                "(document_id, image_id, page_number, image_index_on_page) "
+                "VALUES (?, ?, NULL, 0)", (doc_id, image_id),
+            )
+
+        scribe._cleanup_partial_document(conn, partial_id)
+
+        # Partial doc + its join row are gone
+        assert cur.execute(
+            "SELECT COUNT(*) FROM documents WHERE document_id = ?",
+            (partial_id,),
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_images WHERE document_id = ?",
+            (partial_id,),
+        ).fetchone()[0] == 0
+        # Other doc + shared image survive
+        assert cur.execute(
+            "SELECT COUNT(*) FROM documents WHERE document_id = ?",
+            (other_id,),
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE image_id = ?",
+            (image_id,),
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_images WHERE document_id = ?",
+            (other_id,),
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_truncation_note_in_summary(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):

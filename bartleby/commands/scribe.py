@@ -97,10 +97,51 @@ def _collect_files(path: Path) -> list[Path]:
 
 
 def _document_already_ingested(conn, file_hash: str) -> int | None:
+    """Return document_id iff this hash has a *complete* ingest.
+
+    Completeness = the document has at least one text chunk OR at least one
+    image attached. A bare ``documents`` row with neither is a stranded
+    partial from an interrupted run (the row is committed in autocommit
+    before chunks/images land); treating it as "ingested" would mean
+    skipping a broken document forever. Returning None here lets the
+    caller clean up the stranded row and re-ingest from scratch.
+    """
     row = conn.cursor().execute(
-        "SELECT document_id FROM documents WHERE file_hash = ?", (file_hash,)
+        "SELECT d.document_id "
+        "FROM documents d "
+        "WHERE d.file_hash = ? AND ("
+        "  EXISTS (SELECT 1 FROM chunks "
+        "          WHERE source_kind = 'document' AND source_id = d.document_id)"
+        "  OR EXISTS (SELECT 1 FROM document_images "
+        "             WHERE document_id = d.document_id)"
+        ")",
+        (file_hash,),
     ).fetchone()
     return row[0] if row else None
+
+
+def _cleanup_partial_document(conn, document_id: int) -> None:
+    """Drop a stranded document row and its dependent state.
+
+    FK CASCADE handles summaries and document_images; the polymorphic
+    chunks (kind=document, kind=summary) are cleared manually via
+    ``delete_chunks_for`` so chunks_fts and chunks_vec stay in sync.
+    Shared image rows survive — they're deduped on their own file_hash
+    and may be reused by other documents or by the upcoming re-ingest.
+    """
+    cur = conn.cursor()
+    summary_row = cur.execute(
+        "SELECT summary_id FROM summaries WHERE document_id = ?", (document_id,)
+    ).fetchone()
+
+    delete_chunks_for(conn, "document", document_id)
+    if summary_row is not None:
+        delete_chunks_for(conn, "summary", summary_row[0])
+
+    with conn:
+        conn.cursor().execute(
+            "DELETE FROM documents WHERE document_id = ?", (document_id,)
+        )
 
 
 def _insert_document(
@@ -556,11 +597,21 @@ def _process_one(
     on_page_progress: Callable[[int, int], None] | None = None,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
-) -> None:
+) -> bool:
+    """Returns True if a new document was ingested, False if the file was
+    already ingested and skipped. Caller handles the user-facing message."""
     file_hash = _hash_file(path)
     if _document_already_ingested(conn, file_hash) is not None:
-        console.info(f"Skipping {path.name} (already ingested)")
-        return
+        return False
+
+    # If a stranded partial row exists for this hash (interrupted run), drop
+    # it so the upcoming INSERT doesn't trip the file_hash UNIQUE constraint.
+    stranded = conn.cursor().execute(
+        "SELECT document_id FROM documents WHERE file_hash = ?", (file_hash,)
+    ).fetchone()
+    if stranded is not None:
+        _cleanup_partial_document(conn, stranded[0])
+
     archived = _archive(path, archive_root, file_hash)
 
     ext = path.suffix.lower()
@@ -615,6 +666,7 @@ def _process_one(
         temperature=temperature, max_summarize_tokens=max_summarize_tokens,
         on_stage=on_stage,
     )
+    return True
 
 
 # -------------------- resolution / entry --------------------
@@ -709,14 +761,17 @@ def main(
             config.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)
         )
 
-        # Render progress on stderr so we can safely capture stdout from
-        # Docling/RapidOCR around convert() without breaking the bar.
+        # Share the console module's Rich Console so messages printed via
+        # console.info/error during the bar's lifetime are inserted above
+        # the Live display rather than colliding with it. That Console is
+        # on stderr, which also keeps stdout-redirect captures around
+        # Docling/RapidOCR from breaking the bar.
         with Progress(
             TextColumn("[bold]{task.fields[label]}"),
             BarColumn(),
             MofNCompleteColumn(),
             TimeElapsedColumn(),
-            console=Console(file=sys.stderr),
+            console=console.get_console(),
         ) as bar:
             task = bar.add_task("files", total=len(sources), label="Ingesting")
             sub = bar.add_task(
@@ -734,13 +789,16 @@ def main(
                         bar.update(sub, completed=done, total=total)
                 return cb
 
+            SKIP_DISPLAY_LIMIT = 3
+            skipped_count = 0
+
             for src in sources:
                 def _set_stage(stage: str, _src=src) -> None:
                     bar.update(task, label=f"Ingesting {_src.name} · {stage}")
 
                 _set_stage("starting")
                 try:
-                    _process_one(
+                    was_ingested = _process_one(
                         conn, src, archive_root,
                         backend=backend_name,
                         sparse_text_threshold=sparse_text_threshold,
@@ -755,6 +813,12 @@ def main(
                         on_image_progress=_phase_callback(f"  images ({src.name})"),
                         on_stage=_set_stage,
                     )
+                    if not was_ingested:
+                        skipped_count += 1
+                        if skipped_count <= SKIP_DISPLAY_LIMIT:
+                            console.info(
+                                f"Skipping {src.name} (already ingested)"
+                            )
                 except Exception as e:
                     console.error(f"Failed: {src.name}: {e}")
                     if verbose:
@@ -762,6 +826,12 @@ def main(
                 finally:
                     bar.update(sub, visible=False)
                     bar.advance(task)
+
+            extra_skipped = skipped_count - SKIP_DISPLAY_LIMIT
+            if extra_skipped > 0:
+                console.info(
+                    f"… and {extra_skipped} more file(s) skipped as already ingested"
+                )
     finally:
         conn.close()
 

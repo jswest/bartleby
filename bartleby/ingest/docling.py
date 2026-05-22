@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -41,10 +40,12 @@ def _require_docling():
         import docling  # noqa: F401
     except ImportError as e:
         raise RuntimeError(
-            "The 'docling' extra is required for this code path "
-            "(install with `uv pip install 'bartleby[docling]'` or "
-            "`pip install 'bartleby[docling]'`). Either install it or switch "
-            "to the pdfplumber backend for PDFs."
+            "docling is not installed in this environment. Install it with one of:\n"
+            "  uv tool:    uv tool install --with docling --reinstall bartleby\n"
+            "  uv venv:    uv pip install 'bartleby[docling]'\n"
+            "  pip:        pip install 'bartleby[docling]'\n"
+            "PDFs can fall back to the pdfplumber backend in config; "
+            "HTML/MD require docling."
         ) from e
 
 
@@ -104,9 +105,12 @@ def _quiet_io():
 
     Docling pulls in RapidOCR (loguru) and transformers/HF (stdlib logging,
     plus rogue ``print()`` calls). Setting log levels doesn't reach loguru
-    cleanly, so we capture both streams during conversion. The captured
-    output is dumped to the real stderr only if the wrapped call raises,
-    so diagnostics survive failures.
+    cleanly, so we capture both streams during conversion. Captured output
+    is discarded on both success and exception: the Python exception that
+    propagates carries the actionable error (we re-surface it via
+    ``console.error``), and docling's internal traceback dumps are
+    redundant noise that interleave with our formatted output. Use
+    ``--verbose`` (bypasses this entire path) to see everything.
 
     Rich's progress bars are safe: the Live redraw thread holds the
     original ``sys.stderr`` file object captured at Console construction,
@@ -115,14 +119,9 @@ def _quiet_io():
     if is_verbose():
         yield
         return
-    out_buf, err_buf = io.StringIO(), io.StringIO()
-    try:
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            yield
-    except Exception:
-        sys.stderr.write(out_buf.getvalue())
-        sys.stderr.write(err_buf.getvalue())
-        raise
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        yield
 
 
 def convert(path: Path) -> DoclingResult:
