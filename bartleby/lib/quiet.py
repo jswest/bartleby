@@ -27,7 +27,43 @@ _NOISY_LOGGERS = (
 )
 
 
+def _hf_cache_is_populated() -> bool:
+    """True if the HF Hub cache already contains at least one downloaded model.
+
+    We use this as the trigger for offline mode: if anything is cached we
+    assume the user has done at least one successful run, so we can safely
+    skip the per-process update check that prints the unauthenticated-request
+    warning. A fresh install has an empty cache and stays online so the first
+    download succeeds.
+    """
+    cache_root = (
+        os.environ.get("HF_HUB_CACHE")
+        or os.environ.get("HUGGINGFACE_HUB_CACHE")
+        or os.path.expanduser("~/.cache/huggingface/hub")
+    )
+    if not os.path.isdir(cache_root):
+        return False
+    try:
+        entries = os.listdir(cache_root)
+    except OSError:
+        return False
+    for entry in entries:
+        if not entry.startswith("models--"):
+            continue
+        snapshots = os.path.join(cache_root, entry, "snapshots")
+        if os.path.isdir(snapshots) and os.listdir(snapshots):
+            return True
+    return False
+
+
 def setup_quiet_third_party(verbose: bool = False) -> None:
+    # Offline mode is about behavior (no Hub HEAD requests on every process
+    # start), not noise — set it regardless of --verbose. An explicit
+    # HF_HUB_OFFLINE in the environment always wins.
+    if _hf_cache_is_populated():
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
     if verbose:
         os.environ["BARTLEBY_VERBOSE"] = "1"
         return
