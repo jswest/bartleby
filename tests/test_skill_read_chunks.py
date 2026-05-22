@@ -138,3 +138,92 @@ def test_read_chunks_document_and_chunks_mutually_exclusive(seeded_project, caps
             "--document", str(seeded_project["doc_a"]),
             "--chunks", "1,2,3",
         ])
+
+
+def test_read_chunks_preview_truncates_text(seeded_project, capsys):
+    """--preview N truncates each chunk's text; text_length always reports the original."""
+    from bartleby.db.connection import open_db
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+    conn = open_db(seeded_project["project"])
+    try:
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_document_chunks(conn, seeded_project["doc_a"], [
+            ChunkInput(
+                text="x" * 5000, embedding=emb, chunk_index=10,
+                section_heading=None, page_number=None, content_type="text",
+            ),
+            ChunkInput(
+                text="tiny", embedding=emb, chunk_index=11,
+                section_heading=None, page_number=None, content_type="text",
+            ),
+        ])
+    finally:
+        conn.close()
+
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]),
+        "--offset", "4", "--limit", "2",
+        "--preview", "50",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["preview"] == 50
+    long_chunk, short_chunk = out["chunks"]
+    assert long_chunk["text"] == ("x" * 50) + "…"
+    assert long_chunk["text_length"] == 5000
+    assert short_chunk["text"] == "tiny"
+    assert short_chunk["text_length"] == 4
+
+
+def test_read_chunks_emits_text_length_without_preview(seeded_project, capsys):
+    """text_length is always present and reflects the actual stored text length."""
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["preview"] is None
+    for chunk in out["chunks"]:
+        assert chunk["text_length"] == len(chunk["text"])
+        assert not chunk["text"].endswith("…")
+
+
+def test_read_chunks_preview_in_chunk_id_mode(seeded_project, capsys):
+    from bartleby.db.connection import open_db
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+    conn = open_db(seeded_project["project"])
+    try:
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_document_chunks(conn, seeded_project["doc_a"], [
+            ChunkInput(
+                text="y" * 2000, embedding=emb, chunk_index=20,
+                section_heading=None, page_number=None, content_type="text",
+            ),
+        ])
+    finally:
+        conn.close()
+    chunk_ids = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])
+    target = chunk_ids[-1]
+
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(target),
+        "--preview", "100",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["preview"] == 100
+    chunk = out["chunks"][0]
+    assert chunk["text"] == ("y" * 100) + "…"
+    assert chunk["text_length"] == 2000
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "abc"])
+def test_read_chunks_preview_rejects_invalid(seeded_project, bad):
+    with pytest.raises(SystemExit):
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]),
+            "--preview", bad,
+        ])

@@ -12,17 +12,26 @@ Two modes (mutually exclusive):
       Each chunk carries its source_kind/source_id/chunk_index so the agent
       can locate it. Output includes a ``requested`` and ``missing`` list.
 
+Both modes accept ``--preview N`` to truncate each chunk's ``text`` to the
+first ``N`` characters (followed by ``…`` when truncation occurred). Useful
+for structural scans when you don't need full prose. Omit ``--preview`` to
+get full text. Every returned chunk always carries ``text_length`` — the
+pre-truncation length of the chunk's text — so the agent can size-budget
+and tell which chunks were trimmed.
+
 Paginated output:
     {
       "mode": "document",
       "document": {"id": int, "file_name": str},
       "offset": int, "limit": int, "total": int,
+      "preview": int|null,              # echo of --preview, null if not set
       "chunks": [{
         "chunk_id": int, "chunk_index": int,
         "section_heading": str|null,
         "page_number": int|null,        # first-class column; null for non-paginated chunks
         "content_type": str|null,
         "text": str,
+        "text_length": int,
       }, ...]
     }
 
@@ -31,6 +40,7 @@ Direct-lookup output:
       "mode": "chunks",
       "requested": [int, ...],
       "missing": [int, ...],
+      "preview": int|null,
       "chunks": [{
         "chunk_id": int,
         "source_kind": str, "source_id": int, "source_name": str,
@@ -39,6 +49,7 @@ Direct-lookup output:
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
+        "text_length": int,
       }, ...]
     }
 """
@@ -53,6 +64,16 @@ from bartleby.skill_scripts._common import (
 )
 
 
+def _positive_int(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError("--preview must be a positive integer")
+    return n
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="read_chunks")
     mode = p.add_mutually_exclusive_group(required=True)
@@ -65,11 +86,23 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--preview",
+        type=_positive_int,
+        default=None,
+        help="Truncate each chunk's text to the first N chars (append '…' if trimmed).",
+    )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
-def _read_by_chunk_ids(conn, chunk_ids: list[int]) -> dict:
+def _apply_preview(text: str, preview: int | None) -> str:
+    if preview is None or len(text) <= preview:
+        return text
+    return text[:preview] + "…"
+
+
+def _read_by_chunk_ids(conn, chunk_ids: list[int], preview: int | None) -> dict:
     # De-dupe while preserving the agent's requested order.
     seen: set[int] = set()
     ordered: list[int] = []
@@ -108,13 +141,15 @@ def _read_by_chunk_ids(conn, chunk_ids: list[int]) -> dict:
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,
-            "text": text,
+            "text": _apply_preview(text, preview),
+            "text_length": len(text),
         })
 
     return {
         "mode": "chunks",
         "requested": ordered,
         "missing": missing,
+        "preview": preview,
         "chunks": chunks,
     }
 
@@ -153,7 +188,8 @@ def _read_by_document(conn, args) -> dict:
             "section_heading": section_heading,
             "page_number": page_number,
             "content_type": content_type,
-            "text": text,
+            "text": _apply_preview(text, args.preview),
+            "text_length": len(text),
         }
         for chunk_id, chunk_index, section_heading, page_number,
         content_type, text in rows
@@ -165,13 +201,14 @@ def _read_by_document(conn, args) -> dict:
         "offset": args.offset,
         "limit": args.limit,
         "total": total,
+        "preview": args.preview,
         "chunks": chunks,
     }
 
 
 def work(*, conn, args, session_id) -> dict:
     if args.chunk_ids is not None:
-        return _read_by_chunk_ids(conn, args.chunk_ids)
+        return _read_by_chunk_ids(conn, args.chunk_ids, args.preview)
     return _read_by_document(conn, args)
 
 
