@@ -92,6 +92,13 @@ p.meta {
 .markdown-body p {
   margin: 0;
 }
+/* Restore vertical spacing between paragraphs and the elements they follow.
+   `.markdown-body > * + *` is too low-specificity to beat the reset above —
+   this rule (0,1,1) ties it and wins by declaration order. Excludes paragraphs
+   inside list items, which have their own tighter spacing via `li > p`. */
+.markdown-body * + p {
+  margin-top: 1rem;
+}
 .markdown-body strong {
   font-weight: 700;
 }
