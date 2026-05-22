@@ -3,9 +3,9 @@
   --color-off: #698879;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
-  --font-display: "Departure Mono";
-  --font-sans: "Source Sans 3";
-  --font-serif: "Source Serif 4";
+  --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
 }
 
 * {
