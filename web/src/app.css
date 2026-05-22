@@ -1,0 +1,234 @@
+:root {
+  --unit: 18px;
+  --color-off: #698879;
+  --color-rule: #e3e1d5;
+  --color-bg-soft: #f6f5ef;
+  --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-size: var(--unit);
+  color: #222;
+}
+
+.display {
+  font-family: var(--font-display);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-family: var(--font-sans);
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+h2 {
+  font-size: 1.25rem;
+}
+
+li,
+p {
+  font-family: var(--font-serif);
+  line-height: 1.55;
+}
+
+p.meta {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 200;
+  color: var(--color-off);
+}
+
+/* Shared markdown-body styles — used by both /findings/[id] and /documents/[id].
+   Targets descendants of .markdown-body so we don't accidentally restyle the
+   page chrome (titles, meta, etc.) that lives outside the rendered markdown. */
+
+.markdown-body {
+  font-family: var(--font-serif);
+  line-height: 1.6;
+}
+.markdown-body > * + * {
+  margin-top: 1rem;
+}
+.markdown-body h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--color-rule);
+}
+.markdown-body h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+}
+.markdown-body h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+}
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-off);
+  margin-top: 1.25rem;
+}
+.markdown-body p {
+  margin: 0;
+}
+.markdown-body strong {
+  font-weight: 700;
+}
+.markdown-body em {
+  font-style: italic;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+}
+.markdown-body li {
+  margin-top: 0.35rem;
+}
+.markdown-body li:first-child {
+  margin-top: 0;
+}
+.markdown-body li > p {
+  margin-top: 0.35rem;
+}
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin-top: 0.35rem;
+}
+.markdown-body a {
+  color: var(--color-off);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.markdown-body a:hover {
+  color: #222;
+}
+.markdown-body blockquote {
+  padding: 0.25rem 1rem;
+  border-left: 3px solid var(--color-off);
+  color: #444;
+  font-style: italic;
+}
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--color-bg-soft);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+.markdown-body pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  background: var(--color-bg-soft);
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+.markdown-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-rule);
+  margin: 2rem 0;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--color-rule);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+.markdown-body th {
+  background: var(--color-bg-soft);
+  font-weight: 600;
+}
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Two-pane detail layout: prose on the left, sticky PDF viewer on the right.
+   Shared by /findings/[id] and /documents/[id]. */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 40rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.split .report {
+  min-width: 0;
+}
+.split .viewer {
+  position: sticky;
+  top: 1rem;
+  height: calc(100vh - 6rem);
+}
+.split .viewer iframe {
+  width: 100%;
+  height: 100%;
+  border: 1px solid #ccc;
+}
+.split .desc {
+  font-style: italic;
+  margin-bottom: 1rem;
+}
+.split .body {
+  margin: 1.5rem 0;
+}
+
+/* Vertical list of entities (findings, documents) with a title link, meta line,
+   and optional description. */
+.entity-list {
+  max-width: 44rem;
+  list-style: none;
+  padding: 0;
+}
+.entity-list h2 {
+  font-size: 1.125rem;
+}
+.entity-list li {
+  margin-bottom: 1.5rem;
+}
+.entity-list a {
+  color: inherit;
+  text-decoration: none;
+}
+.entity-list a:hover {
+  color: var(--color-off);
+}
+.entity-list .desc {
+  margin: 0.25rem 0 0;
+}
+.empty {
+  color: var(--color-off);
+  font-style: italic;
+}
