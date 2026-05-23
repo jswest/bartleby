@@ -88,6 +88,12 @@
 </div>
 
 <style>
+  article.report {
+    background-color: var(--color-off-light);
+    border: 1px solid var(--color-off);
+    box-sizing: border-box;
+    padding: 1rem;
+  }
   .placeholder {
     color: var(--color-off);
     font-style: italic;
@@ -98,8 +104,8 @@
     max-width: 20ch;
     padding: 0 0.4em;
     margin: 0 0.15em;
-    background: #f0efe9;
-    border: 1px solid #d6d4c6;
+    background: var(--color-token);
+    border: 1px solid var(--color-token-dark);
     border-radius: 3px;
     font-family: var(--font-sans);
     font-size: 0.8em;

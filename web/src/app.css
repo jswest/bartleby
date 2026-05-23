@@ -1,10 +1,13 @@
 :root {
   --unit: 18px;
   --color-off: #698879;
+  --color-off-light: #dbfaeb;
+  --color-token: #ffecb9;
+  --color-token-dark: #ffbd08;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
   --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
 }
 
