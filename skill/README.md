@@ -45,7 +45,7 @@ The skill ships a `scripts/` directory containing small Python scripts that the 
 | Script | Purpose |
 | --- | --- |
 | `list_documents` | Enumerate documents in the corpus (file names, IDs, page/token/chunk counts, summary status). |
-| `search` | Unified search across documents, summaries, and findings. Supports keyword (FTS5), semantic (vector), and hybrid (RRF) modes. Each hit ships with neighboring chunks for reading context (configurable via `--context`). |
+| `search` | Unified search across documents, summaries, and findings. Supports keyword (FTS5), semantic (vector), and hybrid (RRF) modes. Hits return just the matched chunk by default; `--add-context N` (0..5) attaches N neighbor chunks on each side. |
 | `read_chunks` | Read a window of chunks from a document. Paginated via `--offset` and `--limit`. |
 | `read_document` | Read a full document and/or its summary. Refuses oversized documents without `--force`. |
 | `save_summary` | Save an agent-authored summary back into the database (chunked and embedded). |

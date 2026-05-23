@@ -49,7 +49,7 @@ def test_search_returns_context_before_and_after(seeded_project, capsys):
         "--project", seeded_project["project"],
         "--full-text",
         "equity",
-        "--context", "1",
+        "--add-context", "1",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["context"] == 1
@@ -71,7 +71,7 @@ def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text", "equity",
-        "--context", "1",
+        "--add-context", "1",
     ])
     out = json.loads(capsys.readouterr().out)
     neighbor = next(
@@ -87,13 +87,14 @@ def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
     assert fetched["chunks"][0]["text"] == neighbor["text"]
 
 
-def test_search_context_zero_means_empty_arrays(seeded_project, capsys):
+def test_search_default_context_is_empty_arrays(seeded_project, capsys):
+    """Default (no --add-context) returns empty context arrays."""
     _run([
         "--project", seeded_project["project"],
         "--full-text", "equity",
-        "--context", "0",
     ])
     out = json.loads(capsys.readouterr().out)
+    assert out["context"] == 0
     for r in out["results"]:
         assert r["context_before"] == []
         assert r["context_after"] == []
@@ -103,7 +104,7 @@ def test_search_context_clamps_at_source_boundary(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text", "hello",
-        "--context", "2",
+        "--add-context", "2",
     ])
     out = json.loads(capsys.readouterr().out)
     # "hello" is in beta chunk 0 (the start) — only chunk 1 follows.
@@ -118,7 +119,7 @@ def test_search_context_does_not_cross_source_boundary(seeded_project, capsys):
         "--project", seeded_project["project"],
         "--full-text",
         "concludes",
-        "--context", "3",
+        "--add-context", "3",
     ])
     out = json.loads(capsys.readouterr().out)
     hit = next(r for r in out["results"] if "concludes" in r["text"])
@@ -210,7 +211,7 @@ def test_search_context_out_of_range_rejected(seeded_project, capsys):
         _run([
             "--project", seeded_project["project"],
             "--full-text", "x",
-            "--context", "99",
+            "--add-context", "99",
         ])
 
 
