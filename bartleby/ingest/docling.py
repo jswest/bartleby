@@ -52,9 +52,25 @@ def _require_docling():
 @lru_cache(maxsize=1)
 def _converter():
     _require_docling()
-    from docling.document_converter import DocumentConverter
+    from docling.datamodel.accelerator_options import (
+        AcceleratorDevice,
+        AcceleratorOptions,
+    )
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    return DocumentConverter()
+    # Force CPU: Docling's vision models hit float64 ops that MPS rejects on
+    # Apple Silicon, failing entire PDFs. CPU is slower but reliable.
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.accelerator_options = AcceleratorOptions(
+        device=AcceleratorDevice.CPU
+    )
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        }
+    )
 
 
 @lru_cache(maxsize=1)
