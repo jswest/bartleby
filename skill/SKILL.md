@@ -119,6 +119,7 @@ Rules:
 
 - Place the marker immediately after the claim it supports (no space before the `[`).
 - One marker per chunk per claim. If a single claim rests on two chunks, write `claim[^123][^456]`.
+- **Only `[^N]` markers count.** Forms like `[chunks 1677, 1678]` or `[chunk 1677]` are silently dropped at save time — only some of your citations will land in the DB. Write `[^1677][^1678]` from the start; don't write the prose form and plan to clean up later.
 - The chunk_id must be one returned by `search` or `read_chunks` in this session. Invented IDs fail loudly.
 - **Never cite a finding chunk** (`source_kind == "finding"`). Findings are derivative; cite the underlying document chunk instead.
 
