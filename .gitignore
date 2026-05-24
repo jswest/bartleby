@@ -13,4 +13,5 @@ Thumbs.db
 .venv
 .vscode
 wheels/
+benchmarks/
 
