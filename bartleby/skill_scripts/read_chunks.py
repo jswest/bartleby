@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""read_chunks — read chunks by document (paginated) or by chunk_id list.
+"""read_chunks — read chunks by document (paginated), by chunk_id list, or
+around a target chunk.
 
-Two modes (mutually exclusive):
+Three modes (mutually exclusive):
 
   read_chunks --document <id> [--offset N] [--limit N]
       Paginated read of a single document's chunks in chunk_index order.
@@ -12,7 +13,13 @@ Two modes (mutually exclusive):
       Each chunk carries its source_kind/source_id/chunk_index so the agent
       can locate it. Output includes a ``requested`` and ``missing`` list.
 
-Both modes accept ``--preview N`` to truncate each chunk's ``text`` to the
+  read_chunks --around-chunk <id> [--window N]
+      Neighborhood read: returns the target chunk plus N chunks on each
+      side (default ``--window 3``), in chunk_index order. Source is
+      derived from the target chunk — no need to pass --document. Works
+      for any source kind, though image chunks have no neighbors.
+
+All modes accept ``--preview N`` to truncate each chunk's ``text`` to the
 first ``N`` characters (followed by ``…`` when truncation occurred). Useful
 for structural scans when you don't need full prose. Omit ``--preview`` to
 get full text. Every returned chunk always carries ``text_length`` — the
@@ -24,11 +31,11 @@ Paginated output:
       "mode": "document",
       "document": {"id": int, "file_name": str},
       "offset": int, "limit": int, "total": int,
-      "preview": int|null,              # echo of --preview, null if not set
+      "preview": int|null,
       "chunks": [{
         "chunk_id": int, "chunk_index": int,
         "section_heading": str|null,
-        "page_number": int|null,        # first-class column; null for non-paginated chunks
+        "page_number": int|null,
         "content_type": str|null,
         "text": str,
         "text_length": int,
@@ -44,10 +51,27 @@ Direct-lookup output:
       "chunks": [{
         "chunk_id": int,
         "source_kind": str, "source_id": int, "source_name": str,
-        "file_name": str|null,          # originating doc (None for findings)
-        "page_number": int|null,        # first-class on doc chunks; image join for image chunks
+        "file_name": str|null,
+        "page_number": int|null,
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
+        "text": str,
+        "text_length": int,
+      }, ...]
+    }
+
+Around-chunk output:
+    {
+      "mode": "around",
+      "target": {"chunk_id": int, "chunk_index": int,
+                 "source_kind": str, "source_id": int, "source_name": str},
+      "window": int,
+      "preview": int|null,
+      "chunks": [{
+        "chunk_id": int, "chunk_index": int,
+        "section_heading": str|null,
+        "page_number": int|null,
+        "content_type": str|null,
         "text": str,
         "text_length": int,
       }, ...]
@@ -70,22 +94,44 @@ def _positive_int(value: str) -> int:
     except ValueError:
         raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
     if n < 1:
-        raise argparse.ArgumentTypeError("--preview must be a positive integer")
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return n
+
+
+def _nonneg_int(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
     return n
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="read_chunks")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--document", type=int, dest="document_id")
+    mode.add_argument("--document", type=_positive_int, dest="document_id")
     mode.add_argument(
         "--chunks",
         type=comma_int_list("chunk_id"),
         dest="chunk_ids",
         help="Comma-separated chunk_ids to fetch directly.",
     )
+    mode.add_argument(
+        "--around-chunk",
+        type=_positive_int,
+        dest="around_chunk",
+        help="Target chunk_id; returns target plus --window chunks on each side.",
+    )
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--window",
+        type=_nonneg_int,
+        default=3,
+        help="Used with --around-chunk: neighbors on each side (default 3).",
+    )
     p.add_argument(
         "--preview",
         type=_positive_int,
@@ -100,6 +146,21 @@ def _apply_preview(text: str, preview: int | None) -> str:
     if preview is None or len(text) <= preview:
         return text
     return text[:preview] + "…"
+
+
+def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
+    return [
+        {
+            "chunk_id": cid,
+            "chunk_index": idx,
+            "section_heading": heading,
+            "page_number": page,
+            "content_type": ctype,
+            "text": _apply_preview(text, preview),
+            "text_length": len(text),
+        }
+        for cid, idx, heading, page, ctype, text in rows
+    ]
 
 
 def _read_by_chunk_ids(conn, chunk_ids: list[int], preview: int | None) -> dict:
@@ -181,20 +242,6 @@ def _read_by_document(conn, args) -> dict:
         (args.document_id, args.limit, args.offset),
     ))
 
-    chunks = [
-        {
-            "chunk_id": chunk_id,
-            "chunk_index": chunk_index,
-            "section_heading": section_heading,
-            "page_number": page_number,
-            "content_type": content_type,
-            "text": _apply_preview(text, args.preview),
-            "text_length": len(text),
-        }
-        for chunk_id, chunk_index, section_heading, page_number,
-        content_type, text in rows
-    ]
-
     return {
         "mode": "document",
         "document": {"id": doc_row[0], "file_name": doc_row[1]},
@@ -202,13 +249,55 @@ def _read_by_document(conn, args) -> dict:
         "limit": args.limit,
         "total": total,
         "preview": args.preview,
-        "chunks": chunks,
+        "chunks": _chunks_from_rows(rows, args.preview),
+    }
+
+
+def _read_around_chunk(conn, args) -> dict:
+    cur = conn.cursor()
+    target = cur.execute(
+        "SELECT chunk_id, source_kind, source_id, chunk_index "
+        "FROM chunks WHERE chunk_id = ?",
+        (args.around_chunk,),
+    ).fetchone()
+    if target is None:
+        raise SkillError(
+            "CHUNK_NOT_FOUND",
+            f"No chunk with id {args.around_chunk}.",
+        )
+    target_id, sk, sid, target_idx = target
+
+    rows = list(cur.execute(
+        "SELECT chunk_id, chunk_index, section_heading, page_number, "
+        "       content_type, text "
+        "FROM chunks "
+        "WHERE source_kind = ? AND source_id = ? "
+        "  AND chunk_index BETWEEN ? AND ? "
+        "ORDER BY chunk_index",
+        (sk, sid, target_idx - args.window, target_idx + args.window),
+    ))
+
+    name = source_names(conn, {(sk, sid)}).get((sk, sid), "")
+    return {
+        "mode": "around",
+        "target": {
+            "chunk_id": target_id,
+            "chunk_index": target_idx,
+            "source_kind": sk,
+            "source_id": sid,
+            "source_name": name,
+        },
+        "window": args.window,
+        "preview": args.preview,
+        "chunks": _chunks_from_rows(rows, args.preview),
     }
 
 
 def work(*, conn, args, session_id) -> dict:
     if args.chunk_ids is not None:
         return _read_by_chunk_ids(conn, args.chunk_ids, args.preview)
+    if args.around_chunk is not None:
+        return _read_around_chunk(conn, args)
     return _read_by_document(conn, args)
 
 

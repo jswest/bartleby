@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """list_documents — enumerate documents in the corpus.
 
+Default output is *brief*: id, file_name, title, description, has_summary,
+image_count. Pass ``--verbose`` for the full row (adds page_count,
+token_count, chunk_count, created_at).
+
 Output:
     {
-      "documents": [{
-        "id": int, "file_name": str,
-        "title": str|null, "description": str|null,
-        "page_count": int|null, "token_count": int|null,
-        "has_summary": bool, "chunk_count": int,
-        "image_count": int,                 # distinct images attached to this doc
-        "created_at": str,
-      }, ...],
-      "total": int
+      "documents": [{...}, ...],
+      "total": int,
+      "offset": int, "limit": int, "verbose": bool,
+      "hint": str|null         # set when more pages remain
     }
 
 ``title`` and ``description`` come from the document's summary row and are
@@ -30,8 +29,13 @@ from bartleby.skill_runner import run
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="list_documents")
     p.add_argument("--project", type=str, default=None)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--limit", type=int, default=200)
     p.add_argument("--offset", type=int, default=0)
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Include page_count, token_count, chunk_count, created_at.",
+    )
     return p.parse_args(argv)
 
 
@@ -57,24 +61,44 @@ def work(*, conn, args, session_id) -> dict:
         (args.limit, args.offset),
     )
 
-    documents = [
-        {
+    documents = []
+    for (
+        doc_id, file_name, page_count, token_count, created_at,
+        title, description, has_summary, chunk_count, image_count,
+    ) in rows:
+        doc = {
             "id": doc_id,
             "file_name": file_name,
             "title": title,
             "description": description,
-            "page_count": page_count,
-            "token_count": token_count,
             "has_summary": bool(has_summary),
-            "chunk_count": chunk_count,
             "image_count": image_count,
-            "created_at": created_at,
         }
-        for doc_id, file_name, page_count, token_count, created_at,
-            title, description, has_summary, chunk_count, image_count in rows
-    ]
+        if args.verbose:
+            doc.update({
+                "page_count": page_count,
+                "token_count": token_count,
+                "chunk_count": chunk_count,
+                "created_at": created_at,
+            })
+        documents.append(doc)
 
-    return {"documents": documents, "total": total}
+    next_offset = args.offset + len(documents)
+    has_more = next_offset < total
+    hint = (
+        f"Showing {args.offset + 1}-{next_offset} of {total}. "
+        f"Pass --offset {next_offset} to continue."
+        if has_more and documents else None
+    )
+
+    return {
+        "documents": documents,
+        "total": total,
+        "offset": args.offset,
+        "limit": args.limit,
+        "verbose": args.verbose,
+        "hint": hint,
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
