@@ -173,6 +173,7 @@ p.meta {
 }
 .markdown-body th,
 .markdown-body td {
+  background-color: white;
   border: 1px solid var(--color-rule);
   padding: 0.4rem 0.6rem;
   text-align: left;
