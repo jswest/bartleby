@@ -59,6 +59,22 @@
       if (c) active = c;
     });
   });
+
+  let copied = false;
+  async function copyMarkdown() {
+    await navigator.clipboard.writeText(data.finding.body);
+    copied = true;
+    setTimeout(() => (copied = false), 1500);
+  }
+
+  function downloadMarkdown() {
+    const blob = new Blob([data.finding.body], { type: "text/markdown" });
+    const name = data.finding.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}.md`;
+    a.click();
+  }
 </script>
 
 <div class="split">
@@ -68,6 +84,13 @@
       {data.finding.session_name} · {data.finding.created_at}
     </p>
     <p class="desc">{data.finding.description}</p>
+
+    <div class="toolbar">
+      <button type="button" on:click={copyMarkdown}>
+        {copied ? "Copied" : "Copy as Markdown"}
+      </button>
+      <button type="button" on:click={downloadMarkdown}>Download .md</button>
+    </div>
 
     <div class="body markdown-body">
       {@html bodyHtml}
@@ -93,6 +116,26 @@
     border: 1px solid var(--color-off);
     box-sizing: border-box;
     padding: 1rem;
+  }
+  .toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .toolbar button {
+    font-family: var(--font-sans);
+    font-size: 0.8rem;
+    padding: 0.3rem 0.7rem;
+    background: var(--color-token);
+    border: 1px solid var(--color-token-dark);
+    border-radius: 3px;
+    color: var(--color-off);
+    cursor: pointer;
+  }
+  .toolbar button:hover {
+    background: var(--color-off);
+    color: #fff;
+    border-color: var(--color-off);
   }
   .placeholder {
     color: var(--color-off);
