@@ -36,16 +36,7 @@ cp -r skill ~/.claude/skills/bartleby
 
 **Other harnesses:** consult the harness's docs for where skills live. The skill is a self-contained folder; you should be able to drop it anywhere a compliant harness reads skills from.
 
-### Heads up: re-copy after every `git pull`
-
-This codebase is moving fast and the `SKILL.md` contract changes often — new flags, renamed outputs, new modes. Your harness loads `SKILL.md` from the directory you copied it to, *not* from this repo. After every pull, empty that location and re-copy so the agent sees the current contract:
-
-```
-rm -rf ~/.claude/skills/bartleby
-cp -r skill ~/.claude/skills/bartleby
-```
-
-(Adjust paths for non–Claude Code harnesses.) The scripts themselves resolve through the installed `bartleby` package, so reinstalling the CLI (`uv pip install -e .` or equivalent) keeps them in sync.
+The main [README](../README.md#install-the-skill) has a note about re-copying after every `git pull` — worth reading if you're updating an existing install.
 
 ---
 

@@ -66,6 +66,15 @@ cp -r skill ~/.claude/skills/bartleby
 
 See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
 
+**Re-copy after every `git pull`.** This codebase is moving fast and the `SKILL.md` contract changes often — new flags, renamed outputs, new modes. Your harness loads `SKILL.md` from the directory you copied it to, *not* from this repo. After every pull, empty that location and re-copy so the agent sees the current contract:
+
+```
+rm -rf ~/.claude/skills/bartleby
+cp -r skill ~/.claude/skills/bartleby
+```
+
+The scripts themselves resolve through the installed `bartleby` package, so a `uv tool install .` (or `--editable .` for dev) keeps those in sync.
+
 ### A note on first-run latency
 
 The first time you run `bartleby scribe`, it will pause to download:
