@@ -2,8 +2,8 @@
 """list_documents — enumerate documents in the corpus.
 
 Default output is *brief*: id, file_name, title, description, authored_date,
-has_summary, image_count. Pass ``--verbose`` for the full row (adds
-page_count, token_count, chunk_count, created_at).
+created_at, has_summary, image_count. Pass ``--verbose`` for the full row
+(adds page_count, token_count, chunk_count).
 
 Output:
     {
@@ -35,7 +35,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--verbose",
         action="store_true",
-        help="Include page_count, token_count, chunk_count, created_at.",
+        help="Include page_count, token_count, chunk_count.",
     )
     p.add_argument(
         "--tag",
@@ -101,6 +101,7 @@ def work(*, conn, args, session_id) -> dict:
             "title": title,
             "description": description,
             "authored_date": authored_date,
+            "created_at": created_at,
             "has_summary": bool(has_summary),
             "image_count": image_count,
         }
@@ -109,7 +110,6 @@ def work(*, conn, args, session_id) -> dict:
                 "page_count": page_count,
                 "token_count": token_count,
                 "chunk_count": chunk_count,
-                "created_at": created_at,
             })
         documents.append(doc)
 
