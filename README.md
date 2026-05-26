@@ -41,7 +41,7 @@ brew install uv tesseract
 
 (`apt install tesseract-ocr` on Debian/Ubuntu; on Windows, use the official installer from UB Mannheim.)
 
-Tesseract is used for cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed. [Docling](https://docling-project.github.io/docling/) is available as an opt-in alternative backend (slower, but more structurally aware).
+Tesseract is used for cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed. [Docling](https://docling-project.github.io/docling/) is available as an opt-in alternative PDF converter (slower, but more structurally aware) and as the default converter for HTML/MD. [sec2md](https://github.com/alphanome-ai/sec2md) is an opt-in HTML converter specialized for iXBRL EDGAR filings.
 
 ### Install Bartleby
 
@@ -53,11 +53,19 @@ uv tool install .
 
 This installs `bartleby` as a command-line tool in an isolated environment.
 
-To opt into the Docling backend (slower text extraction, but layout-aware; required for HTML/MD ingestion), which is something you will almost always want, as Docling allows `.txt`, `.md`, and `.html` files to be read:
+To opt into the Docling converter (slower text extraction, but layout-aware; required for HTML/MD ingestion), which is something you will almost always want, as Docling allows `.txt`, `.md`, and `.html` files to be read:
 
 ```
 uv tool install '.[docling]'
 ```
+
+To opt into [sec2md](https://github.com/alphanome-ai/sec2md) for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.). sec2md preserves SEC table structure and section headings that Docling tends to flatten. It only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head); everything else on the HTML branch still falls through to Docling.
+
+```
+uv tool install '.[sec2md]'
+```
+
+You can combine extras: `uv tool install '.[docling,sec2md]'`.
 
 For development:
 
@@ -90,7 +98,7 @@ The first time you run `bartleby scribe`, it will pause to download:
 
 - the `BAAI/bge-base-en-v1.5` embedding model (~400 MB),
 - the tokenizer assets that ride alongside it,
-- and, if you opted into the `docling` backend, Docling's layout/OCR models on its first invocation.
+- and, if you opted into the `docling` converter, Docling's layout/OCR models on its first invocation.
 
 These are cached under `~/.cache/` and reused on every subsequent run. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model.
 
@@ -198,7 +206,8 @@ Interactive configuration wizard. Asks for:
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
-| PDF backend | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
+| PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
+| HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
@@ -241,7 +250,8 @@ bartleby scribe --files <path> [options]
 | `--project <name>` | Target project (defaults to active) |
 | `--model <name>` | Override LLM model for summarization |
 | `--provider <name>` | Override LLM provider |
-| `--backend <name>` | Override PDF backend (`pdfplumber` or `docling`) |
+| `--pdf-converter <name>` | Override PDF converter (`pdfplumber` or `docling`) |
+| `--html-converter <name>` | Override HTML converter (`docling` or `sec2md`) |
 | `--verbose` | Show debug output |
 
 **Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`).
@@ -253,8 +263,8 @@ Ingestion runs sequentially. The embedding model is heavy, and small corpora don
 1. Hashes and archives the source file at `archive/<hash>/<hash>.<ext>` (dedup by content).
 2. Converts and chunks:
    - `.pdf`: pdfplumber by default — per-page text extraction; embedded images are extracted via page-render-crop. Pages whose extracted text is below `sparse_text_threshold` are treated as scanned: Tesseract OCR runs first (cheap), and only if confidence is below `ocr_min_confidence` does the page get routed to the VLM.
-   - `.pdf` with `--backend docling`: layout-aware, structural extraction with internal OCR for image-based PDFs.
-   - `.html`, `.htm`, `.md`: always Docling (requires the `[docling]` install).
+   - `.pdf` with `--pdf-converter docling`: layout-aware, structural extraction with internal OCR for image-based PDFs.
+   - `.html`, `.htm`, `.md`: Docling by default (requires the `[docling]` install). With `--html-converter sec2md`, each HTML file is sniffed for the iXBRL namespace — matches route to sec2md (preserves SEC tables + section headings); non-matches still go through Docling. `.md` always goes through Docling.
    - `.txt`: read as UTF-8, simple character chunker.
    - Image files: routed directly to the VLM. OCR transcription and scene description are stored as separate chunks (`content_type='image_ocr'` and `'image_description'`).
 3. Computes a `tiktoken` token count for the document.
@@ -334,7 +344,8 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 - **PDF text + image extraction:** [pdfplumber](https://github.com/jsvine/pdfplumber) (text per page, image bounding boxes), [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (page rendering for OCR + image crops).
 - **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
 - **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
-- **Opt-in alternative backend:** [Docling](https://docling-project.github.io/docling/) for layout-aware extraction with internal OCR. Activate via `--backend docling`. Required for HTML/MD ingest regardless of which backend is selected for PDFs.
+- **Opt-in alternative PDF converter:** [Docling](https://docling-project.github.io/docling/) for layout-aware extraction with internal OCR. Activate via `--pdf-converter docling`. Required for HTML/MD ingest regardless of which PDF converter is selected.
+- **Opt-in alternative HTML converter for SEC filings:** [sec2md](https://github.com/alphanome-ai/sec2md) (Apache 2.0) for iXBRL EDGAR filings. Activate via `--html-converter sec2md`; only routed to for files whose first 4 KB contain the iXBRL namespace marker, so a directory mixing 10-Ks with ordinary HTML still does the right thing per file.
 - **Token counting:** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of which LLM provider you're using. A rough estimate — accurate enough for the `read_document --force` gate, not authoritative across providers.
 
 ---
