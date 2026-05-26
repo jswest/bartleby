@@ -1,6 +1,6 @@
 # Bartleby, the Scrivener: A Tool of Wall Street
 
-An AI-powered tool for processing document corpora and researching them with an agentic assistant--or in otherwords, a scrivener who might prefer not to. Made with love by [John West](https://github.com/jswest), [Brian Whitton](https://github.com/noslouch), and [Rob Barry](https://github.com/robbarry).
+An AI-powered tool for processing document corpora and researching them with an agentic assistant--or in other words: Bartleby is a scrivener who might prefer not to. Made with love by [John West](https://github.com/jswest), [Brian Whitton](https://github.com/noslouch), and [Rob Barry](https://github.com/robbarry).
 
 ---
 
@@ -17,7 +17,7 @@ A SQLite database binds these two together. The CLI writes it, the skill romps t
 
 A couple things to be aware of:
 
-- Token costs can add up. For ingestion, summarization and image description are the drivers (you can also turn either off or use local models). For research, costs are governed by whatever model you're running the skill against.
+- Token costs can add up. For ingestion, summarization and image description are the drivers (you can also turn either off or use local models). For research, costs are governed by whatever model you're running the skill against. If your hardware supports it, you can run everything locally, though (see below).
 - This uses the excellent (but pre-v0) [`sqlite-vec`](https://github.com/asg017/sqlite-vec) plugin for SQLite. There might be some instability there.
 
 ---
@@ -329,20 +329,20 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 Bartleby is built to run end-to-end without an internet connection — the path for journalists working with sensitive material. Two pieces, both pointed at the same local Ollama:
 
 1. **Ingest** — Run `bartleby ready`, set `provider: ollama` (and `vision_provider: ollama` if you want image analysis), and pick a model your hardware can run.
-2. **Research** — Install [Goose](https://goose-docs.ai/) (Apache 2.0; originally Block's, now governed by the Linux Foundation's Agentic AI Foundation) and point it at the same local Ollama. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged.
+2. **Research** — Install [Goose](https://goose-docs.ai/) (Apache 2.0; originally Block's, now governed by the Linux Foundation's Agentic AI Foundation) and point it at the same local Ollama. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged. If you have Ollama, you can run [Pi](https://pi.dev), which is also excellent with `ollama launch pi --model <model-slug>`.
 
 No prompts, source text, or research notes leave the machine.
 
 ### Picking models for your hardware
 
-| Hardware | Ingest (LLM + VLM) | Research (Goose) |
-| --- | --- | --- |
-| 32 GB+ unified memory | `qwen3-vl:30b` — Mixture-of-Experts, ~19 GB pull, handles summarization and image analysis from one model. Wall-clock speed is closer to a dense ~8B than its 31B parameter count would suggest — roughly 6s/doc and 8s/image on recent Apple Silicon. | `gpt-oss:120b` |
-| ~16 GB unified memory | `gemma4:e2b` — much lighter (~7 GB), ~6s summarize, ~5s image. Can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow run rather than an error. | `gpt-oss:20b` |
+| Hardware | Ingest (summarization and tagging) | Ingest (VLM) | Research (Goose or Pi) |
+| --- | --- | --- | --- |
+| 64 GB+ unified memory | `gpt-oss:120b` or `qwen3.6:35b-mlx` | `qwen3-vl:30b` | `gpt-oss:120b` or `qwen3.6:35b-mlx` |
+| ~32 GB unified memory | `gpt-oss:20b` | `gemma4:e2b` (Can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow run rather than an error.) | `gpt-oss:20b` |
 
-**A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them. `gpt-oss:120b` is reasonably disciplined; with `gpt-oss:20b` you'll want to spot-check.
+**A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them. They can also format them incorrectly, which is super annoying. `gpt-oss:120b` is reasonably disciplined; with `gpt-oss:20b` you'll want to spot-check.
 
-If you can't fit either tier, the middle path is **local ingest + cloud research**: keep `provider: ollama` for the deterministic ingest pipeline, but point Goose (or Claude Code) at a frontier API for the agent layer. Source documents still never leave the machine; only the agent's queries do.
+If you can't fit either tier, the middle path is **local ingest + cloud research**: keep `provider: ollama` for the deterministic ingest pipeline, but point Goose or Pi (or Claude Code) at a frontier API for the agent layer. Source documents still never leave the machine; only the agent's queries do.
 
 ---
 
