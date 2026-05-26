@@ -4,9 +4,11 @@ Hash → archive → convert → embed → (optionally) summarize → write. All
 writes go through ``bartleby.db.chunks`` typed helpers; image rows additionally
 get a join entry in ``document_images``.
 
-PDF path is backend-aware (``pdfplumber`` default, ``docling`` opt-in). Image
-files (jpg/png/etc.) go straight through the VLM pipeline. txt/html/md keep
-the original ``convert_and_chunk`` path.
+PDF path is converter-aware (``pdfplumber`` default, ``docling`` opt-in).
+HTML path is converter-aware too: ``docling`` is the default; ``sec2md`` is
+opt-in for iXBRL EDGAR filings (sniffed per-file, non-iXBRL HTML falls back
+to docling). Image files (jpg/png/etc.) go straight through the VLM
+pipeline. txt/md keep the original ``convert_and_chunk`` path.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from bartleby.db.connection import open_db
 from bartleby.ingest import images as image_pipeline
 from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
+from bartleby.ingest import sec2md as sec2md_pipeline
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
     PDF_EXTENSIONS,
@@ -56,7 +59,8 @@ from bartleby.project import get_active_project, get_project_dir
 from bartleby.providers import Provider, get_provider
 
 
-DEFAULT_BACKEND = "pdfplumber"
+DEFAULT_PDF_CONVERTER = "pdfplumber"
+DEFAULT_HTML_CONVERTER = "docling"
 DEFAULT_SPARSE_TEXT_THRESHOLD = 100
 DEFAULT_OCR_MIN_CONFIDENCE = 30
 DEFAULT_VISION_MAX_DIMENSION = 1024
@@ -376,6 +380,41 @@ def _ingest_text_document(
     return document_id, result.full_text
 
 
+def _ingest_html_sec2md(
+    conn,
+    archived: Path,
+    *,
+    file_hash: str,
+    file_name: str,
+    on_stage: Callable[[str], None] | None = None,
+) -> tuple[int, str]:
+    """iXBRL EDGAR filing via sec2md."""
+    if on_stage is not None:
+        on_stage("extracting")
+    result = sec2md_pipeline.convert(archived)
+    document_id = _insert_document(
+        conn,
+        file_hash=file_hash,
+        file_name=file_name,
+        archive_path=archived,
+        page_count=result.page_count,
+        full_text=result.full_text,
+    )
+    if result.chunks:
+        if on_stage is not None:
+            on_stage("embedding")
+        rows = [
+            ChunkRow(text=c.text, section_heading=c.section_heading,
+                     content_type=c.content_type, page_number=c.page_number)
+            for c in result.chunks
+        ]
+        embeddings = embed_texts([r.text for r in rows])
+        insert_document_chunks(
+            conn, document_id, _build_chunk_inputs(rows, embeddings),
+        )
+    return document_id, result.full_text
+
+
 def _ingest_pdf_pdfplumber(
     conn,
     archived: Path,
@@ -620,12 +659,16 @@ def _run_image_routes(
 # -------------------- top-level orchestrator --------------------
 
 
+HTML_EXTENSIONS = {".html", ".htm"}
+
+
 def _process_one(
     conn,
     path: Path,
     archive_root: Path,
     *,
-    backend: str,
+    pdf_converter: str,
+    html_converter: str,
     sparse_text_threshold: int,
     ocr_min_confidence: int,
     vision_max_dimension: int,
@@ -671,7 +714,7 @@ def _process_one(
             on_stage=on_stage,
         )
     elif ext in PDF_EXTENSIONS:
-        if backend == "docling":
+        if pdf_converter == "docling":
             document_id, full_text = _ingest_pdf_docling(
                 conn, archived,
                 file_hash=file_hash, file_name=path.name,
@@ -695,6 +738,12 @@ def _process_one(
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
             )
+    elif ext in HTML_EXTENSIONS and html_converter == "sec2md" and sec2md_pipeline.is_ixbrl(archived):
+        document_id, full_text = _ingest_html_sec2md(
+            conn, archived,
+            file_hash=file_hash, file_name=path.name,
+            on_stage=on_stage,
+        )
     else:
         document_id, full_text = _ingest_text_document(
             conn, archived, file_hash=file_hash, file_name=path.name,
@@ -752,7 +801,8 @@ def main(
     files: str | Path,
     model: str | None = None,
     provider: str | None = None,
-    backend: str | None = None,
+    pdf_converter: str | None = None,
+    html_converter: str | None = None,
     verbose: bool = False,
 ) -> None:
     from bartleby.lib.quiet import setup_quiet_third_party
@@ -772,10 +822,21 @@ def main(
         config, provider_override=provider, model_override=model,
     )
     vision_provider, vision_model = _resolve_vision_provider(config)
-    backend_name = (backend or config.get("backend", DEFAULT_BACKEND)).lower()
-    if backend_name not in ("pdfplumber", "docling"):
+    pdf_converter_name = (
+        pdf_converter or config.get("pdf_converter", DEFAULT_PDF_CONVERTER)
+    ).lower()
+    if pdf_converter_name not in ("pdfplumber", "docling"):
         raise ValueError(
-            f"Unknown backend {backend_name!r}; expected 'pdfplumber' or 'docling'."
+            f"Unknown pdf_converter {pdf_converter_name!r}; "
+            f"expected 'pdfplumber' or 'docling'."
+        )
+    html_converter_name = (
+        html_converter or config.get("html_converter", DEFAULT_HTML_CONVERTER)
+    ).lower()
+    if html_converter_name not in ("docling", "sec2md"):
+        raise ValueError(
+            f"Unknown html_converter {html_converter_name!r}; "
+            f"expected 'docling' or 'sec2md'."
         )
 
     sources = _collect_files(Path(files))
@@ -841,7 +902,8 @@ def main(
                 try:
                     was_ingested = _process_one(
                         conn, src, archive_root,
-                        backend=backend_name,
+                        pdf_converter=pdf_converter_name,
+                        html_converter=html_converter_name,
                         sparse_text_threshold=sparse_text_threshold,
                         ocr_min_confidence=ocr_min_confidence,
                         vision_max_dimension=vision_max_dimension,
