@@ -49,7 +49,7 @@ def convert_and_chunk(path: Path) -> ConversionResult:
         result = docling_pipeline.convert(path)
         rows = [
             ChunkRow(text=c.text, section_heading=c.section_heading,
-                     content_type=c.content_type)
+                     content_type=c.content_type, page_number=c.page_number)
             for c in result.chunks
         ]
         return ConversionResult(
