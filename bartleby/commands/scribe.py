@@ -209,6 +209,46 @@ def _write_summary(conn, document_id: int, summary: SummaryResult) -> int:
     return summary_id
 
 
+def _build_summary_input(conn, document_id: int, fallback_text: str) -> str:
+    """Interleave document and image chunks in source order for the summarizer."""
+    cur = conn.cursor()
+    img_rows = cur.execute(
+        "SELECT di.page_number, c.chunk_index, c.text "
+        "FROM chunks c "
+        "JOIN document_images di ON di.image_id = c.source_id "
+        "WHERE c.source_kind = 'image' AND di.document_id = ?",
+        (document_id,),
+    ).fetchall()
+    if not img_rows:
+        return fallback_text
+    doc_rows = cur.execute(
+        "SELECT page_number, chunk_index, text FROM chunks "
+        "WHERE source_kind = 'document' AND source_id = ?",
+        (document_id,),
+    ).fetchall()
+    if not doc_rows:
+        return fallback_text
+
+    KIND_DOC, KIND_IMG = 0, 1
+    entries = (
+        [(p, KIND_DOC, ci, t) for p, ci, t in doc_rows]
+        + [(p, KIND_IMG, ci, t) for p, ci, t in img_rows]
+    )
+    entries.sort(key=lambda r: (r[0] if r[0] is not None else -1, r[1], r[2]))
+
+    parts: list[str] = []
+    for page_number, kind, _chunk_index, text in entries:
+        if kind == KIND_IMG:
+            label = (
+                f"[Image on page {page_number}]"
+                if page_number is not None else "[Image]"
+            )
+            parts.append(f"{label}\n{text}")
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def _maybe_summarize(
     conn,
     document_id: int,
@@ -224,8 +264,9 @@ def _maybe_summarize(
         return
     if on_stage is not None:
         on_stage("summarizing")
+    summary_input = _build_summary_input(conn, document_id, full_text)
     result = summarize(
-        full_text,
+        summary_input,
         provider=provider,
         model=model,
         temperature=temperature,

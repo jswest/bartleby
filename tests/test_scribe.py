@@ -38,9 +38,11 @@ class _StubProvider:
         self.title = title
         self.description = description
         self.calls = 0
+        self.last_document_text: str | None = None
 
     def summarize(self, document_text, *, model, temperature):
         self.calls += 1
+        self.last_document_text = document_text
         return DocumentSummary(
             title=self.title, description=self.description, text=self.text,
         )
@@ -681,6 +683,55 @@ def test_cleanup_partial_document_preserves_shared_image(isolated_project):
         ).fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_scribe_interleaves_image_chunks_into_summary_input(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """The summarizer sees image-chunk text alongside the document body."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic",
+            "model": "m",
+            "temperature": 0,
+            "max_summarize_tokens": 50_000,
+            "backend": "pdfplumber",
+            "sparse_text_threshold": 100,
+            "ocr_min_confidence": 30,
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    summary_stub = _StubProvider()
+    vision_stub = _StubVisionProvider(VlmDescription(
+        description="A green rectangle chart with no axis labels.", notes="",
+    ))
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    body = "Page one prose about the green rectangle figure. " * 6
+    _pdf_with_image(pdf, _png_bytes(), text=body)
+    scribe.main(project="test_proj", files=str(pdf))
+
+    captured = summary_stub.last_document_text
+    assert captured is not None
+    # Body text is still there.
+    assert "Page one prose" in captured
+    # Image-derived chunk text is interleaved in.
+    assert "green rectangle chart" in captured
+    # And it's labeled so the summarizer can tell where it came from.
+    assert "[Image on page 1]" in captured
 
 
 def test_scribe_truncation_note_in_summary(

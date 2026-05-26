@@ -11,7 +11,11 @@ For the on-disk shape, read the code: `bartleby/db/schema.py` for the schema, `b
 
 ## Backwards compatibility
 
-**We don't care about it.** No migration code, no schema upgraders, no compat shims, no feature-flagged old code paths. Bump `SCHEMA_VERSION`, change the code, tell users to re-ingest. The cost of preserving compat is invariably higher than the cost of re-ingest for a tool at this scale.
+**Default position: we don't care about it.** No migration code, no compat shims, no feature-flagged old code paths. Bump `SCHEMA_VERSION`, change the code, tell users to re-ingest. The cost of preserving compat is invariably higher than the cost of re-ingest for a tool at this scale.
+
+**The one allowed relaxation: additive-only schema upgrades.** A schema bump may ship with an entry in the upgrade chain (`bartleby/db/upgrades.py`) if — and only if — the change is purely additive: new tables, new indexes, new nullable columns. No row transformations, no column renames, no semantic shifts in existing data. Users run `bartleby project upgrade <name>` explicitly to apply the chain; the strict version check in `open_db` rejects mismatched DBs otherwise. Non-additive bumps still mean re-ingest (the chain simply has no entry for that step, and `project upgrade` refuses).
+
+The discipline: every new bump is either additive-with-an-upgrade-function or non-additive-with-re-ingest. The codebase never branches on schema version; it always pins to `SCHEMA_VERSION` exactly. The upgrade path is one-shot at the gate, not an ongoing tax.
 
 ## Load-bearing invariants
 
@@ -81,3 +85,5 @@ Settled judgment calls, kept here so we don't re-derive them.
 - **`search` triage signals**: each hit carries `rank` (1-indexed) and `normalized_score` (top hit = 1.0). Raw RRF `score` is tiny by design (~`0.015–0.033`) and only comparable within one query.
 - **`read_chunks --chunks <ids>`**: second mode for direct chunk lookup by id, mutually exclusive with `--document`.
 - **No running citation tracker**: an agent asked for `cite <chunk_id>` + `save_finding --use-tracked-citations`. Declined — `save_finding` already gives durable storage; SKILL.md nudges agents to write interim findings when context grows long.
+- **Additive-only schema upgrades allowed (relaxation of "no backwards compat")**: schema bumps may ship with an entry in `bartleby/db/upgrades.py` if the change is purely additive (new tables, new indexes, new nullable columns). Users invoke `bartleby project upgrade <name>` explicitly; the strict version check in `open_db` is unchanged and still rejects mismatched DBs without that step. Non-additive bumps still force re-ingest (no chain entry). The codebase never branches on schema version — `SCHEMA_VERSION` stays pinned. Rationale: existing users with multi-hour ingests get a graceful path for genuinely safe changes (e.g. `summaries.authored_date` from #15, `tags` table from #16) without us paying the ongoing migration-code tax.
+- **Summarizer input includes image chunks**: ingest-time summarization feeds the LLM document chunks *and* image chunks (the VLM's `image_description` or Tesseract's `image_ocr`) interleaved by `(page_number, chunk_index)` rather than the raw extracted body alone. Image-heavy docs (slide decks, figure-laden papers, OCR-fallback pages) get the VLM's already-paid-for analysis folded into the summary input. Implemented in `_build_summary_input` in `bartleby/commands/scribe.py`; standalone-image and text-only docs short-circuit to the original `full_text`. Decorative-image bloat is absorbed by the `max_summarize_tokens` cap (default 50k).
