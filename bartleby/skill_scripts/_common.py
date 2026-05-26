@@ -18,6 +18,9 @@ from bartleby.skill_runner import SkillError
 
 # Inline citation marker: standard markdown footnote syntax with a chunk_id.
 _CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
+# Bare ``[N]`` — looks like a citation, isn't one. Doesn't match ``[^N]`` because
+# the ``^`` sits between the bracket and the digits.
+_MALFORMED_MARKER = re.compile(r"\[(\d+)\]")
 
 
 def extract_citations(body: str) -> list[int]:
@@ -26,6 +29,25 @@ def extract_citations(body: str) -> list[int]:
     for m in _CITATION_MARKER.finditer(body):
         seen[int(m.group(1))] = None
     return list(seen)
+
+
+def reject_malformed_citations(body: str) -> None:
+    """Raise ``MALFORMED_CITATION`` if the body contains ``[N]`` (missing ``^``).
+
+    These markers render as bracketed prose but are silently ignored by the
+    citation extractor, so the claim ends up effectively uncited. Refuse
+    loudly so the agent fixes the typo before persisting.
+    """
+    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(body)]
+    if not bad:
+        return
+    deduped = list(dict.fromkeys(bad))
+    raise SkillError(
+        "MALFORMED_CITATION",
+        f"Found {len(bad)} citation-shaped markers missing the caret: "
+        f"{', '.join(deduped)}. Write citations as [^N], not [N].",
+        malformed_markers=deduped,
+    )
 
 
 def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:

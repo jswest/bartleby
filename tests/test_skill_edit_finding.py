@@ -227,6 +227,30 @@ def test_edit_finding_rejects_body_without_citations(
     assert out["code"] == "NO_INLINE_CITATIONS"
 
 
+def test_edit_finding_rejects_malformed_citation(
+    seeded_project, tmp_path, capsys
+):
+    """Bare ``[N]`` markers in a replacement body are refused before the
+    new body lands in the DB."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    new_body_file = tmp_path / "typo.md"
+    new_body_file.write_text(
+        "Real[^1] but typoed[3] and again[42].",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding-id", str(saved["finding_id"]),
+            "--body-file", str(new_body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MALFORMED_CITATION"
+    assert out["malformed_markers"] == ["[3]", "[42]"]
+
+
 def test_edit_finding_rejects_unknown_chunk_marker(
     seeded_project, tmp_path, capsys
 ):
