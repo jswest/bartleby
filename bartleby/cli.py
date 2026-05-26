@@ -14,7 +14,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="bartleby",
-        description="Bartleby, the Scrivener - A PDF processor that might refuse."
+        description="Bartleby, the Scrivener - A document analysis toolkit that might prefer not to."
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
