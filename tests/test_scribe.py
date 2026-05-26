@@ -33,10 +33,12 @@ class _StubProvider:
         text: str = "## Summary\n\nA stub summary.",
         title: str = "Stub Title",
         description: str = "Stub one-line description.",
+        authored_date: str | None = None,
     ):
         self.text = text
         self.title = title
         self.description = description
+        self.authored_date = authored_date
         self.calls = 0
         self.last_document_text: str | None = None
 
@@ -45,6 +47,7 @@ class _StubProvider:
         self.last_document_text = document_text
         return DocumentSummary(
             title=self.title, description=self.description, text=self.text,
+            authored_date=self.authored_date,
         )
 
 
@@ -732,6 +735,78 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
     assert "green rectangle chart" in captured
     # And it's labeled so the summarizer can tell where it came from.
     assert "[Image on page 1]" in captured
+
+
+def test_scribe_persists_authored_date_from_summary(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: _StubProvider(
+            text="summary body", authored_date="2024-09-12",
+        ),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "Dated document body.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries"
+        ).fetchone()
+        assert row[0] == "2024-09-12"
+    finally:
+        conn.close()
+
+
+def test_scribe_drops_malformed_authored_date(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: _StubProvider(
+            text="summary body", authored_date="Q3 2024",
+        ),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "Document body.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries"
+        ).fetchone()
+        assert row[0] is None
+    finally:
+        conn.close()
 
 
 def test_scribe_truncation_note_in_summary(

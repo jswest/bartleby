@@ -32,6 +32,11 @@ def main():
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
     pd.add_argument("-y", "--yes", action="store_true")
+    pup = project_sub.add_parser(
+        "upgrade",
+        help="Apply additive schema upgrades to bring a project up to date",
+    )
+    pup.add_argument("name", type=str)
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -155,6 +160,8 @@ def _project(args, parser):
         project_cmd.info(name=args.name)
     elif args.project_command == "delete":
         project_cmd.delete(name=args.name, yes=args.yes)
+    elif args.project_command == "upgrade":
+        project_cmd.upgrade(name=args.name)
 
 
 def _session(args, parser):

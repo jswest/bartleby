@@ -195,10 +195,10 @@ def _write_summary(conn, document_id: int, summary: SummaryResult) -> int:
 
     cur.execute(
         "INSERT INTO summaries "
-        "(document_id, title, description, text, model) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "(document_id, title, description, text, model, authored_date) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (document_id, summary.title, summary.description,
-         summary.text, summary.model),
+         summary.text, summary.model, summary.authored_date),
     )
     summary_id = conn.last_insert_rowid()
 

@@ -109,3 +109,38 @@ def test_list_projects_marks_active(projects_root):
     by_name = {p["name"]: p for p in listing}
     assert by_name["alpha"]["has_db"] and not by_name["alpha"]["is_active"]
     assert by_name["beta"]["has_db"] and by_name["beta"]["is_active"]
+
+
+def test_upgrade_v4_to_v5_adds_authored_date(projects_root):
+    """The additive v4→v5 step adds summaries.authored_date as a NULL column."""
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    # Simulate a v4 DB by dropping the new column and rewinding meta.
+    db_path = project_db_path("alpha")
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
+        cur.execute(
+            "UPDATE meta SET value = '4' WHERE key = 'schema_version'"
+        )
+    finally:
+        conn.close()
+
+    project_cmd.upgrade(name="alpha")
+
+    conn = open_db("alpha")
+    try:
+        cur = conn.cursor()
+        meta = dict(cur.execute("SELECT key, value FROM meta"))
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+        cols = [
+            row[1] for row in cur.execute("PRAGMA table_info(summaries)")
+        ]
+        assert "authored_date" in cols
+    finally:
+        conn.close()

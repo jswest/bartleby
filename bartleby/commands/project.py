@@ -1,13 +1,17 @@
-"""`bartleby project` — create / list / use / info / delete."""
+"""`bartleby project` — create / list / use / info / delete / upgrade."""
 
 from __future__ import annotations
 
 import sys
 
+import apsw
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
+from bartleby.db.connection import project_db_path
+from bartleby.db.schema import SCHEMA_VERSION
+from bartleby.db import upgrades as upgrades_mod
 from bartleby.project import (
     create_project,
     delete_project,
@@ -15,6 +19,7 @@ from bartleby.project import (
     get_project_info,
     list_projects,
     set_active_project,
+    validate_project_name,
 )
 
 
@@ -93,6 +98,58 @@ def info(*, name: str | None) -> None:
             f"{c['finding']} finding",
         )
     _console.print(table)
+
+
+def upgrade(*, name: str) -> None:
+    """Apply additive schema upgrades to bring a project DB up to ``SCHEMA_VERSION``.
+
+    Bypasses ``open_db``'s strict version check (which would refuse a stale
+    DB outright). Non-additive bumps raise — re-ingest is the only path.
+    """
+    validate_project_name(name)
+    db_path = project_db_path(name)
+    if not db_path.exists():
+        _console.print(f"[red]Project '{name}' has no database.[/red]")
+        sys.exit(1)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA foreign_keys = ON")
+        row = cur.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if row is None:
+            _console.print(
+                f"[red]Database has no schema_version. Recreate the project.[/red]"
+            )
+            sys.exit(1)
+        current = int(row[0])
+        if current == SCHEMA_VERSION:
+            _console.print(
+                f"Project '{name}' is already at schema v{SCHEMA_VERSION}. "
+                "Nothing to do."
+            )
+            return
+        if current > SCHEMA_VERSION:
+            _console.print(
+                f"[red]Database is at v{current}, newer than code's "
+                f"v{SCHEMA_VERSION}. Update the code, not the DB.[/red]"
+            )
+            sys.exit(1)
+
+        try:
+            upgrades_mod.upgrade(conn, current)
+        except RuntimeError as e:
+            _console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+    finally:
+        conn.close()
+
+    _console.print(
+        f"[bold green]Upgraded '{name}'[/bold green] "
+        f"from v{current} to v{SCHEMA_VERSION}."
+    )
 
 
 def delete(*, name: str, yes: bool) -> None:

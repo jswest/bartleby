@@ -9,14 +9,19 @@ from __future__ import annotations
 
 
 _SUMMARY_INSTRUCTIONS = (
-    "Read the document below and produce three things in one pass:\n"
+    "Read the document below and produce four things in one pass:\n"
     "  - title: a short human-readable title (no filename, no quotes, "
     "no trailing punctuation, 60 characters or fewer).\n"
     "  - description: a one-sentence hook (~20 words) that tells a reader "
     "what this document is and why they might care.\n"
     "  - text: a concise, self-contained summary covering the topic, key "
     "claims, and structural skeleton. Readable on its own, without the "
-    "original document."
+    "original document.\n"
+    "  - authored_date: the date the document itself was authored or "
+    "published, if stated in the document, in ISO 8601 YYYY-MM-DD form. "
+    "Not the date of events described in the document; not an inferred or "
+    "estimated date. If only the year or only the month is known, or if no "
+    "date is stated, return null."
 )
 
 

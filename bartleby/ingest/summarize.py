@@ -8,10 +8,34 @@ summary gets a deterministic truncation note appended in code.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 
 from bartleby.providers import DocumentSummary, Provider
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def normalize_authored_date(raw: str | None) -> str | None:
+    """Accept only strict YYYY-MM-DD with a real calendar date; else None.
+
+    Models occasionally return ``"Q3 2024"``, ``"2024"``, ``"2024-13-01"``,
+    or empty strings. We'd rather store NULL than something that looks
+    structured but isn't.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not _ISO_DATE_RE.match(raw):
+        return None
+    try:
+        date.fromisoformat(raw)
+    except ValueError:
+        return None
+    return raw
 
 
 @dataclass
@@ -21,6 +45,7 @@ class SummaryResult:
     text: str
     model: str
     truncated_from_tokens: int | None  # None when not truncated
+    authored_date: str | None  # ISO 8601, NULL when not stated or malformed
 
 
 @lru_cache(maxsize=1)
@@ -83,4 +108,5 @@ def summarize(
         text=text,
         model=model,
         truncated_from_tokens=total_tokens if truncated else None,
+        authored_date=normalize_authored_date(summary.authored_date),
     )

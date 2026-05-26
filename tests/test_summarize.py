@@ -6,7 +6,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from bartleby.ingest.summarize import count_tokens, summarize
+from bartleby.ingest.summarize import (
+    count_tokens, normalize_authored_date, summarize,
+)
 from bartleby.providers.base import DocumentSummary
 
 
@@ -19,6 +21,7 @@ class FakeProvider:
     return_title: str = "Doc Title"
     return_description: str = "A one-line hook describing the document."
     return_text: str = "this is a summary"
+    return_authored_date: str | None = None
 
     name = "fake"
 
@@ -30,6 +33,7 @@ class FakeProvider:
             title=self.return_title,
             description=self.return_description,
             text=self.return_text,
+            authored_date=self.return_authored_date,
         )
 
 
@@ -77,3 +81,25 @@ def test_summarize_rejects_empty_document():
             provider=FakeProvider(), model="m", temperature=0.0,
             max_summarize_tokens=100,
         )
+
+
+def test_summarize_passes_through_valid_authored_date():
+    p = FakeProvider(return_authored_date="2024-03-15")
+    result = summarize(
+        "doc", provider=p, model="m", temperature=0.0,
+        max_summarize_tokens=100,
+    )
+    assert result.authored_date == "2024-03-15"
+
+
+@pytest.mark.parametrize("raw", [
+    None, "", "Q3 2024", "2024", "2024-03", "March 15, 2024",
+    "2024/03/15", "  ", "2024-13-01", "2024-02-30",
+])
+def test_summarize_drops_malformed_authored_date(raw):
+    assert normalize_authored_date(raw) is None
+
+
+def test_summarize_accepts_iso_date():
+    assert normalize_authored_date("2024-03-15") == "2024-03-15"
+    assert normalize_authored_date(" 2024-03-15 ") == "2024-03-15"

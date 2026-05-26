@@ -77,6 +77,48 @@ def test_save_summary_replaces_existing(seeded_project, capsys):
         conn.close()
 
 
+def test_save_summary_accepts_iso_authored_date(seeded_project, capsys):
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_b"]),
+        "--title", "Beta",
+        "--description", "Dated.",
+        "--text", "body",
+        "--authored-date", "2024-09-12",
+    ])
+    capsys.readouterr()
+    conn = open_db(seeded_project["project"])
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries WHERE document_id = ?",
+            (seeded_project["doc_b"],),
+        ).fetchone()
+        assert row[0] == "2024-09-12"
+    finally:
+        conn.close()
+
+
+def test_save_summary_drops_malformed_authored_date(seeded_project, capsys):
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_b"]),
+        "--title", "Beta",
+        "--description", "Dated.",
+        "--text", "body",
+        "--authored-date", "Q3 2024",
+    ])
+    capsys.readouterr()
+    conn = open_db(seeded_project["project"])
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries WHERE document_id = ?",
+            (seeded_project["doc_b"],),
+        ).fetchone()
+        assert row[0] is None
+    finally:
+        conn.close()
+
+
 def test_save_summary_unknown_document(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_summary.main([

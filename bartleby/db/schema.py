@@ -5,7 +5,7 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 EMBEDDING_DIM = 768
 
@@ -34,6 +34,7 @@ CREATE TABLE summaries (
     description TEXT NOT NULL,
     text TEXT NOT NULL,
     model TEXT NOT NULL,
+    authored_date TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

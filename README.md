@@ -144,7 +144,7 @@ The core tables (see [`bartleby/db/schema.py`](./bartleby/db/schema.py) for the 
 | Table | What lives here |
 | --- | --- |
 | `documents` | One row per ingested file, deduped by content hash. |
-| `summaries` | One row per `document` (1:1) — title, description, and body. |
+| `summaries` | One row per `document` (1:1) — title, description, body, and (optional) `authored_date`. |
 | `images` | One row per *unique* image, deduped by byte hash. The same icon embedded in five docs is one row. |
 | `document_images` | Join: which images appear in which document, at which page. |
 | `findings` | Agent-authored research notes from `save_finding`. Each owned by a `session`. |
@@ -210,7 +210,10 @@ bartleby project list             # List all projects
 bartleby project use <name>       # Switch active project
 bartleby project info [name]      # Show project details
 bartleby project delete <name>    # Delete a project and all its data (-y to skip prompt)
+bartleby project upgrade <name>   # Apply additive schema upgrades to an existing DB
 ```
+
+The default policy is "no backwards compat" — schema bumps mean re-ingest. The one allowed relaxation is *additive-only* upgrades (new tables, indexes, nullable columns), which ship with an entry in [`bartleby/db/upgrades.py`](./bartleby/db/upgrades.py) so existing corpora can opt in via `bartleby project upgrade <name>` instead of re-ingesting. Non-additive bumps still force a re-ingest; the upgrade command refuses them.
 
 ### `bartleby scribe`
 
@@ -244,7 +247,7 @@ Ingestion runs sequentially. The embedding model is heavy, and small corpora don
    - Image files: routed directly to the VLM. OCR transcription and scene description are stored as separate chunks (`content_type='image_ocr'` and `'image_description'`).
 3. Computes a `tiktoken` token count for the document.
 4. Generates vector embeddings (BAAI/bge-base-en-v1.5, 768 dims).
-5. Generates a one-shot, whole-document summary per document (if summary depth is `one-shot`). The summarizer enforces structured JSON output across all providers (anthropic, openai, ollama) via Pydantic.
+5. Generates a one-shot, whole-document summary per document (if summary depth is `one-shot`). The summarizer enforces structured JSON output across all providers (anthropic, openai, ollama) via Pydantic. The same call also extracts an optional `authored_date` (ISO 8601) if the document states one; malformed or ambiguous dates store as NULL.
 6. For documents longer than `max_summarize_tokens`, the summarizer runs on the first N tokens only and a deterministic note is appended to the saved summary.
 7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec). Images dedupe at the byte level — the same icon embedded in five docs is one VLM call, not five.
 

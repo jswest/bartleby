@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """list_documents — enumerate documents in the corpus.
 
-Default output is *brief*: id, file_name, title, description, has_summary,
-image_count. Pass ``--verbose`` for the full row (adds page_count,
-token_count, chunk_count, created_at).
+Default output is *brief*: id, file_name, title, description, authored_date,
+has_summary, image_count. Pass ``--verbose`` for the full row (adds
+page_count, token_count, chunk_count, created_at).
 
 Output:
     {
@@ -13,10 +13,11 @@ Output:
       "hint": str|null         # set when more pages remain
     }
 
-``title`` and ``description`` come from the document's summary row and are
-null until one is written (either at ingest time or via ``save_summary``).
-``chunk_count`` counts text-track chunks (``source_kind='document'``); image
-chunks live under ``source_kind='image'`` and are surfaced via ``image_count``.
+``title``, ``description``, and ``authored_date`` come from the document's
+summary row and are null until one is written (either at ingest time or via
+``save_summary``). ``chunk_count`` counts text-track chunks
+(``source_kind='document'``); image chunks live under ``source_kind='image'``
+and are surfaced via ``image_count``.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ def work(*, conn, args, session_id) -> dict:
     rows = cur.execute(
         "SELECT d.document_id, d.file_name, d.page_count, d.token_count, d.created_at, "
         "       s.title AS summary_title, s.description AS summary_description, "
+        "       s.authored_date AS summary_authored_date, "
         "       (s.summary_id IS NOT NULL) AS has_summary, "
         "       COALESCE(cc.n, 0) AS chunk_count, "
         "       COALESCE(ic.n, 0) AS image_count "
@@ -64,13 +66,14 @@ def work(*, conn, args, session_id) -> dict:
     documents = []
     for (
         doc_id, file_name, page_count, token_count, created_at,
-        title, description, has_summary, chunk_count, image_count,
+        title, description, authored_date, has_summary, chunk_count, image_count,
     ) in rows:
         doc = {
             "id": doc_id,
             "file_name": file_name,
             "title": title,
             "description": description,
+            "authored_date": authored_date,
             "has_summary": bool(has_summary),
             "image_count": image_count,
         }

@@ -19,6 +19,7 @@ from bartleby.db.chunks import (
 )
 from bartleby.ingest.chunk import chunk_markdown_string
 from bartleby.ingest.embed import embed_texts
+from bartleby.ingest.summarize import normalize_authored_date
 from bartleby.skill_runner import SkillError, run
 
 
@@ -31,6 +32,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--text", type=str, required=True)
+    p.add_argument(
+        "--authored-date", type=str, default=None, dest="authored_date",
+        help="ISO 8601 YYYY-MM-DD. Silently stored as NULL if malformed.",
+    )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
@@ -66,9 +71,10 @@ def work(*, conn, args, session_id) -> dict:
 
     cur.execute(
         "INSERT INTO summaries "
-        "(document_id, title, description, text, model) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (args.document_id, args.title, args.description, args.text, _AUTHOR_MODEL),
+        "(document_id, title, description, text, model, authored_date) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (args.document_id, args.title, args.description, args.text,
+         _AUTHOR_MODEL, normalize_authored_date(args.authored_date)),
     )
     summary_id = conn.last_insert_rowid()
 
