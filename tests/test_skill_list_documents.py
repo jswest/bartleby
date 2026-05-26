@@ -26,6 +26,7 @@ def test_list_documents_happy_path(seeded_project, capsys):
     assert by_name["alpha.pdf"]["title"] == "Alpha"
     assert by_name["alpha.pdf"]["description"] == "Test summary of alpha document."
     assert by_name["alpha.pdf"]["authored_date"] is None
+    assert by_name["alpha.pdf"]["created_at"] is not None
     assert by_name["beta.txt"]["has_summary"] is False
     assert by_name["beta.txt"]["image_count"] == 0
     # Unsummarized doc reports title/description/authored_date as null.
