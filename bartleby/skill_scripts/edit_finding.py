@@ -36,6 +36,7 @@ from bartleby.skill_runner import SkillError, run
 from bartleby.skill_scripts._common import (
     extract_citations,
     rebuild_finding_chunks,
+    reject_malformed_citations,
     replace_finding_citations,
     resolve_citations,
     validate_chunk_ids_exist,
@@ -72,6 +73,7 @@ def _load_new_body(body_file: str, conn) -> tuple[str, list[int]]:
     if not body.strip():
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
+    reject_malformed_citations(body)
     citations = extract_citations(body)
     if not citations:
         raise SkillError(

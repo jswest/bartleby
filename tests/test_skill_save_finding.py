@@ -168,6 +168,27 @@ def test_save_finding_no_inline_citations(seeded_project, tmp_path, capsys):
     assert out["code"] == "NO_INLINE_CITATIONS"
 
 
+def test_save_finding_rejects_malformed_citation(seeded_project, tmp_path, capsys):
+    """Bare ``[N]`` markers (missing the ``^``) are rejected loudly so the
+    agent fixes the typo instead of shipping silent phantom citations."""
+    body_file = tmp_path / "f.md"
+    body_file.write_text(
+        "Real claim[^1] and typoed claim[3] in the same body.",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        save_finding.main([
+            "--project", seeded_project["project"],
+            "--title", "typo",
+            "--description", "x",
+            "--body-file", str(body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MALFORMED_CITATION"
+    assert out["malformed_markers"] == ["[3]"]
+
+
 def test_save_finding_unknown_inline_marker(seeded_project, tmp_path, capsys):
     body_file = tmp_path / "f.md"
     body_file.write_text("body[^999999].", encoding="utf-8")
