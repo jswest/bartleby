@@ -15,12 +15,12 @@ from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_finding.embed_texts",
+        "bartleby.skill_scripts._common.embed_texts",
         lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_finding.chunk_markdown_string",
+        "bartleby.skill_scripts._common.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 

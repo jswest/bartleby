@@ -3,7 +3,114 @@
 from __future__ import annotations
 
 import argparse
+import re
 from typing import Callable
+
+from bartleby.db.chunks import (
+    ChunkInput,
+    delete_chunks_for,
+    insert_finding_chunks,
+)
+from bartleby.ingest.chunk import chunk_markdown_string
+from bartleby.ingest.embed import embed_texts
+from bartleby.skill_runner import SkillError
+
+
+# Inline citation marker: standard markdown footnote syntax with a chunk_id.
+_CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
+
+
+def extract_citations(body: str) -> list[int]:
+    """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
+    seen: dict[int, None] = {}
+    for m in _CITATION_MARKER.finditer(body):
+        seen[int(m.group(1))] = None
+    return list(seen)
+
+
+def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
+    """Raise ``UNKNOWN_CITATIONS`` if any chunk_id is missing from ``chunks``."""
+    if not chunk_ids:
+        return
+    ph = ",".join("?" * len(chunk_ids))
+    cur = conn.cursor()
+    seen = {
+        row[0] for row in cur.execute(
+            f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({ph})", chunk_ids,
+        )
+    }
+    missing = sorted(set(chunk_ids) - seen)
+    if missing:
+        raise SkillError(
+            "UNKNOWN_CITATIONS",
+            f"Inline citations reference unknown chunk_ids: {missing}. "
+            "Each [^N] marker must be a real chunk_id in this project.",
+            unknown_chunk_ids=missing,
+        )
+
+
+def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
+    """Replace this finding's chunks with freshly chunked + embedded ones.
+
+    Deletes any existing finding chunks, chunks the body, embeds each chunk,
+    inserts them via the typed helper, and returns the new chunk_ids in
+    insertion order. Callers also need to manage ``finding_citations``.
+    """
+    delete_chunks_for(conn, "finding", finding_id)
+    rows = chunk_markdown_string(body)
+    if not rows:
+        return []
+    embeddings = embed_texts([r.text for r in rows])
+    chunk_inputs = [
+        ChunkInput(
+            text=row.text,
+            embedding=emb,
+            chunk_index=i,
+            section_heading=row.section_heading,
+            content_type=row.content_type,
+        )
+        for i, (row, emb) in enumerate(zip(rows, embeddings))
+    ]
+    return insert_finding_chunks(conn, finding_id, chunk_inputs)
+
+
+def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> None:
+    """Atomically swap ``finding_citations`` rows for this finding."""
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM finding_citations WHERE finding_id = ?", (finding_id,),
+    )
+    cur.executemany(
+        "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
+        [(finding_id, cid) for cid in chunk_ids],
+    )
+
+
+def resolve_citations(conn, chunk_ids: list[int]) -> list[dict]:
+    """Enrich each cited chunk_id with source_name/file_name/page_number.
+
+    The agent gets this back so it can render human-readable citations in its
+    reply alongside the structural chunk_id.
+    """
+    if not chunk_ids:
+        return []
+    locations = chunk_locations(conn, chunk_ids)
+    names = source_names(
+        conn, {(loc["source_kind"], loc["source_id"]) for loc in locations.values()},
+    )
+    out = []
+    for cid in chunk_ids:
+        loc = locations.get(cid)
+        if loc is None:    # citation chunk vanished between validation and here
+            continue
+        out.append({
+            "chunk_id": cid,
+            "source_kind": loc["source_kind"],
+            "source_name": names.get((loc["source_kind"], loc["source_id"]), ""),
+            "file_name": loc["file_name"],
+            "page_number": loc["page_number"],
+        })
+    return out
 
 
 def comma_int_list(label: str) -> Callable[[str], list[int]]:

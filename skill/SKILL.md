@@ -37,6 +37,8 @@ bartleby skill read_chunks --around-chunk 1629 --window 5   # target chunk plus 
 bartleby skill read_document --document 4 --summary
 bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
 bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md
+bartleby skill edit_finding --finding-id 12 --body-file /tmp/finding.md
+bartleby skill edit_finding --finding-id 12 --title "Updated title"
 bartleby skill read_tags
 bartleby skill add_tag --name ch --description "Central Hudson rate-case filings and exhibits"
 bartleby skill tag --all
@@ -66,6 +68,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. Optional `--authored-date YYYY-MM-DD` sets the document's stated authored/published date; anything that isn't a real calendar date is silently stored as null. |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
+| `edit_finding --finding-id <id> [--title <t>] [--description <d>] [--body-file <path>]` | Update an existing finding in place. At least one of `--title` / `--description` / `--body-file` is required. When the body changes, citations are re-extracted from the new text and the finding's chunks are rebuilt — same validation rules as `save_finding` (must contain `[^N]` markers, all referencing real chunk_ids). Use this when a prior finding's citations are malformed (`[chunks 1, 2]` instead of `[^1][^2]`) or its title/description needs to change. Don't create a fresh finding for a fix — edit the existing one so `search --findings` doesn't end up with both versions. |
 | `read_tags` | List the controlled vocabulary: `[{tag_id, name, description, doc_count}]`. **Always run this before any other tag operation.** Empty until someone adds tags. |
 | `add_tag --name <n> --description <d>` | Create a tag. Runs an embedding-similarity + normalized-name check against existing tags; on near-match returns `{status: "conflict", similar_to: {...}}` instead of creating, so you can surface the conflict to the human rather than fragmenting the vocabulary. **Humans drive tag creation** — only propose new tags when the human explicitly asks. |
 | `delete_tag --name <n>` | Drop a tag. Cascades to all `document_tags` assignments. |

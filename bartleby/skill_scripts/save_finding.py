@@ -30,18 +30,16 @@ single-source-of-truth contract.
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
-from bartleby.ingest.chunk import chunk_markdown_string
-from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError, run
-from bartleby.skill_scripts._common import chunk_locations, source_names
-
-
-# Inline citation marker: standard markdown footnote syntax with a chunk_id.
-_CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
+from bartleby.skill_scripts._common import (
+    extract_citations,
+    rebuild_finding_chunks,
+    replace_finding_citations,
+    resolve_citations,
+    validate_chunk_ids_exist,
+)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -53,12 +51,30 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _extract_citations(body: str) -> list[int]:
-    """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
-    seen: dict[int, None] = {}
-    for m in _CITATION_MARKER.finditer(body):
-        seen[int(m.group(1))] = None
-    return list(seen)
+def _read_body(body_file: str) -> str:
+    body_path = Path(body_file)
+    if not body_path.exists() or not body_path.is_file():
+        raise SkillError(
+            "BODY_FILE_NOT_FOUND",
+            f"--body-file path does not exist: {body_path}",
+        )
+    body = body_path.read_text(encoding="utf-8")
+    if not body.strip():
+        raise SkillError("EMPTY_BODY", "Finding body is empty.")
+    return body
+
+
+def _citations_from_body(conn, body: str) -> list[int]:
+    """Extract markers, require at least one, and verify each chunk exists."""
+    citations = extract_citations(body)
+    if not citations:
+        raise SkillError(
+            "NO_INLINE_CITATIONS",
+            "Finding body must include at least one inline citation marker "
+            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
+        )
+    validate_chunk_ids_exist(conn, citations)
+    return citations
 
 
 def work(*, conn, args, session_id) -> dict:
@@ -69,43 +85,10 @@ def work(*, conn, args, session_id) -> dict:
             "EMPTY_DESCRIPTION", "Finding description must be non-empty."
         )
 
-    body_path = Path(args.body_file)
-    if not body_path.exists() or not body_path.is_file():
-        raise SkillError(
-            "BODY_FILE_NOT_FOUND",
-            f"--body-file path does not exist: {body_path}",
-        )
-    body = body_path.read_text(encoding="utf-8")
-    if not body.strip():
-        raise SkillError("EMPTY_BODY", "Finding body is empty.")
-
-    citations = _extract_citations(body)
-    if not citations:
-        raise SkillError(
-            "NO_INLINE_CITATIONS",
-            "Finding body must include at least one inline citation marker "
-            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
-        )
+    body = _read_body(args.body_file)
+    citations = _citations_from_body(conn, body)
 
     cur = conn.cursor()
-
-    placeholders = ",".join("?" * len(citations))
-    seen = {
-        row[0]
-        for row in cur.execute(
-            f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({placeholders})",
-            citations,
-        )
-    }
-    missing = sorted(set(citations) - seen)
-    if missing:
-        raise SkillError(
-            "UNKNOWN_CITATIONS",
-            f"Inline citations reference unknown chunk_ids: {missing}. "
-            "Each [^N] marker must be a real chunk_id in this project.",
-            unknown_chunk_ids=missing,
-        )
-
     cur.execute(
         "INSERT INTO findings (session_id, title, description, body) "
         "VALUES (?, ?, ?, ?)",
@@ -113,26 +96,8 @@ def work(*, conn, args, session_id) -> dict:
     )
     finding_id = conn.last_insert_rowid()
 
-    rows = chunk_markdown_string(body)
-    chunk_ids: list[int] = []
-    if rows:
-        embeddings = embed_texts([r.text for r in rows])
-        chunk_inputs = [
-            ChunkInput(
-                text=row.text,
-                embedding=emb,
-                chunk_index=i,
-                section_heading=row.section_heading,
-                content_type=row.content_type,
-            )
-            for i, (row, emb) in enumerate(zip(rows, embeddings))
-        ]
-        chunk_ids = insert_finding_chunks(conn, finding_id, chunk_inputs)
-
-    cur.executemany(
-        "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
-        [(finding_id, cid) for cid in citations],
-    )
+    chunk_ids = rebuild_finding_chunks(conn, finding_id, body)
+    replace_finding_citations(conn, finding_id, citations)
 
     session_name = cur.execute(
         "SELECT name FROM sessions WHERE session_id = ?", (session_id,)
@@ -144,35 +109,8 @@ def work(*, conn, args, session_id) -> dict:
         "session_name": session_name,
         "body": body,
         "chunk_ids": chunk_ids,
-        "citations": _resolve_citations(conn, citations),
+        "citations": resolve_citations(conn, citations),
     }
-
-
-def _resolve_citations(conn, chunk_ids: list[int]) -> list[dict]:
-    """Enrich each cited chunk_id with source_name/file_name/page_number.
-
-    The agent gets this back so it can render human-readable citations in its
-    reply alongside the structural chunk_id.
-    """
-    if not chunk_ids:
-        return []
-    locations = chunk_locations(conn, chunk_ids)
-    names = source_names(
-        conn, {(loc["source_kind"], loc["source_id"]) for loc in locations.values()},
-    )
-    out = []
-    for cid in chunk_ids:
-        loc = locations.get(cid)
-        if loc is None:    # citation chunk vanished between validation and here
-            continue
-        out.append({
-            "chunk_id": cid,
-            "source_kind": loc["source_kind"],
-            "source_name": names.get((loc["source_kind"], loc["source_id"]), ""),
-            "file_name": loc["file_name"],
-            "page_number": loc["page_number"],
-        })
-    return out
 
 
 def main(argv: list[str] | None = None) -> None:
