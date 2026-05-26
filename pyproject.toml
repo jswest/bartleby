@@ -34,6 +34,9 @@ dependencies = [
 docling = [
     "docling>=2.0.0",
 ]
+sec2md = [
+    "sec2md==0.1.22",
+]
 
 [project.scripts]
 bartleby = "bartleby.cli:main"
@@ -43,6 +46,7 @@ dev = [
     "pytest>=8.0",
     "reportlab>=4.5.1",
     "bartleby[docling]",
+    "bartleby[sec2md]",
 ]
 
 [tool.pytest.ini_options]

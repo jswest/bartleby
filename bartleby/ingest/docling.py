@@ -45,7 +45,7 @@ def _require_docling():
             "  uv tool:    uv tool install --with docling --reinstall bartleby\n"
             "  uv venv:    uv pip install 'bartleby[docling]'\n"
             "  pip:        pip install 'bartleby[docling]'\n"
-            "PDFs can fall back to the pdfplumber backend in config; "
+            "PDFs can fall back to pdf_converter=pdfplumber in config; "
             "HTML/MD require docling."
         ) from e
 

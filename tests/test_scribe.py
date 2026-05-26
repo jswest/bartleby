@@ -223,7 +223,8 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "ocr_min_confidence": 30,
             "vision_provider": "stub",
@@ -274,7 +275,8 @@ def test_scribe_dedupes_identical_images_across_documents(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "vision_provider": "stub",
             "vision_model": "stub-vl:1",
@@ -391,7 +393,8 @@ def test_scribe_persists_page_number_for_pdfplumber_chunks(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "ocr_min_confidence": 30,
         },
@@ -431,7 +434,8 @@ def test_scribe_stage_callback_progresses_through_phases(
             "summary_depth": "one-shot",
             "provider": "anthropic", "model": "m",
             "temperature": 0.0, "max_summarize_tokens": 50_000,
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100, "ocr_min_confidence": 30,
             "vision_provider": "stub", "vision_model": "stub-vl:1",
             "vision_max_dimension": 1024,
@@ -457,7 +461,8 @@ def test_scribe_stage_callback_progresses_through_phases(
     try:
         scribe_module._process_one(
             conn, pdf, archive_root,
-            backend="pdfplumber",
+            pdf_converter="pdfplumber",
+            html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
             vision_max_dimension=1024,
             llm_provider=stub_summary, llm_model="m",
@@ -488,7 +493,8 @@ def test_scribe_image_progress_callback_fires_per_image(
         scribe_module, "load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "vision_provider": "stub", "vision_model": "stub-vl:1",
             "vision_max_dimension": 1024,
@@ -509,7 +515,8 @@ def test_scribe_image_progress_callback_fires_per_image(
     try:
         scribe_module._process_one(
             conn, pdf, archive_root,
-            backend="pdfplumber",
+            pdf_converter="pdfplumber",
+            html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
             vision_max_dimension=1024,
             llm_provider=None, llm_model=None,
@@ -700,7 +707,8 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
             "model": "m",
             "temperature": 0,
             "max_summarize_tokens": 50_000,
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "ocr_min_confidence": 30,
             "vision_provider": "stub",

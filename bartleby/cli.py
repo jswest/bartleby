@@ -50,9 +50,17 @@ def main():
         choices=["anthropic", "openai", "ollama"], default=None,
     )
     scribe_parser.add_argument(
-        "--backend", type=str,
+        "--pdf-converter", type=str,
         choices=["pdfplumber", "docling"], default=None,
-        help="PDF backend; overrides the value in ~/.bartleby/config.yaml.",
+        help="PDF converter; overrides pdf_converter in ~/.bartleby/config.yaml.",
+    )
+    scribe_parser.add_argument(
+        "--html-converter", type=str,
+        choices=["docling", "sec2md"], default=None,
+        help=(
+            "HTML converter; overrides html_converter in ~/.bartleby/config.yaml. "
+            "'sec2md' routes iXBRL EDGAR filings to sec2md and other HTML to docling."
+        ),
     )
     scribe_parser.add_argument("--verbose", action="store_true")
 
@@ -123,7 +131,8 @@ def _scribe(args):
         files=args.files,
         model=args.model,
         provider=args.provider,
-        backend=args.backend,
+        pdf_converter=args.pdf_converter,
+        html_converter=args.html_converter,
         verbose=args.verbose,
     )
 
