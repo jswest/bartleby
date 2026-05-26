@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
+
+_T = TypeVar("_T", bound=BaseModel)
 
 
 class DocumentSummary(BaseModel):
@@ -116,3 +118,18 @@ class Provider(Protocol):
         model: str,
         media_type: str = "image/jpeg",
     ) -> VlmDescription: ...
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[_T],
+        temperature: float = 0.0,
+    ) -> _T:
+        """Structured-output call for arbitrary Pydantic schemas.
+
+        Used wherever the codebase needs typed JSON out of an LLM that
+        isn't `summarize`/`analyze_image` — e.g. tag classification.
+        """
+        ...

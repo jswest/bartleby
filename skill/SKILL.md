@@ -22,11 +22,13 @@ That is the only invocation pattern. Do not try to run the scripts directly with
 Concrete examples:
 
 ```
-bartleby skill list_documents                            # brief: id, file_name, title, description, has_summary, image_count
+bartleby skill list_documents                            # brief: id, file_name, title, description, authored_date, has_summary, image_count
 bartleby skill list_documents --verbose                  # adds page_count, token_count, chunk_count, created_at
 bartleby skill list_documents --offset 200               # continue past the first page (default --limit 200)
+bartleby skill list_documents --tag ch --tag nyseg       # OR-filter to documents carrying either tag
 bartleby skill search "PM2.5 health disparities" --limit 10
 bartleby skill search "monitoring gaps" --in-documents 4,7
+bartleby skill search "uncollectibles" --tag ch --tag nyseg  # tag-filtered search (findings dropped)
 bartleby skill search "bar chart" --documents --images   # text + image chunks only
 bartleby skill read_chunks --document 4 --offset 0 --limit 20
 bartleby skill read_chunks --document 4 --offset 0 --limit 40 --preview 800
@@ -35,13 +37,18 @@ bartleby skill read_chunks --around-chunk 1629 --window 5   # target chunk plus 
 bartleby skill read_document --document 4 --summary
 bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
 bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md
+bartleby skill read_tags
+bartleby skill add_tag --name ch --description "Central Hudson rate-case filings and exhibits"
+bartleby skill tag --all
+bartleby skill tag --all --tag ch
+bartleby skill tag --document 42 --tag ch
 ```
 
 Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
 
 ## What you can and cannot run
 
-You have **exactly six tools**, listed below. Don't go exploring the `bartleby` CLI (`bartleby project`, `bartleby session`, `bartleby logs`, etc.) — those are for the user, not for you. In particular:
+You have a fixed set of tools, listed below. Don't go exploring the `bartleby` CLI (`bartleby project`, `bartleby session`, `bartleby logs`, etc.) — those are for the user, not for you. In particular:
 
 - **Do not** run `bartleby session start`. A session is auto-created on your first `bartleby skill ...` call; you don't need to manage it.
 - **Do not** run `bartleby project ...` to inspect the corpus. Call `bartleby skill list_documents` instead.
@@ -59,6 +66,12 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. Optional `--authored-date YYYY-MM-DD` sets the document's stated authored/published date; anything that isn't a real calendar date is silently stored as null. |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
+| `read_tags` | List the controlled vocabulary: `[{tag_id, name, description, doc_count}]`. **Always run this before any other tag operation.** Empty until someone adds tags. |
+| `add_tag --name <n> --description <d>` | Create a tag. Runs an embedding-similarity + normalized-name check against existing tags; on near-match returns `{status: "conflict", similar_to: {...}}` instead of creating, so you can surface the conflict to the human rather than fragmenting the vocabulary. **Humans drive tag creation** — only propose new tags when the human explicitly asks. |
+| `delete_tag --name <n>` | Drop a tag. Cascades to all `document_tags` assignments. |
+| `rename_tag --old <a> --new <b>` | Rename in place. Errors if `--new` already exists — use `merge_tags` to combine. |
+| `merge_tags --from <a> --to <b>` | Move all assignments from `--from` onto `--to`, then delete `--from`. Pre-existing duplicates collapse cleanly. |
+| `tag [--document <id> \| --all] [--tag <name>] [--force]` | Classify documents against the vocabulary using the user's configured summarizer model. `--all` without `--tag` runs full-vocab mode (one LLM call per doc picks from the entire vocabulary). `--tag <name>` switches to single-tag mode ("does this one tag apply?"). Without `--force`, full-vocab mode skips docs that already have any tag and single-tag mode skips docs already carrying that tag. Documents without a summary are skipped (the classifier reads the summary, not the body). **`tag --all` runs the summarizer once per document — confirm with the human first** (report the estimated count and the model that will be used). |
 
 ## Default research loop
 
@@ -96,6 +109,16 @@ Two `content_type` values distinguish image chunks, and each image produces exac
 - `image_description` — the VLM's scene description. Used when the image is dominated by visual content (a chart, a photo, a diagram). **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
 
 Image chunks have empty `context_before` / `context_after` arrays — each image produces a single chunk, so there are no neighbors.
+
+## Tag rules
+
+Tags are a controlled vocabulary the user curates to slice the corpus by category (utility, case, doc-type, jurisdiction). They unlock comparative queries — "what does CH say about uncollectibles vs. NYSEG?" — without enumerating document IDs.
+
+- **Always `read_tags` before any tag operation.** You need the existing vocabulary to avoid duplicating tags or missing the right one.
+- **Humans drive tag creation.** Only propose a new tag when the human explicitly asks. The dominant failure mode is over-fragmentation — five sibling tags that should have been one.
+- **Prefer broad tags.** If a tag would apply to fewer than ~5 documents, it probably shouldn't exist as its own tag.
+- **`tag --all` requires explicit human confirmation.** It runs the configured summarizer model once per document. Before invoking it, tell the human roughly how many documents will be classified and which model will be used (the model is configured in `bartleby ready`).
+- **`add_tag` may return `{status: "conflict", ...}`** when the proposed description is too similar to an existing tag. Surface the conflict to the human verbatim — don't create the tag anyway, don't pick a different name silently. The user decides: accept the existing tag, rename it, or merge.
 
 ## Memory rules
 

@@ -20,6 +20,12 @@ SCRIPTS = (
     "read_document",
     "save_summary",
     "save_finding",
+    "read_tags",
+    "add_tag",
+    "delete_tag",
+    "rename_tag",
+    "merge_tags",
+    "tag",
 )
 
 

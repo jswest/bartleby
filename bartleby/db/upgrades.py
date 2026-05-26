@@ -8,6 +8,11 @@ no entry; ``project upgrade`` refuses.
 
 The codebase never branches on schema version — ``SCHEMA_VERSION`` stays
 pinned. This chain is the one-shot gate.
+
+Note: the DDL here intentionally duplicates `db/schema.py` — fresh DBs run
+the latter, existing DBs walk the former. The regression gate that keeps
+them in sync is `tests/test_project.py::test_upgrade_chain_walks_*`, which
+strips and re-applies the chain end-to-end.
 """
 
 from __future__ import annotations
@@ -26,8 +31,32 @@ def _upgrade_v4_to_v5(conn: apsw.Connection) -> None:
     )
 
 
+def _upgrade_v5_to_v6(conn: apsw.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE tags ("
+        "  tag_id INTEGER PRIMARY KEY, "
+        "  name TEXT NOT NULL UNIQUE, "
+        "  description TEXT NOT NULL, "
+        "  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    )
+    cur.execute(
+        "CREATE TABLE document_tags ("
+        "  document_id INTEGER NOT NULL "
+        "    REFERENCES documents(document_id) ON DELETE CASCADE, "
+        "  tag_id INTEGER NOT NULL "
+        "    REFERENCES tags(tag_id) ON DELETE CASCADE, "
+        "  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "  PRIMARY KEY (document_id, tag_id)"
+        ")"
+    )
+    cur.execute("CREATE INDEX idx_document_tags_tag ON document_tags(tag_id)")
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
+    5: _upgrade_v5_to_v6,
 }
 
 

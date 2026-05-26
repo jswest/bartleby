@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import ollama
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
@@ -35,6 +35,22 @@ class OllamaProvider:
             options={"temperature": temperature},
         )
         return _validate(response.message.content, DocumentSummary)
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[BaseModel],
+        temperature: float = 0.0,
+    ) -> BaseModel:
+        response = self._client.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            format=schema.model_json_schema(),
+            options={"temperature": temperature},
+        )
+        return _validate(response.message.content, schema)
 
     def analyze_image(
         self,

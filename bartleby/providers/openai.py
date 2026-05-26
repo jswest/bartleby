@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 
 from openai import OpenAI
+from pydantic import BaseModel
 
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
@@ -33,6 +34,22 @@ class OpenAIProvider:
             response_format=DocumentSummary,
         )
         return _require_parsed(response, DocumentSummary)
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[BaseModel],
+        temperature: float = 0.0,
+    ) -> BaseModel:
+        response = self._client.chat.completions.parse(
+            model=model,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+            response_format=schema,
+        )
+        return _require_parsed(response, schema)
 
     def analyze_image(
         self,

@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""tag — classify documents against the controlled vocabulary.
+
+Two modes, switched by ``--tag <name>``:
+  - Full-vocabulary (no ``--tag``): one LLM call per document picks from the
+    entire vocabulary. Best for initial sweeps.
+  - Single-tag (``--tag <name>``): one LLM call per document answers "does
+    this single tag apply?" Best for adding a new tag to an established
+    corpus.
+
+Scope:
+  - ``--document <id>``: one document.
+  - ``--all``: every document with a summary.
+  - ``--force``: re-classify even when relevant assignments already exist.
+
+Default skipping (no ``--force``):
+  - Full-vocab: skip documents with *any* existing tag assignment.
+  - Single-tag: skip documents already assigned that specific tag.
+
+Documents without a summary are reported as ``no_summary`` and skipped —
+classification reads the summary, not the body.
+
+Output:
+    {
+      "mode": "full-vocab" | "single-tag",
+      "tag": str|null,
+      "model": str,
+      "classified": [
+        {"document_id": int, "file_name": str,
+         "assigned_tag_ids": [int, ...],     # full-vocab mode
+         "applies": bool                     # single-tag mode
+        }
+      ],
+      "skipped": [
+        {"document_id": int, "file_name": str, "reason": "already_tagged"|"no_summary"}
+      ]
+    }
+"""
+
+from __future__ import annotations
+
+import argparse
+
+from bartleby.skill_runner import SkillError, run
+from bartleby.skill_scripts import _tags as tags_helpers
+from bartleby.skill_scripts._tags import (
+    assign,
+    classify_full_vocabulary,
+    classify_single_tag,
+    fetch_vocabulary,
+    get_tag_by_name,
+    summary_for,
+    unassign,
+)
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="tag")
+    scope = p.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--document", type=int, default=None, dest="document_id")
+    scope.add_argument("--all", action="store_true", dest="all_documents")
+    p.add_argument(
+        "--tag", type=str, default=None,
+        help="If set, classify against only this single tag.",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help="Re-classify even when relevant assignments already exist.",
+    )
+    p.add_argument("--project", type=str, default=None)
+    return p.parse_args(argv)
+
+
+def _target_documents(conn, args) -> list[tuple[int, str]]:
+    cur = conn.cursor()
+    if args.document_id is not None:
+        row = cur.execute(
+            "SELECT document_id, file_name FROM documents WHERE document_id = ?",
+            (args.document_id,),
+        ).fetchone()
+        if row is None:
+            raise SkillError(
+                "DOCUMENT_NOT_FOUND",
+                f"No document with id {args.document_id}.",
+            )
+        return [row]
+    return cur.execute(
+        "SELECT document_id, file_name FROM documents ORDER BY document_id"
+    ).fetchall()
+
+
+def _already_tagged(conn, document_id: int, tag_id: int | None) -> bool:
+    """True if the document carries ``tag_id`` (single-tag mode) or any
+    tag (full-vocab mode). Drives the default-skipping policy."""
+    cur = conn.cursor()
+    if tag_id is None:
+        return cur.execute(
+            "SELECT 1 FROM document_tags WHERE document_id = ? LIMIT 1",
+            (document_id,),
+        ).fetchone() is not None
+    return cur.execute(
+        "SELECT 1 FROM document_tags WHERE document_id = ? AND tag_id = ?",
+        (document_id, tag_id),
+    ).fetchone() is not None
+
+
+def work(*, conn, args, session_id) -> dict:
+    provider, model, temperature = tags_helpers.resolve_classifier()
+
+    single_tag = None
+    if args.tag is not None:
+        single_tag = get_tag_by_name(conn, args.tag)
+        if single_tag is None:
+            raise SkillError("TAG_NOT_FOUND", f"No tag named {args.tag!r}.")
+
+    vocabulary = fetch_vocabulary(conn)
+    if not vocabulary:
+        raise SkillError(
+            "EMPTY_VOCABULARY",
+            "No tags defined yet. Create one with `add_tag` first.",
+        )
+
+    classified: list[dict] = []
+    skipped: list[dict] = []
+
+    for document_id, file_name in _target_documents(conn, args):
+        summary = summary_for(conn, document_id)
+        if summary is None:
+            skipped.append({
+                "document_id": document_id, "file_name": file_name,
+                "reason": "no_summary",
+            })
+            continue
+
+        if not args.force and _already_tagged(
+            conn, document_id, single_tag.tag_id if single_tag else None,
+        ):
+            skipped.append({
+                "document_id": document_id, "file_name": file_name,
+                "reason": "already_tagged",
+            })
+            continue
+
+        if single_tag is not None:
+            applies = classify_single_tag(
+                provider, model, temperature,
+                summary_text=summary, tag=single_tag,
+            )
+            if applies:
+                assign(conn, document_id, [single_tag.tag_id])
+            elif args.force:
+                unassign(conn, document_id, single_tag.tag_id)
+            classified.append({
+                "document_id": document_id, "file_name": file_name,
+                "applies": applies,
+            })
+        else:
+            tag_ids = classify_full_vocabulary(
+                provider, model, temperature,
+                summary_text=summary, vocabulary=vocabulary,
+            )
+            assign(conn, document_id, tag_ids)
+            classified.append({
+                "document_id": document_id, "file_name": file_name,
+                "assigned_tag_ids": tag_ids,
+            })
+
+    return {
+        "mode": "single-tag" if single_tag is not None else "full-vocab",
+        "tag": single_tag.name if single_tag is not None else None,
+        "model": model,
+        "classified": classified,
+        "skipped": skipped,
+    }
+
+
+def main(argv: list[str] | None = None) -> None:
+    run(tool_name="tag", parse_args=parse_args, work=work, argv=argv)
+
+
+if __name__ == "__main__":
+    main()

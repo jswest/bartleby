@@ -37,12 +37,38 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Include page_count, token_count, chunk_count, created_at.",
     )
+    p.add_argument(
+        "--tag",
+        action="append", default=None, dest="tags",
+        help=(
+            "Filter to documents carrying this tag. Repeat for OR semantics "
+            "(e.g. --tag ch --tag nyseg). Unknown tag names raise."
+        ),
+    )
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
+    from bartleby.skill_scripts._tags import resolve_tag_names
+
     cur = conn.cursor()
-    total = cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    tag_ids = resolve_tag_names(conn, args.tags) if args.tags else None
+
+    where_clause, where_params = "", []
+    if tag_ids is not None:
+        tag_ph = ",".join("?" * len(tag_ids))
+        where_clause = (
+            f"WHERE d.document_id IN ("
+            f"  SELECT DISTINCT document_id FROM document_tags "
+            f"  WHERE tag_id IN ({tag_ph})"
+            f") "
+        )
+        where_params = list(tag_ids)
+
+    total = cur.execute(
+        f"SELECT COUNT(*) FROM documents d {where_clause}",
+        where_params,
+    ).fetchone()[0]
 
     rows = cur.execute(
         "SELECT d.document_id, d.file_name, d.page_count, d.token_count, d.created_at, "
@@ -59,8 +85,9 @@ def work(*, conn, args, session_id) -> dict:
         "LEFT JOIN (SELECT document_id, COUNT(DISTINCT image_id) AS n "
         "           FROM document_images GROUP BY document_id) ic "
         "  ON ic.document_id = d.document_id "
+        f"{where_clause}"
         "ORDER BY d.document_id LIMIT ? OFFSET ?",
-        (args.limit, args.offset),
+        [*where_params, args.limit, args.offset],
     )
 
     documents = []
