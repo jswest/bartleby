@@ -106,6 +106,8 @@ bartleby ready
 
 The setup wizard asks for LLM provider/model, API keys, summary depth, temperature, and the max token threshold for reading whole documents. Settings save to `~/.bartleby/config.yaml`.
 
+![bartleby ready: the interactive setup wizard walking through provider, model, and summarization settings.](./docs/demo.gif)
+
 ### 2. Create a project
 
 ```
