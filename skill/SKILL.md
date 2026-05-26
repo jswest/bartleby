@@ -102,6 +102,17 @@ Each result carries three signals you can use to triage:
 
 Default search returns no context — the hit text alone. Reach for `--add-context` only when chunks are short enough that the hit isn't self-explanatory; each step multiplies output size across *every* hit by roughly (1 + 2N). Once you have a `chunk_id` in hand and want context around just that one, `read_chunks --around-chunk <id> --window N` is far cheaper. If you discover the passage you actually want is in `context_before` or `context_after`, fetch it directly with `read_chunks --chunks <chunk_id>` using the neighbor's `chunk_id`, verify the text, and then cite that `chunk_id`. (Don't re-search and hope for the right hit — the neighbor's id is already in your hand.) Citations must represent chunks you've read and verified, whether they came in as a hit or as a context entry.
 
+## Verifying citations before you save
+
+`save_finding` checks that every `[^N]` chunk_id *exists* in the project. It does not — and cannot — verify that the chunk *supports the claim* you're attaching it to. That part is on you.
+
+Two specific failure modes to avoid:
+
+- **Snippet truncation.** `search` returns excerpts, not whole chunks. They can end mid-sentence; sometimes mid-word. Paraphrasing or quoting verbatim from a truncated snippet is how citations end up misattributing claims to chunks that don't say what you wrote. If the snippet ends with `…`, or breaks off mid-thought, fetch the chunk before citing it.
+- **Citing chunks you haven't read in full.** A chunk_id you saw in a search result is a *candidate*. Before citing it in a finding — especially for claims that carry weight or anything quoted verbatim — run `read_chunks --chunks <id>` and confirm the chunk says what you're attributing to it.
+
+A useful heuristic: if a `chunk_id` appears in a finding you're about to save and it never showed up earlier in your conversation as something you read in full, you're guessing. Stop and fetch.
+
 ## Image chunks
 
 Some corpora include image-derived chunks (figures, photos, scanned pages, standalone image files). Search returns them alongside text chunks. They carry an extra `image_id` and `image_file_path` so you can validate against the source image directly if needed. `source_name` reads `image in <filename>, p.<N>` when the image is embedded in a PDF.
