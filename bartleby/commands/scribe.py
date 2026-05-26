@@ -493,7 +493,7 @@ def _ingest_pdf_docling(
             on_stage("embedding")
         rows = [
             ChunkRow(text=c.text, section_heading=c.section_heading,
-                     content_type=c.content_type)
+                     content_type=c.content_type, page_number=c.page_number)
             for c in docling_result.chunks
         ]
         embeddings = embed_texts([r.text for r in rows])

@@ -26,6 +26,7 @@ class DoclingChunk:
     text: str
     section_heading: str | None
     content_type: str | None
+    page_number: int | None = None
 
 
 @dataclass
@@ -103,6 +104,25 @@ def _content_type(chunk) -> str | None:
     return str(label) if label is not None else None
 
 
+def _first_page(chunk) -> int | None:
+    """First page a chunk spans, via Docling's per-item provenance.
+
+    Docling's HybridChunker groups doc items by token budget and can straddle
+    page boundaries. We store the chunk's starting page — the schema is one
+    integer per chunk and the web view's #page anchor only takes one page
+    anyway. Markdown and HTML inputs have no provenance and return None.
+    """
+    meta = getattr(chunk, "meta", None)
+    if meta is None:
+        return None
+    pages = [
+        prov.page_no
+        for item in (getattr(meta, "doc_items", None) or [])
+        for prov in (getattr(item, "prov", None) or [])
+    ]
+    return min(pages) if pages else None
+
+
 def _iter_chunks(chunker, doc) -> Iterable[DoclingChunk]:
     for raw in chunker.chunk(dl_doc=doc):
         contextualized = chunker.contextualize(chunk=raw)
@@ -112,6 +132,7 @@ def _iter_chunks(chunker, doc) -> Iterable[DoclingChunk]:
             text=contextualized,
             section_heading=_section_heading(raw),
             content_type=_content_type(raw),
+            page_number=_first_page(raw),
         )
 
 

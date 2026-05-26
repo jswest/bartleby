@@ -43,6 +43,7 @@ def _attach(conn: apsw.Connection) -> None:
     cur.execute("PRAGMA foreign_keys = ON")
     cur.execute("PRAGMA journal_mode = WAL")
     cur.execute("PRAGMA synchronous = NORMAL")
+    cur.execute("PRAGMA busy_timeout = 5000")
 
 
 def open_db(project_name: str | None = None) -> apsw.Connection:

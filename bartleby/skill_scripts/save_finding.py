@@ -36,6 +36,7 @@ from bartleby.skill_runner import SkillError, run
 from bartleby.skill_scripts._common import (
     extract_citations,
     rebuild_finding_chunks,
+    reject_malformed_citations,
     replace_finding_citations,
     resolve_citations,
     validate_chunk_ids_exist,
@@ -66,6 +67,7 @@ def _read_body(body_file: str) -> str:
 
 def _citations_from_body(conn, body: str) -> list[int]:
     """Extract markers, require at least one, and verify each chunk exists."""
+    reject_malformed_citations(body)
     citations = extract_citations(body)
     if not citations:
         raise SkillError(
