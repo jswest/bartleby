@@ -126,13 +126,14 @@ p.meta {
   margin-top: 0.35rem;
 }
 .markdown-body a {
-  color: var(--color-off);
+  color: var(--color-token-dark);
+  font-weight: 700;
+  text-decoration: none;
+}
+.markdown-body a:hover {
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
-}
-.markdown-body a:hover {
-  color: #222;
 }
 .markdown-body blockquote {
   padding: 0.25rem 1rem;

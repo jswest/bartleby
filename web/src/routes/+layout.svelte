@@ -1,7 +1,15 @@
 <script>
   import "../app.css";
   import { page } from "$app/stores";
+  import { marked } from "marked";
   export let data;
+
+  marked.use({
+    hooks: {
+      postprocess: (html) =>
+        html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '),
+    },
+  });
 
   // A nav link is "active" if the current path matches exactly OR is a child
   // of the link's target (so /findings/15 lights up the Findings nav too).
