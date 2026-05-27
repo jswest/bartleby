@@ -162,6 +162,7 @@ Rules:
 - **Only `[^N]` markers count.** Forms like `[chunks 1677, 1678]` or `[chunk 1677]` are silently dropped at save time — only some of your citations will land in the DB. Write `[^1677][^1678]` from the start; don't write the prose form and plan to clean up later.
 - The chunk_id must be one returned by `search` or `read_chunks` in this session. Invented IDs fail loudly.
 - **Never cite a finding chunk** (`source_kind == "finding"`). Findings are derivative; cite the underlying document chunk instead.
+- **Web sources use standard markdown links.** If a claim rests on data you pulled from a website (not a corpus chunk), attribute it inline as `[anchor text](https://url)`. Markdown links don't satisfy the `[^N]` requirement on their own — every finding still needs at least one chunk citation — but they're the right way to credit external web sources alongside chunk citations.
 
 When the user asks for a structured deliverable (table, comparison, timeline), produce it directly — with `[^N]` markers in each cell as needed.
 
