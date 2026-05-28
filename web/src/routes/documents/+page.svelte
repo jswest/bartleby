@@ -14,7 +14,7 @@
 {:else}
   <ul class="entity-list">
     {#each data.documents as d}
-      <li>
+      <li class="entity">
         <h2>
           <a href="/documents/{d.document_id}">
             {d.title ?? stripExt(d.file_name)}

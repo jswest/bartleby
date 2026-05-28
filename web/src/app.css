@@ -240,6 +240,12 @@ p.meta {
 .entity-list .desc {
   margin: 0.25rem 0 0;
 }
+li.entity {
+  background-color: var(--color-off-light);
+  border: 1px solid var(--color-off);
+  box-sizing: border-box;
+  padding: 1rem;
+}
 .empty {
   color: var(--color-off);
   font-style: italic;
