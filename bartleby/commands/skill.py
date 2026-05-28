@@ -27,6 +27,8 @@ SCRIPTS = (
     "rename_tag",
     "merge_tags",
     "tag",
+    "assign_tag",
+    "unassign_tag",
 )
 
 

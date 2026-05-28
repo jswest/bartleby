@@ -44,6 +44,8 @@ bartleby skill add_tag --name ch --description "Central Hudson rate-case filings
 bartleby skill tag --all
 bartleby skill tag --all --tag ch
 bartleby skill tag --document 42 --tag ch
+bartleby skill assign_tag --document 9 --tag bad_ocr     # attach a tag you determined out-of-band (no LLM)
+bartleby skill unassign_tag --document 9 --tag bad_ocr   # detach one assignment (does not delete the tag)
 ```
 
 Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
@@ -75,6 +77,8 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `rename_tag --old <a> --new <b>` | Rename in place. Errors if `--new` already exists — use `merge_tags` to combine. |
 | `merge_tags --from <a> --to <b>` | Move all assignments from `--from` onto `--to`, then delete `--from`. Pre-existing duplicates collapse cleanly. |
 | `tag [--document <id> \| --all] [--tag <name>] [--force]` | Classify documents against the vocabulary using the user's configured summarizer model. `--all` without `--tag` runs full-vocab mode (one LLM call per doc picks from the entire vocabulary). `--tag <name>` switches to single-tag mode ("does this one tag apply?"). Without `--force`, full-vocab mode skips docs that already have any tag and single-tag mode skips docs already carrying that tag. Documents without a summary are skipped (the classifier reads the summary, not the body). **`tag --all` runs the summarizer once per document — confirm with the human first** (report the estimated count and the model that will be used). |
+| `assign_tag --document <id> --tag <name>` | Attach one existing tag to one document **directly, with no LLM** — the manual counterpart to `tag`. Use it when you determined membership out-of-band (a body scan, a deterministic rule, a human call), which is the only way to apply *body-level* tags the summary-based classifier can't see (OCR quality, language, "contains tables"). Idempotent — re-assigning the same pair is a no-op. Errors `TAG_NOT_FOUND` / `DOCUMENT_NOT_FOUND`. |
+| `unassign_tag --document <id> --tag <name>` | Remove one `(document, tag)` assignment. Unlike `delete_tag` (which drops the tag and cascades *every* document's assignment), this detaches just this one document. No-op when the assignment isn't present. Use it to fix a single mistaken or stale assignment. |
 
 ## Default research loop
 
@@ -133,6 +137,7 @@ Tags are a controlled vocabulary the user curates to slice the corpus by categor
 - **Prefer broad tags.** If a tag would apply to fewer than ~5 documents, it probably shouldn't exist as its own tag.
 - **`tag --all` requires explicit human confirmation.** It runs the configured summarizer model once per document. Before invoking it, tell the human roughly how many documents will be classified and which model will be used (the model is configured in `bartleby ready`).
 - **`add_tag` may return `{status: "conflict", ...}`** when the proposed description is too similar to an existing tag. Surface the conflict to the human verbatim — don't create the tag anyway, don't pick a different name silently. The user decides: accept the existing tag, rename it, or merge.
+- **Two ways to assign a tag.** `tag` lets the summarizer model decide (good for *topical* categories the summary describes). `assign_tag` / `unassign_tag` record a decision *you* made, with no LLM — the only path for *body-level* categories (OCR quality, language, "contains tables") that the summary doesn't capture. Reach for `assign_tag` when you've already established membership yourself; reach for `tag` when you want the model to judge.
 
 ## Memory rules
 
