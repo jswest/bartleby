@@ -16,6 +16,7 @@ import sys
 SCRIPTS = (
     "list_documents",
     "search",
+    "scan",
     "read_chunks",
     "read_document",
     "save_summary",
