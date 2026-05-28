@@ -34,6 +34,9 @@ dependencies = [
 docling = [
     "docling>=2.0.0",
 ]
+wsjpt = [
+    "wsjpt @ git+ssh://git@github.dowjones.net/data/wsjpt.git",
+]
 
 [project.scripts]
 bartleby = "bartleby.cli:main"

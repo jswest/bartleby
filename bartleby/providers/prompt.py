@@ -8,7 +8,7 @@ description, and summary.
 from __future__ import annotations
 
 
-_SUMMARY_INSTRUCTIONS = (
+SUMMARY_INSTRUCTIONS = (
     "Read the document below and produce three things in one pass:\n"
     "  - title: a short human-readable title (no filename, no quotes, "
     "no trailing punctuation, 60 characters or fewer).\n"
@@ -24,7 +24,7 @@ def build_summary_messages(document_text: str) -> list[dict]:
     return [
         {
             "role": "user",
-            "content": f"{_SUMMARY_INSTRUCTIONS}\n\nDOCUMENT:\n{document_text}",
+            "content": f"{SUMMARY_INSTRUCTIONS}\n\nDOCUMENT:\n{document_text}",
         }
     ]
 

@@ -6,7 +6,7 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
 
-ALLOWED_PROVIDERS = ["anthropic", "openai", "ollama"]
+ALLOWED_PROVIDERS = ["anthropic", "openai", "ollama", "wsjpt"]
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
 ALLOWED_BACKENDS = ["pdfplumber", "docling"]
 
@@ -14,12 +14,14 @@ PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-5-mini",
     "ollama": "qwen3-vl:30b",
+    "wsjpt": "fast",
 }
 
 VISION_PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-5-mini",
     "ollama": "qwen3-vl:30b",
+    "wsjpt": "fast",
 }
 
 DEFAULT_SUMMARY_DEPTH = "one-shot"
@@ -141,7 +143,7 @@ def main():
         config["provider"] = provider
         config["model"] = _prompt_model(provider, existing)
 
-        if provider in ("anthropic", "openai"):
+        if provider in ("anthropic", "openai", "wsjpt"):
             key = _prompt_api_key(provider, existing)
             field = f"{provider}_api_key"
             if key:
@@ -170,7 +172,7 @@ def main():
         # No LLM → no summarization.
         for k in ("provider", "model", "summary_depth", "temperature",
                  "max_summarize_tokens", "ollama_base_url",
-                 "anthropic_api_key", "openai_api_key"):
+                 "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
             config.pop(k, None)
         config["summary_depth"] = "none"
 
@@ -197,7 +199,7 @@ def main():
         )
         # If the vision provider is the same as the LLM provider, reuse the
         # api key already prompted for above. Otherwise prompt fresh.
-        if vprovider in ("anthropic", "openai"):
+        if vprovider in ("anthropic", "openai", "wsjpt"):
             if vprovider != config.get("provider"):
                 key = _prompt_api_key(vprovider, existing)
                 field = f"{vprovider}_api_key"
