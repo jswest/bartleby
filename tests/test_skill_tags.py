@@ -11,12 +11,14 @@ from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_scripts import (
     add_tag,
+    assign_tag,
     delete_tag,
     list_documents,
     merge_tags,
     read_tags,
     rename_tag,
     tag as tag_script,
+    unassign_tag,
 )
 from bartleby.skill_scripts import _tags as tags_helpers
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
@@ -417,3 +419,144 @@ def test_search_tag_filter_restricts_results(seeded_project, capsys, monkeypatch
         r["source_id"] == seeded_project["doc_a"] or r["source_kind"] != "document"
         for r in out["results"]
     )
+
+
+# ---------- assign_tag / unassign_tag (manual, no LLM) ----------
+
+
+def _seed_tag(project, name="bad_ocr", description="d") -> int:
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO tags (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        return conn.last_insert_rowid()
+    finally:
+        conn.close()
+
+
+def _assignment_count(project, document_id, tag_id) -> int:
+    conn = open_db(project)
+    try:
+        return conn.cursor().execute(
+            "SELECT COUNT(*) FROM document_tags "
+            "WHERE document_id = ? AND tag_id = ?",
+            (document_id, tag_id),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_assign_tag_creates_assignment(seeded_project, capsys):
+    tag_id = _seed_tag(seeded_project["project"])
+    assign_tag.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]), "--tag", "bad_ocr",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out == {
+        "document_id": seeded_project["doc_a"], "file_name": "alpha.pdf",
+        "tag_id": tag_id, "tag": "bad_ocr", "assigned": True,
+    }
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 1
+
+
+def test_assign_tag_is_idempotent(seeded_project, capsys):
+    tag_id = _seed_tag(seeded_project["project"])
+    for _ in range(2):
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]), "--tag", "bad_ocr",
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert out["assigned"] is True
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 1
+
+
+def test_assign_tag_unknown_tag(seeded_project, capsys):
+    with pytest.raises(SystemExit):
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]), "--tag", "nope",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "TAG_NOT_FOUND"
+
+
+def test_assign_tag_unknown_document(seeded_project, capsys):
+    _seed_tag(seeded_project["project"])
+    with pytest.raises(SystemExit):
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--document", "999999", "--tag", "bad_ocr",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
+
+
+def test_unassign_tag_removes_assignment(seeded_project, capsys):
+    tag_id = _seed_tag(seeded_project["project"])
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+            (seeded_project["doc_a"], tag_id),
+        )
+    finally:
+        conn.close()
+
+    unassign_tag.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]), "--tag", "bad_ocr",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["unassigned"] is True
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 0
+
+
+def test_unassign_tag_absent_is_noop(seeded_project, capsys):
+    tag_id = _seed_tag(seeded_project["project"])
+    # No prior assignment; unassign should succeed and leave the tag intact.
+    unassign_tag.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]), "--tag", "bad_ocr",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["unassigned"] is True
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 0
+    # The tag itself must still exist — unassign does not cascade like delete_tag.
+    conn = open_db(seeded_project["project"])
+    try:
+        assert tags_helpers.get_tag_by_name(conn, "bad_ocr") is not None
+    finally:
+        conn.close()
+
+
+def test_unassign_tag_unknown_tag(seeded_project, capsys):
+    with pytest.raises(SystemExit):
+        unassign_tag.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]), "--tag", "nope",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "TAG_NOT_FOUND"
+
+
+def test_unassign_tag_unknown_document(seeded_project, capsys):
+    _seed_tag(seeded_project["project"])
+    with pytest.raises(SystemExit):
+        unassign_tag.main([
+            "--project", seeded_project["project"],
+            "--document", "999999", "--tag", "bad_ocr",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "DOCUMENT_NOT_FOUND"

@@ -79,6 +79,14 @@ def get_tag_by_name(conn, name: str) -> TagRow | None:
     return TagRow(*row) if row else None
 
 
+def get_document(conn, document_id: int) -> tuple[int, str] | None:
+    """Return ``(document_id, file_name)`` for a document, or None if absent."""
+    return conn.cursor().execute(
+        "SELECT document_id, file_name FROM documents WHERE document_id = ?",
+        (document_id,),
+    ).fetchone()
+
+
 def resolve_tag_names(conn, names: list[str]) -> list[int]:
     """Resolve tag names → tag_ids; raise ``TAG_NOT_FOUND`` on any miss.
 
