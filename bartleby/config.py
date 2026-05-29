@@ -40,8 +40,10 @@ def save_config_field(key: str, value: Any) -> None:
 def ensure_provider_env(provider: str | None, config: dict) -> None:
     """Populate environment variables expected by the provider SDKs.
 
-    Sets ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` from config (without
-    overwriting an existing env var) and ``OLLAMA_API_BASE`` for Ollama.
+    Sets ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` / ``GEMINI_API_KEY`` from
+    config (without overwriting an existing env var) and ``OLLAMA_API_BASE``
+    for Ollama. The wsjpt provider routes Gemini calls through ``GEMINI_API_KEY``
+    when present; without it, wsjpt falls back to Vertex AI via ADC.
     """
     if not provider:
         return
@@ -52,6 +54,10 @@ def ensure_provider_env(provider: str | None, config: dict) -> None:
         config_value = config.get(config_key)
         if config_value and not os.environ.get(env_var):
             os.environ[env_var] = config_value
+    elif provider == "wsjpt":
+        config_value = config.get("wsjpt_api_key")
+        if config_value and not os.environ.get("GEMINI_API_KEY"):
+            os.environ["GEMINI_API_KEY"] = config_value
     elif provider == "ollama":
         os.environ["OLLAMA_API_BASE"] = config.get(
             "ollama_base_url", "http://localhost:11434"

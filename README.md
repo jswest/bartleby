@@ -59,13 +59,19 @@ To opt into the Docling converter (slower text extraction, but layout-aware; req
 uv tool install '.[docling]'
 ```
 
+To opt into the wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal):
+
+```
+uv tool install '.[wsjpt]'
+```
+
 To opt into [sec2md](https://github.com/alphanome-ai/sec2md) for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.). sec2md preserves SEC table structure and section headings that Docling tends to flatten. It only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head); everything else on the HTML branch still falls through to Docling.
 
 ```
 uv tool install '.[sec2md]'
 ```
 
-You can combine extras: `uv tool install '.[docling,sec2md]'`.
+You can combine extras: `uv tool install '.[docling,sec2md,wsjpt]'`.
 
 For development:
 
@@ -215,7 +221,7 @@ Interactive configuration wizard. Asks for:
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
-**API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`. For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
+**API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
 For local-only setups, see [Running fully local](#running-fully-local-for-sensitive-work) for the recommended model picks by hardware tier.
 
@@ -334,6 +340,7 @@ Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
 | Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative — see the Ollama-defaults note above. |
+| wsjpt | `fast` | `fast` | Optional extra (`bartleby[wsjpt]`). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install. Set `GEMINI_API_KEY` (or `wsjpt_api_key` in config); without one, wsjpt falls back to Vertex AI via ADC. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
 

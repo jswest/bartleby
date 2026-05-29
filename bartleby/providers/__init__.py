@@ -10,7 +10,7 @@ from bartleby.providers.base import (
     DocumentSummary, ImageAnalysis, Provider, VlmDescription,
 )
 
-_VALID = ("anthropic", "openai", "ollama")
+_VALID = ("anthropic", "openai", "ollama", "wsjpt")
 
 
 def get_provider(name: str, *, ollama_base_url: str | None = None) -> Provider:
@@ -23,6 +23,9 @@ def get_provider(name: str, *, ollama_base_url: str | None = None) -> Provider:
     if name == "ollama":
         from bartleby.providers.ollama import OllamaProvider
         return OllamaProvider(base_url=ollama_base_url)
+    if name == "wsjpt":
+        from bartleby.providers.wsjpt import WsjptProvider
+        return WsjptProvider()
     raise ValueError(f"Unknown provider {name!r}; expected one of {_VALID}")
 
 
