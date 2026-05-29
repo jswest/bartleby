@@ -36,6 +36,8 @@ cp -r skill ~/.claude/skills/bartleby
 
 **Other harnesses:** consult the harness's docs for where skills live. The skill is a self-contained folder; you should be able to drop it anywhere a compliant harness reads skills from.
 
+The main [README](../README.md#install-the-skill) has a note about re-copying after every `git pull` — worth reading if you're updating an existing install.
+
 ---
 
 ## What the skill exposes
@@ -45,7 +47,8 @@ The skill ships a `scripts/` directory containing small Python scripts that the 
 | Script | Purpose |
 | --- | --- |
 | `list_documents` | Enumerate documents in the corpus (file names, IDs, page/token/chunk counts, summary status). |
-| `search` | Unified search across documents, summaries, and findings. Supports keyword (FTS5), semantic (vector), and hybrid (RRF) modes. Each hit ships with neighboring chunks for reading context (configurable via `--context`). |
+| `search` | Unified search across documents, summaries, and findings. Supports keyword (FTS5), semantic (vector), and hybrid (RRF) modes. Hits return just the matched chunk by default; `--add-context N` (0..5) attaches N neighbor chunks on each side. |
+| `scan` | Full-text-only *filter* (no ranking): returns every document chunk matching a literal phrase corpus-wide, in document + source order, paginated with a true `total`. For enumerating marker phrases on templated corpora; documents only, compact snippets by default. `--match-terms` switches phrase matching to a boolean AND of tokens. |
 | `read_chunks` | Read a window of chunks from a document. Paginated via `--offset` and `--limit`. |
 | `read_document` | Read a full document and/or its summary. Refuses oversized documents without `--force`. |
 | `save_summary` | Save an agent-authored summary back into the database (chunked and embedded). |

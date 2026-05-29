@@ -8,7 +8,8 @@ from bartleby.config import CONFIG_PATH, load_config, save_config
 
 ALLOWED_PROVIDERS = ["anthropic", "openai", "ollama", "wsjpt"]
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
-ALLOWED_BACKENDS = ["pdfplumber", "docling"]
+ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
+ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
 
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
@@ -30,7 +31,8 @@ DEFAULT_MAX_SUMMARIZE_TOKENS = 50_000
 DEFAULT_MAX_READ_TOKENS = 50_000
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
-DEFAULT_BACKEND = "pdfplumber"
+DEFAULT_PDF_CONVERTER = "pdfplumber"
+DEFAULT_HTML_CONVERTER = "docling"
 DEFAULT_VISION_MAX_DIMENSION = 1024
 DEFAULT_SPARSE_TEXT_THRESHOLD = 100
 DEFAULT_OCR_MIN_CONFIDENCE = 30
@@ -74,18 +76,34 @@ def _prompt_api_key(provider: str, existing: dict) -> str | None:
     return entered or None
 
 
-def _prompt_backend(existing: dict) -> str:
-    default = existing.get("backend", DEFAULT_BACKEND)
-    if default not in ALLOWED_BACKENDS:
-        default = DEFAULT_BACKEND
-    choices = " / ".join(ALLOWED_BACKENDS)
+def _prompt_pdf_converter(existing: dict) -> str:
+    default = existing.get("pdf_converter", DEFAULT_PDF_CONVERTER)
+    if default not in ALLOWED_PDF_CONVERTERS:
+        default = DEFAULT_PDF_CONVERTER
+    choices = " / ".join(ALLOWED_PDF_CONVERTERS)
     while True:
         b = Prompt.ask(
-            f"PDF backend ({choices})", default=default
+            f"PDF converter ({choices})", default=default
         ).lower()
-        if b in ALLOWED_BACKENDS:
+        if b in ALLOWED_PDF_CONVERTERS:
             return b
-        console.print(f"[red]Invalid backend. Choose from: {choices}[/red]")
+        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
+
+
+def _prompt_html_converter(existing: dict) -> str:
+    default = existing.get("html_converter", DEFAULT_HTML_CONVERTER)
+    if default not in ALLOWED_HTML_CONVERTERS:
+        default = DEFAULT_HTML_CONVERTER
+    choices = " / ".join(ALLOWED_HTML_CONVERTERS)
+    while True:
+        b = Prompt.ask(
+            f"HTML converter ({choices}; sec2md routes iXBRL filings, "
+            f"others stay on docling)",
+            default=default,
+        ).lower()
+        if b in ALLOWED_HTML_CONVERTERS:
+            return b
+        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
 
 
 def _prompt_summary_depth(existing: dict) -> str:
@@ -176,8 +194,9 @@ def main():
             config.pop(k, None)
         config["summary_depth"] = "none"
 
-    console.print("\n[bold]PDF backend[/bold]")
-    config["backend"] = _prompt_backend(existing)
+    console.print("\n[bold]Converters[/bold]")
+    config["pdf_converter"] = _prompt_pdf_converter(existing)
+    config["html_converter"] = _prompt_html_converter(existing)
     config["sparse_text_threshold"] = _prompt_positive_int(
         "Sparse-text threshold (chars/page below which a page is treated as scanned)",
         int(existing.get("sparse_text_threshold", DEFAULT_SPARSE_TEXT_THRESHOLD)),

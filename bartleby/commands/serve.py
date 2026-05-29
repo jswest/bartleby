@@ -61,6 +61,8 @@ def _sync_web(src: Path, dst: Path) -> None:
             shutil.rmtree(entry)
 
     for entry in src.iterdir():
+        if entry.name in _PRESERVED:
+            continue
         target = dst / entry.name
         if entry.name in _SYMLINKED:
             target.symlink_to(entry.resolve())

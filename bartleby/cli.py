@@ -14,7 +14,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="bartleby",
-        description="Bartleby, the Scrivener - A PDF processor that might refuse."
+        description="Bartleby, the Scrivener - A document analysis toolkit that might prefer not to."
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -32,6 +32,11 @@ def main():
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
     pd.add_argument("-y", "--yes", action="store_true")
+    pup = project_sub.add_parser(
+        "upgrade",
+        help="Apply additive schema upgrades to bring a project up to date",
+    )
+    pup.add_argument("name", type=str)
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -45,9 +50,17 @@ def main():
         choices=["anthropic", "openai", "ollama"], default=None,
     )
     scribe_parser.add_argument(
-        "--backend", type=str,
+        "--pdf-converter", type=str,
         choices=["pdfplumber", "docling"], default=None,
-        help="PDF backend; overrides the value in ~/.bartleby/config.yaml.",
+        help="PDF converter; overrides pdf_converter in ~/.bartleby/config.yaml.",
+    )
+    scribe_parser.add_argument(
+        "--html-converter", type=str,
+        choices=["docling", "sec2md"], default=None,
+        help=(
+            "HTML converter; overrides html_converter in ~/.bartleby/config.yaml. "
+            "'sec2md' routes iXBRL EDGAR filings to sec2md and other HTML to docling."
+        ),
     )
     scribe_parser.add_argument("--verbose", action="store_true")
 
@@ -118,7 +131,8 @@ def _scribe(args):
         files=args.files,
         model=args.model,
         provider=args.provider,
-        backend=args.backend,
+        pdf_converter=args.pdf_converter,
+        html_converter=args.html_converter,
         verbose=args.verbose,
     )
 
@@ -155,6 +169,8 @@ def _project(args, parser):
         project_cmd.info(name=args.name)
     elif args.project_command == "delete":
         project_cmd.delete(name=args.name, yes=args.yes)
+    elif args.project_command == "upgrade":
+        project_cmd.upgrade(name=args.name)
 
 
 def _session(args, parser):

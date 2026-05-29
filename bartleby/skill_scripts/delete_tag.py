@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""delete_tag — remove a tag from the vocabulary.
+
+The FK ``ON DELETE CASCADE`` on ``document_tags.tag_id`` clears all
+assignments automatically.
+
+Output:
+    {"status": "deleted", "tag_id": int, "name": str,
+     "removed_assignments": int}
+"""
+
+from __future__ import annotations
+
+import argparse
+
+from bartleby.skill_runner import SkillError, run
+from bartleby.skill_scripts._tags import get_tag_by_name
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="delete_tag")
+    p.add_argument("--name", type=str, required=True)
+    p.add_argument("--project", type=str, default=None)
+    return p.parse_args(argv)
+
+
+def work(*, conn, args, session_id) -> dict:
+    tag = get_tag_by_name(conn, args.name)
+    if tag is None:
+        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.name!r}.")
+
+    cur = conn.cursor()
+    n_assignments = cur.execute(
+        "SELECT COUNT(*) FROM document_tags WHERE tag_id = ?", (tag.tag_id,),
+    ).fetchone()[0]
+    cur.execute("DELETE FROM tags WHERE tag_id = ?", (tag.tag_id,))
+    return {
+        "status": "deleted",
+        "tag_id": tag.tag_id,
+        "name": tag.name,
+        "removed_assignments": n_assignments,
+    }
+
+
+def main(argv: list[str] | None = None) -> None:
+    run(tool_name="delete_tag", parse_args=parse_args, work=work, argv=argv)
+
+
+if __name__ == "__main__":
+    main()

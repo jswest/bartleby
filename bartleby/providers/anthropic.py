@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 
 from anthropic import Anthropic
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
@@ -16,6 +16,7 @@ from bartleby.providers.prompt import (
 
 _SUMMARY_TOOL = "save_summary"
 _IMAGE_TOOL = "save_image_description"
+_CLASSIFY_TOOL = "save_classification"
 
 
 class AnthropicProvider:
@@ -45,6 +46,28 @@ class AnthropicProvider:
             tool_choice={"type": "tool", "name": _SUMMARY_TOOL},
         )
         return _extract_tool_input(response, _SUMMARY_TOOL, DocumentSummary)
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[BaseModel],
+        temperature: float = 0.0,
+    ) -> BaseModel:
+        response = self._client.messages.create(
+            model=model,
+            max_tokens=2048,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+            tools=[{
+                "name": _CLASSIFY_TOOL,
+                "description": "Save the classification result.",
+                "input_schema": schema.model_json_schema(),
+            }],
+            tool_choice={"type": "tool", "name": _CLASSIFY_TOOL},
+        )
+        return _extract_tool_input(response, _CLASSIFY_TOOL, schema)
 
     def analyze_image(
         self,

@@ -16,10 +16,20 @@ import sys
 SCRIPTS = (
     "list_documents",
     "search",
+    "scan",
     "read_chunks",
     "read_document",
     "save_summary",
     "save_finding",
+    "edit_finding",
+    "read_tags",
+    "add_tag",
+    "delete_tag",
+    "rename_tag",
+    "merge_tags",
+    "tag",
+    "assign_tag",
+    "unassign_tag",
 )
 
 

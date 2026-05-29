@@ -15,12 +15,12 @@ from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_finding.embed_texts",
+        "bartleby.skill_scripts._common.embed_texts",
         lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_finding.chunk_markdown_string",
+        "bartleby.skill_scripts._common.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -166,6 +166,27 @@ def test_save_finding_no_inline_citations(seeded_project, tmp_path, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "NO_INLINE_CITATIONS"
+
+
+def test_save_finding_rejects_malformed_citation(seeded_project, tmp_path, capsys):
+    """Bare ``[N]`` markers (missing the ``^``) are rejected loudly so the
+    agent fixes the typo instead of shipping silent phantom citations."""
+    body_file = tmp_path / "f.md"
+    body_file.write_text(
+        "Real claim[^1] and typoed claim[3] in the same body.",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        save_finding.main([
+            "--project", seeded_project["project"],
+            "--title", "typo",
+            "--description", "x",
+            "--body-file", str(body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MALFORMED_CITATION"
+    assert out["malformed_markers"] == ["[3]"]
 
 
 def test_save_finding_unknown_inline_marker(seeded_project, tmp_path, capsys):

@@ -26,6 +26,7 @@ class DoclingChunk:
     text: str
     section_heading: str | None
     content_type: str | None
+    page_number: int | None = None
 
 
 @dataclass
@@ -44,7 +45,7 @@ def _require_docling():
             "  uv tool:    uv tool install --with docling --reinstall bartleby\n"
             "  uv venv:    uv pip install 'bartleby[docling]'\n"
             "  pip:        pip install 'bartleby[docling]'\n"
-            "PDFs can fall back to the pdfplumber backend in config; "
+            "PDFs can fall back to pdf_converter=pdfplumber in config; "
             "HTML/MD require docling."
         ) from e
 
@@ -52,9 +53,25 @@ def _require_docling():
 @lru_cache(maxsize=1)
 def _converter():
     _require_docling()
-    from docling.document_converter import DocumentConverter
+    from docling.datamodel.accelerator_options import (
+        AcceleratorDevice,
+        AcceleratorOptions,
+    )
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    return DocumentConverter()
+    # Force CPU: Docling's vision models hit float64 ops that MPS rejects on
+    # Apple Silicon, failing entire PDFs. CPU is slower but reliable.
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.accelerator_options = AcceleratorOptions(
+        device=AcceleratorDevice.CPU
+    )
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        }
+    )
 
 
 @lru_cache(maxsize=1)
@@ -87,6 +104,25 @@ def _content_type(chunk) -> str | None:
     return str(label) if label is not None else None
 
 
+def _first_page(chunk) -> int | None:
+    """First page a chunk spans, via Docling's per-item provenance.
+
+    Docling's HybridChunker groups doc items by token budget and can straddle
+    page boundaries. We store the chunk's starting page — the schema is one
+    integer per chunk and the web view's #page anchor only takes one page
+    anyway. Markdown and HTML inputs have no provenance and return None.
+    """
+    meta = getattr(chunk, "meta", None)
+    if meta is None:
+        return None
+    pages = [
+        prov.page_no
+        for item in (getattr(meta, "doc_items", None) or [])
+        for prov in (getattr(item, "prov", None) or [])
+    ]
+    return min(pages) if pages else None
+
+
 def _iter_chunks(chunker, doc) -> Iterable[DoclingChunk]:
     for raw in chunker.chunk(dl_doc=doc):
         contextualized = chunker.contextualize(chunk=raw)
@@ -96,6 +132,7 @@ def _iter_chunks(chunker, doc) -> Iterable[DoclingChunk]:
             text=contextualized,
             section_heading=_section_heading(raw),
             content_type=_content_type(raw),
+            page_number=_first_page(raw),
         )
 
 

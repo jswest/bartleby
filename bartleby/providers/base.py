@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
+
+_T = TypeVar("_T", bound=BaseModel)
 
 
 class DocumentSummary(BaseModel):
     """Schema enforced across providers via structured output.
 
-    A single LLM call returns all three fields so we never pay for the same
-    document text three times. Each provider's structured-output mechanism
+    A single LLM call returns all four fields so we never pay for the same
+    document text multiple times. Each provider's structured-output mechanism
     (Anthropic tool-use input_schema, OpenAI response_format json_schema,
     Ollama format=) reads ``model_json_schema()`` and enforces every field.
     """
@@ -32,6 +34,16 @@ class DocumentSummary(BaseModel):
         description=(
             "A concise, self-contained summary of the document covering its "
             "topic, key claims, and structural skeleton. Readable on its own."
+        ),
+    )
+    authored_date: str | None = Field(
+        default=None,
+        description=(
+            "The date the document was authored or published, if stated in "
+            "the document itself. NOT the date of events described in the "
+            "document. NOT an inferred or estimated date. ISO 8601 "
+            "YYYY-MM-DD. If only year or only month is known, or if no date "
+            "is stated, return null."
         ),
     )
 
@@ -106,3 +118,18 @@ class Provider(Protocol):
         model: str,
         media_type: str = "image/jpeg",
     ) -> VlmDescription: ...
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[_T],
+        temperature: float = 0.0,
+    ) -> _T:
+        """Structured-output call for arbitrary Pydantic schemas.
+
+        Used wherever the codebase needs typed JSON out of an LLM that
+        isn't `summarize`/`analyze_image` — e.g. tag classification.
+        """
+        ...

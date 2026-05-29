@@ -1,7 +1,15 @@
 <script>
   import "../app.css";
   import { page } from "$app/stores";
+  import { marked } from "marked";
   export let data;
+
+  marked.use({
+    hooks: {
+      postprocess: (html) =>
+        html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '),
+    },
+  });
 
   // A nav link is "active" if the current path matches exactly OR is a child
   // of the link's target (so /findings/15 lights up the Findings nav too).
@@ -30,13 +38,13 @@
 
 <style>
   header {
+    background-color: var(--color-off);
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     z-index: 10;
-    background: #fff;
-    border-bottom: 1px solid #d6d4c6;
+    border-bottom: 1px solid var(--color-off-light);
   }
   .bar {
     display: flex;
@@ -46,8 +54,8 @@
   }
   .brand {
     font-size: 1.25rem;
-    font-weight: bold;
-    color: inherit;
+    font-weight: 900;
+    color: var(--color-token);
     text-decoration: none;
   }
   .links {
@@ -55,24 +63,24 @@
     gap: 1.25rem;
   }
   .links a {
-    color: var(--color-off);
+    color: var(--color-off-light);
     text-decoration: none;
     font-family: var(--font-sans);
-    font-size: 0.95rem;
+    font-size: 1rem;
     padding-bottom: 2px;
     border-bottom: 2px solid transparent;
   }
   .links a:hover {
-    color: #222;
+    color: var(--color-off-light);
   }
   .links a.active {
-    color: #222;
-    border-bottom-color: var(--color-off);
+    color: var(--color-off-light);
+    border-bottom-color: var(--color-off-light);
   }
   .project {
     margin-left: auto;
-    color: var(--color-off);
-    font-size: 0.95rem;
+    color: var(--color-off-light);
+    font-size: 1rem;
   }
   main {
     /* Offset the fixed header so content doesn't slide under it. */

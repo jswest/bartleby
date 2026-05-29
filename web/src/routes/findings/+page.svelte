@@ -9,7 +9,7 @@
 {:else}
   <ul class="entity-list">
     {#each data.findings as f}
-      <li>
+      <li class="entity">
         <h2><a href="/findings/{f.finding_id}">{f.title}</a></h2>
         <p class="meta">
           {f.session_name} · {f.citation_count} citation{f.citation_count === 1

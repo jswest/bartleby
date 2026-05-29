@@ -1,10 +1,13 @@
 :root {
   --unit: 18px;
   --color-off: #698879;
+  --color-off-light: #dbfaeb;
+  --color-token: #ffecb9;
+  --color-token-dark: #ffbd08;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
   --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
 }
 
@@ -92,6 +95,13 @@ p.meta {
 .markdown-body p {
   margin: 0;
 }
+/* Restore vertical spacing between paragraphs and the elements they follow.
+   `.markdown-body > * + *` is too low-specificity to beat the reset above —
+   this rule (0,1,1) ties it and wins by declaration order. Excludes paragraphs
+   inside list items, which have their own tighter spacing via `li > p`. */
+.markdown-body * + p {
+  margin-top: 1rem;
+}
 .markdown-body strong {
   font-weight: 700;
 }
@@ -116,13 +126,14 @@ p.meta {
   margin-top: 0.35rem;
 }
 .markdown-body a {
-  color: var(--color-off);
+  color: var(--color-token-dark);
+  font-weight: 700;
+  text-decoration: none;
+}
+.markdown-body a:hover {
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
-}
-.markdown-body a:hover {
-  color: #222;
 }
 .markdown-body blockquote {
   padding: 0.25rem 1rem;
@@ -163,6 +174,7 @@ p.meta {
 }
 .markdown-body th,
 .markdown-body td {
+  background-color: white;
   border: 1px solid var(--color-rule);
   padding: 0.4rem 0.6rem;
   text-align: left;
@@ -227,6 +239,12 @@ p.meta {
 }
 .entity-list .desc {
   margin: 0.25rem 0 0;
+}
+li.entity {
+  background-color: var(--color-off-light);
+  border: 1px solid var(--color-off);
+  box-sizing: border-box;
+  padding: 1rem;
 }
 .empty {
   color: var(--color-off);

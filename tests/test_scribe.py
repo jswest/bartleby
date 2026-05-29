@@ -33,16 +33,21 @@ class _StubProvider:
         text: str = "## Summary\n\nA stub summary.",
         title: str = "Stub Title",
         description: str = "Stub one-line description.",
+        authored_date: str | None = None,
     ):
         self.text = text
         self.title = title
         self.description = description
+        self.authored_date = authored_date
         self.calls = 0
+        self.last_document_text: str | None = None
 
     def summarize(self, document_text, *, model, temperature):
         self.calls += 1
+        self.last_document_text = document_text
         return DocumentSummary(
             title=self.title, description=self.description, text=self.text,
+            authored_date=self.authored_date,
         )
 
 
@@ -218,7 +223,8 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "ocr_min_confidence": 30,
             "vision_provider": "stub",
@@ -269,7 +275,8 @@ def test_scribe_dedupes_identical_images_across_documents(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "vision_provider": "stub",
             "vision_model": "stub-vl:1",
@@ -386,7 +393,8 @@ def test_scribe_persists_page_number_for_pdfplumber_chunks(
         "bartleby.commands.scribe.load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "ocr_min_confidence": 30,
         },
@@ -426,7 +434,8 @@ def test_scribe_stage_callback_progresses_through_phases(
             "summary_depth": "one-shot",
             "provider": "anthropic", "model": "m",
             "temperature": 0.0, "max_summarize_tokens": 50_000,
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100, "ocr_min_confidence": 30,
             "vision_provider": "stub", "vision_model": "stub-vl:1",
             "vision_max_dimension": 1024,
@@ -452,7 +461,8 @@ def test_scribe_stage_callback_progresses_through_phases(
     try:
         scribe_module._process_one(
             conn, pdf, archive_root,
-            backend="pdfplumber",
+            pdf_converter="pdfplumber",
+            html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
             vision_max_dimension=1024,
             llm_provider=stub_summary, llm_model="m",
@@ -483,7 +493,8 @@ def test_scribe_image_progress_callback_fires_per_image(
         scribe_module, "load_config",
         lambda: {
             "summary_depth": "none",
-            "backend": "pdfplumber",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
             "sparse_text_threshold": 100,
             "vision_provider": "stub", "vision_model": "stub-vl:1",
             "vision_max_dimension": 1024,
@@ -504,7 +515,8 @@ def test_scribe_image_progress_callback_fires_per_image(
     try:
         scribe_module._process_one(
             conn, pdf, archive_root,
-            backend="pdfplumber",
+            pdf_converter="pdfplumber",
+            html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
             vision_max_dimension=1024,
             llm_provider=None, llm_model=None,
@@ -679,6 +691,128 @@ def test_cleanup_partial_document_preserves_shared_image(isolated_project):
             "SELECT COUNT(*) FROM document_images WHERE document_id = ?",
             (other_id,),
         ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_scribe_interleaves_image_chunks_into_summary_input(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """The summarizer sees image-chunk text alongside the document body."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic",
+            "model": "m",
+            "temperature": 0,
+            "max_summarize_tokens": 50_000,
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
+            "sparse_text_threshold": 100,
+            "ocr_min_confidence": 30,
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    summary_stub = _StubProvider()
+    vision_stub = _StubVisionProvider(VlmDescription(
+        description="A green rectangle chart with no axis labels.", notes="",
+    ))
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    body = "Page one prose about the green rectangle figure. " * 6
+    _pdf_with_image(pdf, _png_bytes(), text=body)
+    scribe.main(project="test_proj", files=str(pdf))
+
+    captured = summary_stub.last_document_text
+    assert captured is not None
+    # Body text is still there.
+    assert "Page one prose" in captured
+    # Image-derived chunk text is interleaved in.
+    assert "green rectangle chart" in captured
+    # And it's labeled so the summarizer can tell where it came from.
+    assert "[Image on page 1]" in captured
+
+
+def test_scribe_persists_authored_date_from_summary(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: _StubProvider(
+            text="summary body", authored_date="2024-09-12",
+        ),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "Dated document body.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries"
+        ).fetchone()
+        assert row[0] == "2024-09-12"
+    finally:
+        conn.close()
+
+
+def test_scribe_drops_malformed_authored_date(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: _StubProvider(
+            text="summary body", authored_date="Q3 2024",
+        ),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "Document body.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries"
+        ).fetchone()
+        assert row[0] is None
     finally:
         conn.close()
 

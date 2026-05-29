@@ -1,4 +1,6 @@
+benchmarks/
 build
+*.cast
 .claude
 dist
 .DS_Store

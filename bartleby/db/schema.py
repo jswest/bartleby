@@ -5,7 +5,7 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 EMBEDDING_DIM = 768
 
@@ -34,6 +34,7 @@ CREATE TABLE summaries (
     description TEXT NOT NULL,
     text TEXT NOT NULL,
     model TEXT NOT NULL,
+    authored_date TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -107,6 +108,22 @@ CREATE TABLE audit_logs (
 );
 
 CREATE INDEX idx_audit_logs_session ON audit_logs(session_id, created_at);
+
+CREATE TABLE tags (
+    tag_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE document_tags (
+    document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (document_id, tag_id)
+);
+
+CREATE INDEX idx_document_tags_tag ON document_tags(tag_id);
 
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text,

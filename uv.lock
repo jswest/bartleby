@@ -381,11 +381,13 @@ docling = [
 ]
 wsjpt = [
     { name = "wsjpt" },
+sec2md = [
+    { name = "sec2md" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "bartleby", extra = ["docling"] },
+    { name = "bartleby", extra = ["docling", "sec2md"] },
     { name = "pytest" },
     { name = "reportlab" },
 ]
@@ -405,16 +407,19 @@ requires-dist = [
     { name = "pytesseract", specifier = ">=0.3.13" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=14.2.0" },
+    { name = "sec2md", marker = "extra == 'sec2md'", specifier = "==0.1.22" },
     { name = "sentence-transformers", specifier = ">=5.1.2" },
     { name = "sqlite-vec", specifier = ">=0.1.6" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "wsjpt", marker = "extra == 'wsjpt'", git = "ssh://git@github.dowjones.net/data/wsjpt.git" },
 ]
-provides-extras = ["docling", "wsjpt"]
+
+provides-extras = ["docling", "sec2md", "wsjpt]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "bartleby", extras = ["docling"] },
+    { name = "bartleby", extras = ["sec2md"] },
     { name = "pytest", specifier = ">=8.0" },
     { name = "reportlab", specifier = ">=4.5.1" },
 ]
@@ -4526,6 +4531,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/46/f5af3402b579fd5e11573ce652019a67074317e18c1935cc0b4ba9b35552/secretstorage-3.5.0-py3-none-any.whl", hash = "sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137", size = 15554, upload-time = "2025-11-23T19:02:51.545Z" },
+name = "sec2md"
+version = "0.1.22"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "lxml" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/de/cb78a5afff2b2671760ac1ec763372bd18b08c15caba8203a191925e9cca/sec2md-0.1.22.tar.gz", hash = "sha256:b6e790be2437981ea4b5f110fec2ed76202cefad3d9e5b5738bb87e968eb16a0", size = 68070, upload-time = "2026-03-15T15:08:22.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/6f/25f66d3cda2e4873668a41067b8b894e860973a55a769f07a355bd9028f2/sec2md-0.1.22-py3-none-any.whl", hash = "sha256:6390ab5697b760688dde60b8b09ee308964b333b3996da41fd8accb1be269ade", size = 55360, upload-time = "2026-03-15T15:08:18.833Z" },
 ]
 
 [[package]]

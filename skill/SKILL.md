@@ -22,23 +22,40 @@ That is the only invocation pattern. Do not try to run the scripts directly with
 Concrete examples:
 
 ```
-bartleby skill list_documents
+bartleby skill list_documents                            # brief: id, file_name, title, description, authored_date, has_summary, image_count
+bartleby skill list_documents --verbose                  # adds page_count, token_count, chunk_count, created_at
+bartleby skill list_documents --offset 200               # continue past the first page (default --limit 200)
+bartleby skill list_documents --tag ch --tag nyseg       # OR-filter to documents carrying either tag
 bartleby skill search "PM2.5 health disparities" --limit 10
 bartleby skill search "monitoring gaps" --in-documents 4,7
+bartleby skill search "uncollectibles" --tag ch --tag nyseg  # tag-filtered search (findings dropped)
 bartleby skill search "bar chart" --documents --images   # text + image chunks only
+bartleby skill scan "I will divest my interests in"      # every doc chunk with the phrase, in doc order
+bartleby skill scan "divest interests" --match-terms     # AND of tokens instead of a contiguous phrase
+bartleby skill scan "uncollectibles" --in-documents 4,7 --preview 400
 bartleby skill read_chunks --document 4 --offset 0 --limit 20
 bartleby skill read_chunks --document 4 --offset 0 --limit 40 --preview 800
 bartleby skill read_chunks --chunks 4192,4188,9201
+bartleby skill read_chunks --around-chunk 1629 --window 5   # target chunk plus 5 on each side
 bartleby skill read_document --document 4 --summary
 bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
 bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md
+bartleby skill edit_finding --finding-id 12 --body-file /tmp/finding.md
+bartleby skill edit_finding --finding-id 12 --title "Updated title"
+bartleby skill read_tags
+bartleby skill add_tag --name ch --description "Central Hudson rate-case filings and exhibits"
+bartleby skill tag --all
+bartleby skill tag --all --tag ch
+bartleby skill tag --document 42 --tag ch
+bartleby skill assign_tag --document 9 --tag bad_ocr     # attach a tag you determined out-of-band (no LLM)
+bartleby skill unassign_tag --document 9 --tag bad_ocr   # detach one assignment (does not delete the tag)
 ```
 
 Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
 
 ## What you can and cannot run
 
-You have **exactly six tools**, listed below. Don't go exploring the `bartleby` CLI (`bartleby project`, `bartleby session`, `bartleby logs`, etc.) — those are for the user, not for you. In particular:
+You have a fixed set of tools, listed below. Don't go exploring the `bartleby` CLI (`bartleby project`, `bartleby session`, `bartleby logs`, etc.) — those are for the user, not for you. In particular:
 
 - **Do not** run `bartleby session start`. A session is auto-created on your first `bartleby skill ...` call; you don't need to manage it.
 - **Do not** run `bartleby project ...` to inspect the corpus. Call `bartleby skill list_documents` instead.
@@ -50,17 +67,27 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 
 | Script | When to call it |
 | --- | --- |
-| `list_documents` | Get the lay of the land — file names, titles, descriptions, summary status, chunk + image counts. Run this first when you don't know the corpus. The `title` and `description` come from each document's summary and are the fastest way to triage what's in the corpus. `image_count > 0` tells you a document has analyzed figures/photos available via `search --images`. |
-| `search "<query>"` | Find chunks that match. Defaults: documents + images, semantic + full-text combined via RRF, one chunk of context on each side of each hit. `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--images` keeps image chunks in the result (already on by default — pass it alongside another flag like `--documents` to whittle down). `--in-documents 12,38` scopes the search to those documents' text chunks, their summaries' chunks, and the images attached to them; findings are dropped. `--limit`, `--context`, `--full-text`, `--semantic` are the other useful knobs. |
-| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Add `--preview N` to trim each chunk's `text` to the first `N` chars (the response appends `…` when trimmed); every chunk also carries `text_length`, the pre-truncation length, so you can tell which chunks were cut. Use `--preview` when you're navigating structure and don't need full prose yet; re-fetch the same chunks without it once you've decided which to read in full. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. `--preview` works here too. Works for image chunks. |
-| `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. |
-| `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. |
+| `list_documents` | Get the lay of the land — file names, titles, descriptions, `authored_date`, summary status, image counts. Run this first when you don't know the corpus. The `title` and `description` come from each document's summary and are the fastest way to triage what's in the corpus. `authored_date` (ISO 8601 `YYYY-MM-DD`) is the date the document itself states it was authored or published — often null. `image_count > 0` tells you a document has analyzed figures/photos available via `search --images`. Default output is *brief* (those seven fields). Pass `--verbose` for `page_count`, `token_count`, `chunk_count`, and `created_at`. Paginated via `--offset` / `--limit` (default `--limit 200`); when more rows remain, the response carries a `hint` string telling you the exact `--offset` for the next page. |
+| `search "<query>"` | Find chunks that match. Defaults: documents + images, semantic + full-text combined via RRF, **no surrounding context** (the hit text only). `--summaries` includes agent-authored summaries. `--findings` includes prior research notes (see memory rules below). `--images` keeps image chunks in the result (already on by default — pass it alongside another flag like `--documents` to whittle down). `--in-documents 12,38` scopes the search to those documents' text chunks, their summaries' chunks, and the images attached to them; findings are dropped. `--add-context N` (0..5) attaches N neighbor chunks on each side of every hit — use sparingly because it multiplies output size. `--limit`, `--full-text`, `--semantic` are the other useful knobs. |
+| `scan "<phrase>"` | **Enumerate, don't rank.** FTS5-only filter that returns *every* document chunk matching a literal full-text query, in `(document_id, chunk_index)` order, paginated with a true `total` so you know when you've seen them all. Use it for corpus-wide survey work on templated corpora — "for every doc, give me the chunks containing this marker phrase" (e.g. EDGAR/OGE/PACER filings). Literal **phrase** match by default; `--match-terms` switches to a boolean AND of the tokens (any order). Documents only — summaries, findings, and images are never returned. Output is compact: each hit's `text` is truncated to `--preview` chars (default 240) and carries `text_length`; take the `chunk_id`s and call `read_chunks --chunks <ids>` for full bodies. `--in-documents` / `--tag` scope it exactly as in `search`. On a heterogeneous corpus with no uniform marker phrase this is just `grep` — reach for `search` instead. |
+| `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Add `--preview N` to trim each chunk's `text` to the first `N` chars (the response appends `…` when trimmed); every chunk also carries `text_length`, the pre-truncation length, so you can tell which chunks were cut. Use `--preview` when you're navigating structure and don't need full prose yet; re-fetch the same chunks without it once you've decided which to read in full. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. Or `read_chunks --around-chunk <id> --window N` for a neighborhood read: returns the target chunk plus N chunks on each side in source order (default `--window 3`). The source kind+id are derived from the chunk_id — no need to also pass `--document`. Prefer this over re-searching for adjacency once you have a `chunk_id` in hand. `--preview` works in all three modes. Works for image chunks. |
+| `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. **`--full` reassembles chunks into clean prose carrying no `chunk_id`s** — use it for comprehension you won't cite from. If you intend to cite, read with `read_chunks --document <id>` instead (every chunk comes back with its `chunk_id`); citing from `--full` forces a wasteful second search pass just to recover the IDs. |
+| `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. Optional `--authored-date YYYY-MM-DD` sets the document's stated authored/published date; anything that isn't a real calendar date is silently stored as null. |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
+| `edit_finding --finding-id <id> [--title <t>] [--description <d>] [--body-file <path>]` | Update an existing finding in place. At least one of `--title` / `--description` / `--body-file` is required. When the body changes, citations are re-extracted from the new text and the finding's chunks are rebuilt — same validation rules as `save_finding` (must contain `[^N]` markers, all referencing real chunk_ids). Use this when a prior finding's citations are malformed (`[chunks 1, 2]` instead of `[^1][^2]`) or its title/description needs to change. Don't create a fresh finding for a fix — edit the existing one so `search --findings` doesn't end up with both versions. |
+| `read_tags` | List the controlled vocabulary: `[{tag_id, name, description, doc_count}]`. **Always run this before any other tag operation.** Empty until someone adds tags. |
+| `add_tag --name <n> --description <d>` | Create a tag. Runs an embedding-similarity + normalized-name check against existing tags; on near-match returns `{status: "conflict", similar_to: {...}}` instead of creating, so you can surface the conflict to the human rather than fragmenting the vocabulary. **Humans drive tag creation** — only propose new tags when the human explicitly asks. |
+| `delete_tag --name <n>` | Drop a tag. Cascades to all `document_tags` assignments. |
+| `rename_tag --old <a> --new <b>` | Rename in place. Errors if `--new` already exists — use `merge_tags` to combine. |
+| `merge_tags --from <a> --to <b>` | Move all assignments from `--from` onto `--to`, then delete `--from`. Pre-existing duplicates collapse cleanly. |
+| `tag [--document <id> \| --all] [--tag <name>] [--force]` | Classify documents against the vocabulary using the user's configured summarizer model. `--all` without `--tag` runs full-vocab mode (one LLM call per doc picks from the entire vocabulary). `--tag <name>` switches to single-tag mode ("does this one tag apply?"). Without `--force`, full-vocab mode skips docs that already have any tag and single-tag mode skips docs already carrying that tag. Documents without a summary are skipped (the classifier reads the summary, not the body). **`tag --all` runs the summarizer once per document — confirm with the human first** (report the estimated count and the model that will be used). |
+| `assign_tag --document <id> --tag <name>` | Attach one existing tag to one document **directly, with no LLM** — the manual counterpart to `tag`. Use it when you determined membership out-of-band (a body scan, a deterministic rule, a human call), which is the only way to apply *body-level* tags the summary-based classifier can't see (OCR quality, language, "contains tables"). Idempotent — re-assigning the same pair is a no-op. Errors `TAG_NOT_FOUND` / `DOCUMENT_NOT_FOUND`. |
+| `unassign_tag --document <id> --tag <name>` | Remove one `(document, tag)` assignment. Unlike `delete_tag` (which drops the tag and cascades *every* document's assignment), this detaches just this one document. No-op when the assignment isn't present. Use it to fix a single mistaken or stale assignment. |
 
 ## Default research loop
 
 1. **Search before reading.** A targeted `search` is almost always cheaper than reading a whole document.
-2. **Summaries before full text.** Call `read_document --summary` first. Escalate to `--full` only if the summary is insufficient.
+2. **Summaries before full text.** Call `read_document --summary` first. Escalate only if the summary is insufficient — and let your *intent* pick the tool. **If you intend to cite from the document, read it with `read_chunks --document <id>`** (bump `--limit` for long docs); every chunk comes back with its `chunk_id` ready to cite. **Reserve `read_document --full` for comprehension you won't cite from** — it gives clean prose but no IDs, so citing from it forces a wasteful second search pass.
 3. **Use `read_chunks` for structural scans.** If you need to walk a document section by section, paginated `read_chunks` beats loading the entire text. Use `read_chunks --chunks <ids>` to revisit specific chunks by `chunk_id` without re-running a search.
 4. **Cite as you go.** Every claim in your answer needs a `chunk_id` behind it. If you can't cite it, don't claim it.
 5. **Save interim findings when the work is long.** If you're accumulating chunk_ids worth remembering and the session is getting long, write a short `save_finding` body with inline `[^N]` markers for those chunks. Findings are durable storage; your context window is not.
@@ -78,10 +105,21 @@ Each result carries three signals you can use to triage:
 `search` results have three text fields per hit:
 
 - `text` — the chunk that matched. **Cite this chunk's `chunk_id`.**
-- `context_before` — the chunks immediately before the hit, in document order, each as `{chunk_id, chunk_index, text}`. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
-- `context_after` — the chunks immediately after the hit, in document order. Same shape, same rule.
+- `context_before` — empty by default. Populated when you pass `--add-context N`: the N chunks immediately before the hit, in document order, each as `{chunk_id, chunk_index, text}`. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
+- `context_after` — same shape, same rule.
 
-The context arrays exist because Docling sometimes produces small chunks and the hit alone may not be self-explanatory. Reading them is fine; presenting them as your matched evidence is not. If you discover the passage you actually want is in `context_before` or `context_after`, fetch it directly with `read_chunks --chunks <chunk_id>` using the neighbor's `chunk_id`, verify the text, and then cite that `chunk_id`. (Don't re-search and hope for the right hit — the neighbor's id is already in your hand.) Citations must represent chunks you've read and verified, whether they came in as a hit or as a context entry.
+Default search returns no context — the hit text alone. Reach for `--add-context` only when chunks are short enough that the hit isn't self-explanatory; each step multiplies output size across *every* hit by roughly (1 + 2N). Once you have a `chunk_id` in hand and want context around just that one, `read_chunks --around-chunk <id> --window N` is far cheaper. If you discover the passage you actually want is in `context_before` or `context_after`, fetch it directly with `read_chunks --chunks <chunk_id>` using the neighbor's `chunk_id`, verify the text, and then cite that `chunk_id`. (Don't re-search and hope for the right hit — the neighbor's id is already in your hand.) Citations must represent chunks you've read and verified, whether they came in as a hit or as a context entry.
+
+## Verifying citations before you save
+
+`save_finding` checks that every `[^N]` chunk_id *exists* in the project. It does not — and cannot — verify that the chunk *supports the claim* you're attaching it to. That part is on you.
+
+Two specific failure modes to avoid:
+
+- **Snippet truncation.** `search` returns excerpts, not whole chunks. They can end mid-sentence; sometimes mid-word. Paraphrasing or quoting verbatim from a truncated snippet is how citations end up misattributing claims to chunks that don't say what you wrote. If the snippet ends with `…`, or breaks off mid-thought, fetch the chunk before citing it.
+- **Citing chunks you haven't read in full.** A chunk_id you saw in a search result is a *candidate*. Before citing it in a finding — especially for claims that carry weight or anything quoted verbatim — run `read_chunks --chunks <id>` and confirm the chunk says what you're attributing to it.
+
+A useful heuristic: if a `chunk_id` appears in a finding you're about to save and it never showed up earlier in your conversation as something you read in full, you're guessing. Stop and fetch.
 
 ## Image chunks
 
@@ -93,6 +131,17 @@ Two `content_type` values distinguish image chunks, and each image produces exac
 - `image_description` — the VLM's scene description. Used when the image is dominated by visual content (a chart, a photo, a diagram). **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
 
 Image chunks have empty `context_before` / `context_after` arrays — each image produces a single chunk, so there are no neighbors.
+
+## Tag rules
+
+Tags are a controlled vocabulary the user curates to slice the corpus by category (utility, case, doc-type, jurisdiction). They unlock comparative queries — "what does CH say about uncollectibles vs. NYSEG?" — without enumerating document IDs.
+
+- **Always `read_tags` before any tag operation.** You need the existing vocabulary to avoid duplicating tags or missing the right one.
+- **Humans drive tag creation.** Only propose a new tag when the human explicitly asks. The dominant failure mode is over-fragmentation — five sibling tags that should have been one.
+- **Prefer broad tags.** If a tag would apply to fewer than ~5 documents, it probably shouldn't exist as its own tag.
+- **`tag --all` requires explicit human confirmation.** It runs the configured summarizer model once per document. Before invoking it, tell the human roughly how many documents will be classified and which model will be used (the model is configured in `bartleby ready`).
+- **`add_tag` may return `{status: "conflict", ...}`** when the proposed description is too similar to an existing tag. Surface the conflict to the human verbatim — don't create the tag anyway, don't pick a different name silently. The user decides: accept the existing tag, rename it, or merge.
+- **Two ways to assign a tag.** `tag` lets the summarizer model decide (good for *topical* categories the summary describes). `assign_tag` / `unassign_tag` record a decision *you* made, with no LLM — the only path for *body-level* categories (OCR quality, language, "contains tables") that the summary doesn't capture. Reach for `assign_tag` when you've already established membership yourself; reach for `tag` when you want the model to judge.
 
 ## Memory rules
 
@@ -119,8 +168,10 @@ Rules:
 
 - Place the marker immediately after the claim it supports (no space before the `[`).
 - One marker per chunk per claim. If a single claim rests on two chunks, write `claim[^123][^456]`.
+- **Only `[^N]` markers count.** Forms like `[chunks 1677, 1678]` or `[chunk 1677]` are silently dropped at save time — only some of your citations will land in the DB. Write `[^1677][^1678]` from the start; don't write the prose form and plan to clean up later.
 - The chunk_id must be one returned by `search` or `read_chunks` in this session. Invented IDs fail loudly.
 - **Never cite a finding chunk** (`source_kind == "finding"`). Findings are derivative; cite the underlying document chunk instead.
+- **Web sources use standard markdown links.** If a claim rests on data you pulled from a website (not a corpus chunk), attribute it inline as `[anchor text](https://url)`. Markdown links don't satisfy the `[^N]` requirement on their own — every finding still needs at least one chunk citation — but they're the right way to credit external web sources alongside chunk citations.
 
 When the user asks for a structured deliverable (table, comparison, timeline), produce it directly — with `[^N]` markers in each cell as needed.
 

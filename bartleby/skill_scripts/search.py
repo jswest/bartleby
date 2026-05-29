@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """search — keyword + semantic + RRF search across documents/summaries/findings/images.
 
-Defaults: documents + images, both modes on, context=1, limit=20. Pass any of
-``--documents`` / ``--summaries`` / ``--findings`` / ``--images`` to override
-the default set.
+Defaults: documents + images, both modes on, no surrounding context, limit=20.
+Pass any of ``--documents`` / ``--summaries`` / ``--findings`` / ``--images``
+to override the default set. Opt into neighbor chunks with ``--add-context N``
+(0..5) — each step roughly multiplies output size by (1 + 2N).
+
+``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
+underlying document carries any of the given tags. Combines naturally with
+``--in-documents`` (intersection: the document must be in both sets) and
+drops findings the same way (findings have no document anchor).
 
 Output:
     {
@@ -12,6 +18,7 @@ Output:
       "source_kinds": [str, ...],
       "memory_excluded": bool,
       "in_documents": [int, ...]|null,
+      "tags": [str, ...]|null,
       "context": int,
       "results": [{
         "chunk_id": int, "source_kind": str, "source_id": int,
@@ -48,7 +55,7 @@ from bartleby.skill_scripts._common import (
 
 
 RRF_K = 60
-DEFAULT_CONTEXT = 1
+DEFAULT_CONTEXT = 0
 DEFAULT_LIMIT = 20
 MAX_CONTEXT = 5
 OVERFETCH_MULTIPLIER = 5
@@ -59,7 +66,7 @@ def _context_value(s: str) -> int:
     v = int(s)
     if not 0 <= v <= MAX_CONTEXT:
         raise argparse.ArgumentTypeError(
-            f"context must be in 0..{MAX_CONTEXT}"
+            f"add-context must be in 0..{MAX_CONTEXT}"
         )
     return v
 
@@ -91,7 +98,25 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "dropped (they are not tied to documents)."
         ),
     )
-    p.add_argument("--context", type=_context_value, default=DEFAULT_CONTEXT)
+    p.add_argument(
+        "--tag", action="append", default=None, dest="tags",
+        help=(
+            "Restrict to documents carrying this tag. Repeat for OR "
+            "semantics. Findings are dropped. Combines with --in-documents "
+            "as an intersection."
+        ),
+    )
+    p.add_argument(
+        "--add-context",
+        type=_context_value,
+        default=DEFAULT_CONTEXT,
+        dest="context",
+        help=(
+            "Number of neighbor chunks (0..5) to attach to each hit as "
+            "context_before/context_after. Default 0 (empty arrays). "
+            "Each step roughly multiplies output size by (1 + 2N) — use sparingly."
+        ),
+    )
     p.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
@@ -314,18 +339,39 @@ def _fetch_context(
     return before, after
 
 
+def _intersect_tag_filter(
+    conn, in_documents: list[int] | None, tag_names: list[str] | None,
+) -> tuple[list[int] | None, list[str] | None]:
+    """If ``--tag`` is set, fold tagged documents into ``in_documents`` as an
+    intersection. Empty intersection returns ``[]`` (the scope dict yields
+    no SQL predicates, so the search returns no hits — the correct behavior).
+    """
+    if not tag_names:
+        return in_documents, None
+    from bartleby.skill_scripts._tags import (
+        documents_with_any_tag, resolve_tag_names,
+    )
+    tag_ids = resolve_tag_names(conn, tag_names)
+    tagged_docs = documents_with_any_tag(conn, tag_ids)
+    if in_documents is None:
+        return tagged_docs, tag_names
+    return sorted(set(in_documents) & set(tagged_docs)), tag_names
+
+
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
-    in_documents = args.in_documents
+    in_documents, tag_names = _intersect_tag_filter(
+        conn, args.in_documents, args.tags,
+    )
 
     memory_enabled = conn.cursor().execute(
         "SELECT memory_enabled FROM sessions WHERE session_id = ?", (session_id,)
     ).fetchone()[0]
-    # Findings drop out when memory is off OR when --in-documents is set
+    # Findings drop out when memory is off OR when --in-documents/--tag is set
     # (findings have no document anchor). memory_excluded reports only the
     # memory case — that's the signal documented in SKILL.md.
     memory_excluded = "finding" in source_kinds and not memory_enabled
@@ -340,6 +386,7 @@ def work(*, conn, args, session_id) -> dict:
             "source_kinds": source_kinds,
             "memory_excluded": memory_excluded,
             "in_documents": in_documents,
+            "tags": tag_names,
             "context": args.context,
             "results": results,
         }
