@@ -22,6 +22,8 @@ SCRIPTS = (
     "save_summary",
     "save_finding",
     "edit_finding",
+    "list_findings",
+    "read_finding",
     "read_tags",
     "add_tag",
     "delete_tag",

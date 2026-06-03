@@ -1,0 +1,141 @@
+"""Smoke test for skill/scripts/list_findings.py."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from bartleby.db.chunks import ChunkInput, insert_finding_chunks
+from bartleby.db.connection import open_db
+from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.skill_scripts import list_findings
+from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+
+
+def _emb() -> list[float]:
+    return [0.01 * i for i in range(EMBEDDING_DIM)]
+
+
+def _seed_finding(conn, *, session_id, title, description, body="body",
+                  cited_chunk_ids=()):
+    """Insert a finding (+ optional citations) directly, returning its id."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, title, description, body),
+    )
+    finding_id = conn.last_insert_rowid()
+    insert_finding_chunks(conn, finding_id, [
+        ChunkInput(text=body, embedding=_emb(), chunk_index=0),
+    ])
+    for chunk_id in cited_chunk_ids:
+        cur.execute(
+            "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
+            (finding_id, chunk_id),
+        )
+    return finding_id
+
+
+def _active_session_id(project):
+    """The session the runner auto-resolves (created by seeded_project access)."""
+    from bartleby.session import ensure_active_session
+    return ensure_active_session(project)
+
+
+def _run(capsys, argv):
+    with pytest.raises(SystemExit) as exc:
+        list_findings.main(argv)
+    return exc.value.code, capsys.readouterr()
+
+
+def test_list_findings_empty(seeded_project, capsys):
+    list_findings.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["findings"] == []
+    assert out["hint"] is None
+
+
+def test_list_findings_happy_path(seeded_project, capsys):
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+
+    conn = open_db(project)
+    try:
+        doc_chunk = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id=? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+        _seed_finding(conn, session_id=session_id, title="First",
+                      description="oldest", cited_chunk_ids=[doc_chunk])
+        _seed_finding(conn, session_id=session_id, title="Second",
+                      description="newest", cited_chunk_ids=[])
+    finally:
+        conn.close()
+
+    list_findings.main(["--project", project])
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["total"] == 2
+    # Newest-first ordering (finding_id DESC).
+    assert [f["title"] for f in out["findings"]] == ["Second", "First"]
+    first, second = out["findings"][1], out["findings"][0]
+    assert first["citation_count"] == 1
+    assert second["citation_count"] == 0
+    assert first["description"] == "oldest"
+    assert first["session_name"]
+    assert first["created_at"] is not None
+
+
+def test_list_findings_pagination_hint(seeded_project, capsys):
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+
+    conn = open_db(project)
+    try:
+        for i in range(3):
+            _seed_finding(conn, session_id=session_id, title=f"f{i}",
+                          description="x")
+    finally:
+        conn.close()
+
+    list_findings.main(["--project", project, "--limit", "2", "--offset", "0"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 3
+    assert len(out["findings"]) == 2
+    assert out["hint"] == "Showing 1-2 of 3. Pass --offset 2 to continue."
+
+    # Last page leaves no hint.
+    list_findings.main(["--project", project, "--limit", "2", "--offset", "2"])
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["findings"]) == 1
+    assert out["hint"] is None
+
+
+def test_list_findings_memory_off(seeded_project, capsys):
+    from bartleby.session import start_session
+
+    project = seeded_project["project"]
+    # Seed a finding under a memory-on session first.
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
+            ("author", 1),
+        )
+        author = conn.last_insert_rowid()
+        _seed_finding(conn, session_id=author, title="hidden", description="x")
+    finally:
+        conn.close()
+
+    # Now make the active session memory-off.
+    start_session(project, memory_enabled=False)
+
+    code, captured = _run(capsys, ["--project", project])
+    assert code == 1
+    out = json.loads(captured.out)
+    assert out["code"] == "MEMORY_OFF"

@@ -42,6 +42,9 @@ bartleby skill save_summary --document 4 --title "..." --description "..." --tex
 bartleby skill save_finding --title "..." --description "..." --body-file ~/.bartleby/tmp/finding.md
 bartleby skill edit_finding --finding-id 12 --body-file ~/.bartleby/tmp/finding.md
 bartleby skill edit_finding --finding-id 12 --title "Updated title"
+bartleby skill list_findings                             # browse prior findings, newest first (id, title, description, session, citation_count)
+bartleby skill list_findings --offset 200                # continue past the first page (default --limit 200)
+bartleby skill read_finding --finding-id 12              # the whole finding: body, chunk_ids, resolved citations
 bartleby skill read_tags
 bartleby skill add_tag --name ch --description "Central Hudson rate-case filings and exhibits"
 bartleby skill tag --all
@@ -75,6 +78,8 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. Optional `--authored-date YYYY-MM-DD` sets the document's stated authored/published date; anything that isn't a real calendar date is silently stored as null. |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a scratch file so you can write long markdown — stage it under `~/.bartleby/tmp/` (see "Where to stage scratch" below). `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
 | `edit_finding --finding-id <id> [--title <t>] [--description <d>] [--body-file <path>]` | Update an existing finding in place. At least one of `--title` / `--description` / `--body-file` is required. When the body changes, citations are re-extracted from the new text and the finding's chunks are rebuilt — same validation rules as `save_finding` (must contain `[^N]` markers, all referencing real chunk_ids). Use this when a prior finding's citations are malformed (`[chunks 1, 2]` instead of `[^1][^2]`) or its title/description needs to change. Don't create a fresh finding for a fix — edit the existing one so `search --findings` doesn't end up with both versions. |
+| `list_findings` | **Browse prior findings.** The `list_documents` of memory: enumerate findings newest-first, each with `finding_id`, `title`, `description` (the one-line hook), `session_name` (who authored it), `created_at`, and `citation_count`. Use it to see what previous sessions concluded before starting a topic — `search --findings` ranks fragments by relevance, this just lists what *exists*. Paginated via `--offset` / `--limit` (default `--limit 200`); a `hint` string gives the next `--offset` when more remain. Returns a `MEMORY_OFF` error in a no-memory session (see memory rules). |
+| `read_finding --finding-id <id>` | **Read one whole finding by id.** Returns the full `body` (verbatim markdown), plus `title`, `description`, `created_at`, the authoring `session_id` / `session_name`, the finding's own `chunk_ids`, and resolved `citations` (each with `source_kind` / `source_name` / `file_name` / `page_number`). Same output shape as `save_finding` / `edit_finding`. Use it after `list_findings` (or when you have a `finding_id` in hand) to read a prior finding in full instead of blind-searching for its fragments. `FINDING_NOT_FOUND` for an unknown id; `MEMORY_OFF` in a no-memory session. Remember findings are hints — never cite one. |
 | `read_tags` | List the controlled vocabulary: `[{tag_id, name, description, doc_count}]`. **Always run this before any other tag operation.** Empty until someone adds tags. |
 | `add_tag --name <n> --description <d>` | Create a tag. Runs an embedding-similarity + normalized-name check against existing tags; on near-match returns `{status: "conflict", similar_to: {...}}` instead of creating, so you can surface the conflict to the human rather than fragmenting the vocabulary. **Humans drive tag creation** — only propose new tags when the human explicitly asks. |
 | `delete_tag --name <n>` | Drop a tag. Cascades to all `document_tags` assignments. |
@@ -145,14 +150,14 @@ Tags are a controlled vocabulary the user curates to slice the corpus by categor
 
 ## Memory rules
 
-Prior findings live in the database and are reachable via `search --findings`. Treat them as **hints**, never as evidence:
+Prior findings live in the database and are reachable three ways: `search --findings` (ranked fragments matching a query), `list_findings` (browse what exists, newest first), and `read_finding --finding-id <id>` (one whole finding). Treat them as **hints**, never as evidence:
 
-- Use them at the start of a topic to see what previous agents concluded and where gaps remain.
+- Use them at the start of a topic to see what previous agents concluded and where gaps remain — `list_findings` to survey, `read_finding` to read one in full.
 - **Never cite a finding.** Findings are derivative; the underlying documents are the evidence.
 
 If the user asks you to "ignore previous memory" or "start fresh" mid-session, stop and tell them to restart with `bartleby session start --no-memory`. The skill cannot honor memory-off requests inside an already-running session — that decision happens out-of-band, before you start.
 
-If `search` returns `"memory_excluded": true`, you are already in a no-memory session. Don't pass `--findings`; it will be silently dropped.
+If `search` returns `"memory_excluded": true`, you are already in a no-memory session. Don't pass `--findings`; it will be silently dropped. In the same session, `list_findings` and `read_finding` don't drop silently — they return a `{"code": "MEMORY_OFF"}` error, because a direct "read my findings" command failing quietly would be more confusing than an honest refusal.
 
 ## Output
 
