@@ -338,6 +338,104 @@ def test_tag_single_tag_force_can_unassign(
         conn.close()
 
 
+def test_tag_one_failure_does_not_abort_run(seeded_project, capsys, monkeypatch):
+    """A classifier error on one document records it in `failed` and the rest
+    of the sweep still runs (issue #36)."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # doc_b also gets a summary so both documents reach the classifier.
+        cur.execute(
+            "INSERT INTO summaries (document_id, title, description, text, model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (seeded_project["doc_b"], "Beta", "Test summary of beta.",
+             "A summary of beta.", "test"),
+        )
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+    finally:
+        conn.close()
+
+    class _RaisingProvider:
+        """Raises on the alpha document, succeeds on every other."""
+        name = "stub"
+
+        def classify(self, prompt, *, model, schema, temperature=0.0):
+            if "alpha" in prompt:
+                raise RuntimeError(
+                    "Ollama returned an empty response for _TagApplies."
+                )
+            return schema.model_validate({"applies": True})
+
+        def summarize(self, *a, **k):
+            raise NotImplementedError
+
+        def analyze_image(self, *a, **k):
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        tags_helpers, "resolve_classifier",
+        lambda: (_RaisingProvider(), "stub-model", 0.0),
+    )
+
+    tag_script.main([
+        "--project", seeded_project["project"], "--all", "--tag", "a",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    classified_ids = [c["document_id"] for c in out["classified"]]
+    failed_ids = [f["document_id"] for f in out["failed"]]
+    assert seeded_project["doc_b"] in classified_ids  # the good doc still ran
+    assert failed_ids == [seeded_project["doc_a"]]     # the bad doc is recorded
+    assert "RuntimeError" in out["failed"][0]["error"]
+
+
+def test_tag_retries_transient_failure_once(seeded_project, capsys, monkeypatch):
+    """An empty/transient classifier error is retried once before being
+    recorded as failed (issue #36)."""
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO tags (name, description) VALUES ('a', 'd1')"
+        )
+    finally:
+        conn.close()
+
+    calls = {"n": 0}
+
+    class _FlakyProvider:
+        """Fails the first call, succeeds on the retry."""
+        name = "stub"
+
+        def classify(self, prompt, *, model, schema, temperature=0.0):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError(
+                    "Ollama returned an empty response for _TagApplies."
+                )
+            return schema.model_validate({"applies": True})
+
+        def summarize(self, *a, **k):
+            raise NotImplementedError
+
+        def analyze_image(self, *a, **k):
+            raise NotImplementedError
+
+    monkeypatch.setattr(
+        tags_helpers, "resolve_classifier",
+        lambda: (_FlakyProvider(), "stub-model", 0.0),
+    )
+
+    tag_script.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]), "--tag", "a",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    assert calls["n"] == 2          # one failure, then a successful retry
+    assert out["failed"] == []
+    assert out["classified"][0]["applies"] is True
+
+
 def test_tag_rejects_when_no_vocabulary(seeded_project, capsys):
     with pytest.raises(SystemExit):
         tag_script.main([
