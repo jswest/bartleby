@@ -57,6 +57,16 @@ def run(
     from bartleby.lib.quiet import setup_quiet_third_party
     setup_quiet_third_party(verbose=False)
 
+    # Best-effort: guarantee the skill's scratch dir exists (mode 700) before the
+    # agent writes a finding body there. Every realistic flow runs a skill command
+    # before save_finding, so this races ahead of the agent's --body-file write.
+    # Never let scratch setup break the actual tool call.
+    try:
+        from bartleby import config
+        config.ensure_scratch_dir()
+    except Exception:
+        pass
+
     start = time.perf_counter()
     args = parse_args(argv)
     args_dict = {k: v for k, v in vars(args).items() if v is not None}

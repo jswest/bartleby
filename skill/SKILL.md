@@ -39,8 +39,8 @@ bartleby skill read_chunks --chunks 4192,4188,9201
 bartleby skill read_chunks --around-chunk 1629 --window 5   # target chunk plus 5 on each side
 bartleby skill read_document --document 4 --summary
 bartleby skill save_summary --document 4 --title "..." --description "..." --text "..."
-bartleby skill save_finding --title "..." --description "..." --body-file /tmp/finding.md
-bartleby skill edit_finding --finding-id 12 --body-file /tmp/finding.md
+bartleby skill save_finding --title "..." --description "..." --body-file ~/.bartleby/tmp/finding.md
+bartleby skill edit_finding --finding-id 12 --body-file ~/.bartleby/tmp/finding.md
 bartleby skill edit_finding --finding-id 12 --title "Updated title"
 bartleby skill read_tags
 bartleby skill add_tag --name ch --description "Central Hudson rate-case filings and exhibits"
@@ -73,7 +73,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_chunks --document <id>` | Paginated reads when you want to scan a document's structure. `--offset` / `--limit`. Add `--preview N` to trim each chunk's `text` to the first `N` chars (the response appends `…` when trimmed); every chunk also carries `text_length`, the pre-truncation length, so you can tell which chunks were cut. Use `--preview` when you're navigating structure and don't need full prose yet; re-fetch the same chunks without it once you've decided which to read in full. Alternatively `read_chunks --chunks 4192,4193,...` looks up specific chunks directly by `chunk_id` — useful for revisiting a chunk you cited earlier or pulling the chunk behind a citation you saw on a finding. Or `read_chunks --around-chunk <id> --window N` for a neighborhood read: returns the target chunk plus N chunks on each side in source order (default `--window 3`). The source kind+id are derived from the chunk_id — no need to also pass `--document`. Prefer this over re-searching for adjacency once you have a `chunk_id` in hand. `--preview` works in all three modes. Works for image chunks. |
 | `read_document --document <id>` | Whole-document read. Returns both summary and full text by default. `--summary` for summary only. `--full` for full text only. `--force` bypasses the size guard. **`--full` reassembles chunks into clean prose carrying no `chunk_id`s** — use it for comprehension you won't cite from. If you intend to cite, read with `read_chunks --document <id>` instead (every chunk comes back with its `chunk_id`); citing from `--full` forces a wasteful second search pass just to recover the IDs. |
 | `save_summary --document <id> --title <t> --description <d> --text <md>` | Write or replace the agent-authored summary for a document. Use when an existing summary is wrong or missing important context. `--title` and `--description` are how the document will show up in `list_documents`, so make them informative. Optional `--authored-date YYYY-MM-DD` sets the document's stated authored/published date; anything that isn't a real calendar date is silently stored as null. |
-| `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a tempfile so you can write long markdown. `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
+| `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a scratch file so you can write long markdown — stage it under `~/.bartleby/tmp/` (see "Where to stage scratch" below). `--description` is a one-line hook future agents see when triaging findings. **Citations come from the body itself**: every `[^N]` marker in the prose (where `N` is a `chunk_id`) is a citation. The body must contain at least one such marker; `save_finding` rejects bodies that don't. |
 | `edit_finding --finding-id <id> [--title <t>] [--description <d>] [--body-file <path>]` | Update an existing finding in place. At least one of `--title` / `--description` / `--body-file` is required. When the body changes, citations are re-extracted from the new text and the finding's chunks are rebuilt — same validation rules as `save_finding` (must contain `[^N]` markers, all referencing real chunk_ids). Use this when a prior finding's citations are malformed (`[chunks 1, 2]` instead of `[^1][^2]`) or its title/description needs to change. Don't create a fresh finding for a fix — edit the existing one so `search --findings` doesn't end up with both versions. |
 | `read_tags` | List the controlled vocabulary: `[{tag_id, name, description, doc_count}]`. **Always run this before any other tag operation.** Empty until someone adds tags. |
 | `add_tag --name <n> --description <d>` | Create a tag. Runs an embedding-similarity + normalized-name check against existing tags; on near-match returns `{status: "conflict", similar_to: {...}}` instead of creating, so you can surface the conflict to the human rather than fragmenting the vocabulary. **Humans drive tag creation** — only propose new tags when the human explicitly asks. |
@@ -185,13 +185,17 @@ So: **the body you save and the body you deliver are the same bytes.**
 
 The mechanics:
 
-1. Write your finished markdown answer to the tempfile and call `save_finding --body-file <path> ...`.
+1. Write your finished markdown answer to a scratch file under `~/.bartleby/tmp/` and call `save_finding --body-file <path> ...`.
 2. The response includes a `body` field — the exact text that landed in the DB.
 3. In your chat reply, emit that `body` field verbatim. Don't retype it from memory; copy it from the response. Same words, same citations, same markdown structure, byte-for-byte.
 
 You may wrap framing **around** the body — a one-line intro ("Here's what I found:"), a brief TL;DR above, or a short next-step note below. You may not modify the body itself: no rewording, no condensing, no reordering, no silently dropping a citation. If the body needs to change, change it before you save — there is only one version.
 
 This rule applies whenever you call `save_finding`. Exploratory turns with no saved finding are unaffected.
+
+### Where to stage scratch
+
+Stage `--body-file` content under `~/.bartleby/tmp/` (e.g. `~/.bartleby/tmp/finding.md`). This directory sits alongside the rest of bartleby's state and is created for you (mode `700`, user-only) the first time you run any skill command — don't `mkdir` it yourself. Don't use `/tmp`: it's world-readable on macOS, so in-progress research notes would leak to other local users on shared machines. The files are durable throwaway scratch — overwrite or delete them whenever; nothing reads them after `save_finding` returns (the canonical copy is the `body` field in the response). `--body-file` accepts any path if you genuinely need somewhere else.
 
 ## When to stop and ask
 
