@@ -14,6 +14,29 @@ PROJECTS_DIR = BARTLEBY_DIR / "projects"
 CONFIG_PATH = BARTLEBY_DIR / "config.yaml"
 
 
+def scratch_dir() -> Path:
+    """The skill's default scratch location for finding bodies (``--body-file``).
+
+    Lives under ``~/.bartleby/`` alongside the rest of bartleby's state rather
+    than world-readable ``/tmp`` — in-progress research notes shouldn't leak to
+    other local users on shared machines.
+    """
+    return BARTLEBY_DIR / "tmp"
+
+
+def ensure_scratch_dir() -> Path:
+    """Create the scratch dir (mode 700) if missing; return its path.
+
+    ``chmod`` is the load-bearing line: ``mkdir``'s mode argument is masked by
+    the umask and is a no-op when the directory already exists, so we set the
+    bits explicitly and idempotently on every call.
+    """
+    d = scratch_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    d.chmod(0o700)
+    return d
+
+
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
         return {}
