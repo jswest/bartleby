@@ -36,6 +36,7 @@ docling = [
 ]
 wsjpt = [
     "wsjpt @ git+ssh://git@github.dowjones.net/data/wsjpt.git",
+]
 sec2md = [
     "sec2md==0.1.22",
 ]
