@@ -33,8 +33,16 @@ Output:
       ],
       "skipped": [
         {"document_id": int, "file_name": str, "reason": "already_tagged"|"no_summary"}
+      ],
+      "failed": [
+        {"document_id": int, "file_name": str, "error": str}
       ]
     }
+
+A classifier error on a single document never aborts the run: the document is
+recorded in ``failed`` and the loop moves on to the next one. Each
+classification is retried once before being recorded as failed, since provider
+errors (notably an empty Ollama response) are often transient.
 """
 
 from __future__ import annotations
@@ -104,6 +112,37 @@ def _already_tagged(conn, document_id: int, tag_id: int | None) -> bool:
     ).fetchone() is not None
 
 
+# One retry per document: provider errors (e.g. an empty Ollama response) are
+# often transient, and a single bad call shouldn't drop a document from a sweep.
+_CLASSIFY_ATTEMPTS = 2
+
+
+def _classify_document(
+    conn, *, provider, model, temperature,
+    document_id, summary, single_tag, vocabulary, force,
+) -> dict:
+    """Classify one document, write its assignments, and return the verdict
+    payload (the caller attaches ``document_id``/``file_name``). Raises on
+    provider/classifier failure — the caller decides what to do with that
+    (retry, then record in ``failed``)."""
+    if single_tag is not None:
+        applies = classify_single_tag(
+            provider, model, temperature,
+            summary_text=summary, tag=single_tag,
+        )
+        if applies:
+            assign(conn, document_id, [single_tag.tag_id])
+        elif force:
+            unassign(conn, document_id, single_tag.tag_id)
+        return {"applies": applies}
+    tag_ids = classify_full_vocabulary(
+        provider, model, temperature,
+        summary_text=summary, vocabulary=vocabulary,
+    )
+    assign(conn, document_id, tag_ids)
+    return {"assigned_tag_ids": tag_ids}
+
+
 def work(*, conn, args, session_id) -> dict:
     provider, model, temperature = tags_helpers.resolve_classifier()
 
@@ -122,6 +161,7 @@ def work(*, conn, args, session_id) -> dict:
 
     classified: list[dict] = []
     skipped: list[dict] = []
+    failed: list[dict] = []
 
     for document_id, file_name in _target_documents(conn, args):
         summary = summary_for(conn, document_id)
@@ -141,29 +181,20 @@ def work(*, conn, args, session_id) -> dict:
             })
             continue
 
-        if single_tag is not None:
-            applies = classify_single_tag(
-                provider, model, temperature,
-                summary_text=summary, tag=single_tag,
-            )
-            if applies:
-                assign(conn, document_id, [single_tag.tag_id])
-            elif args.force:
-                unassign(conn, document_id, single_tag.tag_id)
-            classified.append({
-                "document_id": document_id, "file_name": file_name,
-                "applies": applies,
-            })
+        ident = {"document_id": document_id, "file_name": file_name}
+        for _ in range(_CLASSIFY_ATTEMPTS):
+            try:
+                verdict = _classify_document(
+                    conn, provider=provider, model=model, temperature=temperature,
+                    document_id=document_id, summary=summary,
+                    single_tag=single_tag, vocabulary=vocabulary, force=args.force,
+                )
+                classified.append({**ident, **verdict})
+                break
+            except Exception as e:  # noqa: BLE001 — one bad doc must not abort the sweep
+                error = f"{type(e).__name__}: {e}"
         else:
-            tag_ids = classify_full_vocabulary(
-                provider, model, temperature,
-                summary_text=summary, vocabulary=vocabulary,
-            )
-            assign(conn, document_id, tag_ids)
-            classified.append({
-                "document_id": document_id, "file_name": file_name,
-                "assigned_tag_ids": tag_ids,
-            })
+            failed.append({**ident, "error": error})
 
     return {
         "mode": "single-tag" if single_tag is not None else "full-vocab",
@@ -171,6 +202,7 @@ def work(*, conn, args, session_id) -> dict:
         "model": model,
         "classified": classified,
         "skipped": skipped,
+        "failed": failed,
     }
 
 
