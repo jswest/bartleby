@@ -50,6 +50,31 @@ def reject_malformed_citations(body: str) -> None:
     )
 
 
+def require_memory_enabled(conn, session_id: int) -> None:
+    """Raise ``MEMORY_OFF`` if the current session has memory disabled.
+
+    Findings are the agent's persistent memory. ``search`` silently drops
+    findings from a mixed result list when memory is off (the load-bearing
+    invariant), but the finding-only read commands (``list_findings`` /
+    ``read_finding``) instead fail *explicitly*: a direct "read my findings"
+    that returned nothing would be more confusing than an honest error. This
+    deliberately reveals that findings exist — accepted as the right tradeoff
+    for direct-intent commands.
+    """
+    # The runner resolves/creates the active session before work() runs, so
+    # the row is guaranteed to exist (same assumption as search.py).
+    memory_enabled = conn.cursor().execute(
+        "SELECT memory_enabled FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()[0]
+    if not memory_enabled:
+        raise SkillError(
+            "MEMORY_OFF",
+            "This session has memory disabled, so findings are not accessible. "
+            "Start a memory-enabled session (omit --no-memory) to browse or "
+            "read findings.",
+        )
+
+
 def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
     """Raise ``UNKNOWN_CITATIONS`` if any chunk_id is missing from ``chunks``."""
     if not chunk_ids:

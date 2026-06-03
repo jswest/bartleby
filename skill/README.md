@@ -53,6 +53,8 @@ The skill ships a `scripts/` directory containing small Python scripts that the 
 | `read_document` | Read a full document and/or its summary. Refuses oversized documents without `--force`. |
 | `save_summary` | Save an agent-authored summary back into the database (chunked and embedded). |
 | `save_finding` | Save a finding (markdown text + structural citations) into the database. |
+| `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count. Paginated. The enumeration counterpart to `search --findings`. |
+| `read_finding` | Read one whole finding by id — full body, the finding's chunks, and resolved citations. Same shape as `save_finding`. |
 
 The scripts wrap a shared Python library that owns all writes to the chunks table. Source-kind discipline (`document` vs. `summary` vs. `finding`) is enforced both by a `CHECK` constraint at the SQL layer and by typed insert helpers in the library, so agents can't accidentally mislabel chunks.
 
@@ -99,6 +101,8 @@ Findings are the durable output of a research session. They live in the `finding
 Findings are chunked and embedded into the same vector space as documents and agent-generated summaries. This means cross-session memory is just semantic search — the agent searches its own past findings the same way it searches the corpus.
 
 Findings are tagged with `source_kind = 'finding'` and excluded from search by default. The agent must opt in via `--findings` to include them. The skill's prompt guides the agent on when to do this (typically: at the start of a new topic, to check for prior relevant work; never as primary evidence in a citation).
+
+Beyond relevance search, findings have two direct read paths: `list_findings` enumerates them (newest first, for browsing), and `read_finding --finding-id <id>` returns one whole finding. Both honor memory-off the same way `search` does — but where `search` silently drops findings, these return an explicit `{"code": "MEMORY_OFF"}` error, since a direct "read my findings" command failing quietly would be more confusing than an honest refusal.
 
 ---
 
