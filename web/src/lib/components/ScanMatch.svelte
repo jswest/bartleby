@@ -6,15 +6,15 @@
   }
 
   // Enriched server-side: match.title (summary title), match.description,
-  // match.href (source PDF at the cited page). Scan is documents-only.
+  // match.href (the document detail page at the cited page). Scan is documents-only.
   $: title = match.title ?? stripExt(match.file_name);
   $: truncated = match.text_length > match.text.length;
 </script>
 
 <li class="match">
   <h3 class="title">
-    <a href={match.href} target="_blank" rel="noopener noreferrer">
-      {title}<span class="open"> ↗{match.page_number ? ` p.${match.page_number}` : ""}</span>
+    <a href={match.href}>
+      {title}{#if match.page_number}<span class="page-hint"> p.{match.page_number}</span>{/if}
     </a>
   </h3>
 
@@ -53,7 +53,7 @@
   .title a:hover {
     color: var(--color-off);
   }
-  .title .open {
+  .title .page-hint {
     font-family: var(--font-sans);
     font-size: 0.75rem;
     font-weight: 600;
