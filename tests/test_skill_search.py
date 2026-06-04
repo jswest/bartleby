@@ -342,6 +342,75 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
     assert out["results"] == []
 
 
+def test_search_semantic_scope_survives_global_nearest_elsewhere(
+    seeded_project, capsys, monkeypatch
+):
+    """Regression for #55: when more out-of-scope chunks than the over-fetch
+    window are nearer to the query than the in-scope chunks, a semantic search
+    scoped to doc_a must still return doc_a's chunks. The old post-filter
+    (fetch k globally-nearest, then drop out-of-scope rows) starved to [] here;
+    pushing the scope into the index fixes it."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+
+    # Seed a decoy document with MORE near-query chunks than the over-fetch
+    # window, so every chunk in the global top-`overfetch` is out of scope and a
+    # post-filter to doc_a would wipe the result set to empty.
+    limit = 1  # mirror work()'s overfetch calc for this query's --limit
+    overfetch = max(
+        limit * search_script.OVERFETCH_MULTIPLIER, search_script.OVERFETCH_FLOOR
+    )
+    n_decoys = overfetch + 5
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("h-decoy", "decoy.txt", "/tmp/decoy.txt", None, 0),
+        )
+        doc_c = conn.last_insert_rowid()
+        # Decoys cluster at seed ~1.0; doc_a's fixture chunks sit at seed 0.0-0.3.
+        insert_document_chunks(conn, doc_c, [
+            ChunkInput(
+                text=f"decoy chunk {i}",
+                embedding=[1.0 + 0.0001 * i + 0.001 * j for j in range(EMBEDDING_DIM)],
+                chunk_index=i,
+            )
+            for i in range(n_decoys)
+        ])
+    finally:
+        conn.close()
+
+    # Query vector near 1.05 ranks the decoys (and doc_b) as the global nearest;
+    # doc_a's chunks fall well outside the top-`overfetch` window.
+    near_decoys = struct.pack(
+        f"{EMBEDDING_DIM}f", *[1.05 + 0.001 * j for j in range(EMBEDDING_DIM)]
+    )
+    monkeypatch.setattr(search_script, "_embed_query", lambda q: near_decoys)
+
+    # Premise: unscoped, the global nearest hit is NOT in doc_a.
+    _run([
+        "--project", seeded_project["project"],
+        "--semantic", "--documents", "--limit", str(limit),
+        "anything",
+    ])
+    unscoped = json.loads(capsys.readouterr().out)
+    assert unscoped["results"][0]["source_id"] != seeded_project["doc_a"]
+
+    # Scoped to doc_a, the in-scope chunks must come back — not [].
+    _run([
+        "--project", seeded_project["project"],
+        "--semantic", "--documents", "--limit", str(limit),
+        "--in-documents", str(seeded_project["doc_a"]),
+        "anything",
+    ])
+    scoped = json.loads(capsys.readouterr().out)
+    assert scoped["results"], "scoped semantic search starved to empty (issue #55)"
+    for r in scoped["results"]:
+        assert r["source_kind"] == "document"
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
 def test_search_includes_image_chunks_with_id_and_path(seeded_project, capsys):
     from tests._skill_fixtures import seed_image
     conn = open_db(seeded_project["project"])
