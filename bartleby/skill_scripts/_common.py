@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from pathlib import Path
 from typing import Callable
 
 from bartleby.db.chunks import (
@@ -94,6 +95,54 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
             "Each [^N] marker must be a real chunk_id in this project.",
             unknown_chunk_ids=missing,
         )
+
+
+def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
+    """Read a finding body file and return ``(body, validated_citations)``.
+
+    The single read+validate path shared by ``save_finding``, ``edit_finding``,
+    and ``merge_findings``: existence (``BODY_FILE_NOT_FOUND``), non-empty
+    (``EMPTY_BODY``), no caret-less ``[N]`` markers (``MALFORMED_CITATION``),
+    at least one ``[^N]`` marker (``NO_INLINE_CITATIONS``), and every cited
+    chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
+    first-appearance order, deduped.
+    """
+    body_path = Path(body_file)
+    if not body_path.exists() or not body_path.is_file():
+        raise SkillError(
+            "BODY_FILE_NOT_FOUND",
+            f"--body-file path does not exist: {body_path}",
+        )
+    body = body_path.read_text(encoding="utf-8")
+    if not body.strip():
+        raise SkillError("EMPTY_BODY", "Finding body is empty.")
+
+    reject_malformed_citations(body)
+    citations = extract_citations(body)
+    if not citations:
+        raise SkillError(
+            "NO_INLINE_CITATIONS",
+            "Finding body must include at least one inline citation marker "
+            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
+        )
+    validate_chunk_ids_exist(conn, citations)
+    return body, citations
+
+
+def validated_replacement(
+    new_value: str | None, current: str, *, code: str, label: str,
+) -> str:
+    """Return ``new_value`` (validated non-blank) or ``current`` if unchanged.
+
+    Used by ``edit_finding`` / ``merge_findings`` for optional ``--title`` /
+    ``--description`` overrides: omitting the flag keeps the current value;
+    passing a blank one is rejected with ``code``.
+    """
+    if new_value is None:
+        return current
+    if not new_value.strip():
+        raise SkillError(code, f"Finding {label} must be non-empty.")
+    return new_value
 
 
 def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
