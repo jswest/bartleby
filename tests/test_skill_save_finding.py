@@ -205,6 +205,48 @@ def test_save_finding_unknown_inline_marker(seeded_project, tmp_path, capsys):
     assert out["unknown_chunk_ids"] == [999999]
 
 
+def test_finding_scripts_surface_session_provenance(seeded_project, tmp_path, capsys):
+    """save/read/list all report the authoring session's model + harness."""
+    from bartleby.session import set_session_provenance
+    from bartleby.skill_scripts import list_findings, read_finding
+
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cid = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text(f"Claim[^{cid}].", encoding="utf-8")
+    save_finding.main([
+        "--project", project, "--title", "t", "--description", "d",
+        "--body-file", str(body_file),
+    ])
+    saved = json.loads(capsys.readouterr().out)
+    finding_id = saved["finding_id"]
+    # save_finding always reports the keys (value may be env-derived at create time).
+    assert "model" in saved and "harness" in saved
+
+    # Stamp the authoring (active) session, then confirm read/list reflect it.
+    set_session_provenance(project, model="qwen3.6:35b-mlx", harness="ollama-cli")
+
+    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_out = json.loads(capsys.readouterr().out)
+    assert read_out["model"] == "qwen3.6:35b-mlx"
+    assert read_out["harness"] == "ollama-cli"
+
+    list_findings.main(["--project", project])
+    list_out = json.loads(capsys.readouterr().out)
+    row = next(f for f in list_out["findings"] if f["finding_id"] == finding_id)
+    assert row["model"] == "qwen3.6:35b-mlx"
+    assert row["harness"] == "ollama-cli"
+
+
 def test_save_finding_missing_body_file(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_finding.main([

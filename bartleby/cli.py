@@ -68,11 +68,26 @@ def main():
     session_sub = session_parser.add_subparsers(dest="session_command")
     ss = session_sub.add_parser("start", help="Start a new session and mark it active")
     ss.add_argument("--no-memory", action="store_true")
+    ss.add_argument(
+        "--harness", type=str, default=None,
+        help="Harness that will author this session's findings (e.g. claude-code). "
+             "Auto-detected when omitted.",
+    )
+    ss.add_argument(
+        "--model", type=str, default=None,
+        help="Model that will author this session's findings (e.g. claude-opus-4-8).",
+    )
     ss.add_argument("--project", type=str, default=None)
     sc = session_sub.add_parser("current", help="Show the active session")
     sc.add_argument("--project", type=str, default=None)
     se = session_sub.add_parser("end", help="End the active session")
     se.add_argument("--project", type=str, default=None)
+    sset = session_sub.add_parser(
+        "set", help="Set the active session's model and/or harness after the fact"
+    )
+    sset.add_argument("--harness", type=str, default=None)
+    sset.add_argument("--model", type=str, default=None)
+    sset.add_argument("--project", type=str, default=None)
 
     embed_parser = subparsers.add_parser(
         "embed", help="Print the BGE embedding for a string as a JSON array to stdout"
@@ -182,11 +197,18 @@ def _session(args, parser):
 
     project = getattr(args, "project", None)
     if args.session_command == "start":
-        session_cmd.start(project=project, no_memory=args.no_memory)
+        session_cmd.start(
+            project=project, no_memory=args.no_memory,
+            harness=args.harness, model=args.model,
+        )
     elif args.session_command == "current":
         session_cmd.current(project=project)
     elif args.session_command == "end":
         session_cmd.end(project=project)
+    elif args.session_command == "set":
+        session_cmd.set_provenance(
+            project=project, harness=args.harness, model=args.model,
+        )
 
 
 if __name__ == "__main__":

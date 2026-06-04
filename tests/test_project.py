@@ -112,7 +112,7 @@ def test_list_projects_marks_active(projects_root):
 
 
 def test_upgrade_chain_walks_from_v4_through_current(projects_root):
-    """Upgrading a v4 DB runs v4→v5 then v5→v6, leaving all new shapes present."""
+    """Upgrading a v4 DB walks v4→v5→v6→v7, leaving all new shapes present."""
     import apsw
 
     from bartleby.commands import project as project_cmd
@@ -124,6 +124,8 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
     conn = apsw.Connection(str(db_path))
     try:
         cur = conn.cursor()
+        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
+        cur.execute("ALTER TABLE sessions DROP COLUMN model")
         cur.execute("DROP INDEX idx_document_tags_tag")
         cur.execute("DROP TABLE document_tags")
         cur.execute("DROP TABLE tags")
@@ -154,5 +156,11 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
         }
         assert "tags" in names
         assert "document_tags" in names
+        # v7 columns landed.
+        session_cols = [
+            row[1] for row in cur.execute("PRAGMA table_info(sessions)")
+        ]
+        assert "model" in session_cols
+        assert "harness" in session_cols
     finally:
         conn.close()

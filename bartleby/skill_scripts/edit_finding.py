@@ -17,14 +17,15 @@ works after an edit):
     {
       "finding_id": int,
       "session_id": int, "session_name": str,
+      "model": str|null, "harness": str|null,
       "body": str,
       "chunk_ids": [int, ...],
       "citations": [{...}, ...]
     }
 
-``session_id`` / ``session_name`` describe the session that *owns* the
-finding (its original author), not the current session doing the edit; the
-audit log records the editor.
+``session_id`` / ``session_name`` (and ``model`` / ``harness``) describe the
+session that *owns* the finding (its original author), not the current
+session doing the edit; the audit log records the editor.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ from bartleby.skill_scripts._common import (
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
+    session_provenance,
+    validate_chunk_ids_exist,
     validated_replacement,
 )
 
@@ -114,14 +117,10 @@ def work(*, conn, args, session_id) -> dict:
     else:
         chunk_ids, citation_ids = _current_chunk_and_citation_ids(cur, args.finding_id)
 
-    session_name = cur.execute(
-        "SELECT name FROM sessions WHERE session_id = ?", (owning_session_id,)
-    ).fetchone()[0]
-
     return {
         "finding_id": args.finding_id,
         "session_id": owning_session_id,
-        "session_name": session_name,
+        **session_provenance(conn, owning_session_id),
         "body": new_body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citation_ids),
