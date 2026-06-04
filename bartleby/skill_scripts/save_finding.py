@@ -12,6 +12,7 @@ Output:
     {
       "finding_id": int,
       "session_id": int, "session_name": str,
+      "model": str|null, "harness": str|null,
       "body": str,
       "chunk_ids": [int, ...],
       "citations": [{
@@ -25,6 +26,9 @@ Output:
 ``body`` is the exact markdown that landed in ``findings.body``. The agent
 is expected to echo it verbatim back to the user — see SKILL.md for the
 single-source-of-truth contract.
+
+``model`` / ``harness`` describe the backend behind the authoring session
+(issue #62); both are null when the backend wasn't recorded.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from bartleby.skill_scripts._common import (
     reject_malformed_citations,
     replace_finding_citations,
     resolve_citations,
+    session_provenance,
     validate_chunk_ids_exist,
 )
 
@@ -101,14 +106,10 @@ def work(*, conn, args, session_id) -> dict:
     chunk_ids = rebuild_finding_chunks(conn, finding_id, body)
     replace_finding_citations(conn, finding_id, citations)
 
-    session_name = cur.execute(
-        "SELECT name FROM sessions WHERE session_id = ?", (session_id,)
-    ).fetchone()[0]
-
     return {
         "finding_id": finding_id,
         "session_id": session_id,
-        "session_name": session_name,
+        **session_provenance(conn, session_id),
         "body": body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),

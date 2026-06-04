@@ -179,3 +179,65 @@ def test_start_session_retries_on_name_collision(project, monkeypatch):
     second = session_mod.start_session(project)
     assert first["name"] == "same-name"
     assert second["name"] == "fresh-name"
+
+
+# ---------- model / harness provenance (issue #62) ----------
+
+
+def test_detect_harness_recognizes_claude_code(monkeypatch):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert session_mod.detect_harness() == "claude-code"
+
+
+def test_detect_harness_unknown_is_none(monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    assert session_mod.detect_harness() is None
+
+
+def test_start_session_records_explicit_provenance(project, monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    info = session_mod.start_session(project, model="claude-opus-4-8", harness="goose")
+    assert info["model"] == "claude-opus-4-8"
+    assert info["harness"] == "goose"
+
+    conn = open_db(project)
+    try:
+        row = conn.cursor().execute(
+            "SELECT model, harness FROM sessions WHERE session_id = ?",
+            (info["session_id"],),
+        ).fetchone()
+        assert row == ("claude-opus-4-8", "goose")
+    finally:
+        conn.close()
+
+
+def test_start_session_autodetects_harness_when_omitted(project, monkeypatch):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    info = session_mod.start_session(project)
+    assert info["harness"] == "claude-code"
+    # Model is rarely in the environment, so it stays null without an explicit value.
+    assert info["model"] is None
+
+
+def test_start_session_explicit_harness_overrides_detection(project, monkeypatch):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    info = session_mod.start_session(project, harness="pi")
+    assert info["harness"] == "pi"
+
+
+def test_set_session_provenance_updates_only_passed_fields(project, monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    started = session_mod.start_session(project)
+    assert started["model"] is None and started["harness"] is None
+
+    after_model = session_mod.set_session_provenance(project, model="qwen3.6:35b-mlx")
+    assert after_model["model"] == "qwen3.6:35b-mlx"
+    assert after_model["harness"] is None  # untouched
+
+    after_harness = session_mod.set_session_provenance(project, harness="ollama-cli")
+    assert after_harness["model"] == "qwen3.6:35b-mlx"  # preserved
+    assert after_harness["harness"] == "ollama-cli"
+
+
+def test_set_session_provenance_no_active_returns_none(project):
+    assert session_mod.set_session_provenance(project, model="x") is None

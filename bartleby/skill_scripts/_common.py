@@ -133,6 +133,21 @@ def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> No
     )
 
 
+def session_provenance(conn, session_id: int) -> dict:
+    """Return ``{session_name, model, harness}`` for a session.
+
+    The finding-returning scripts all attribute a finding to its authoring
+    session and now surface which backend wrote it (issue #62). ``model`` /
+    ``harness`` are NULL when the backend was never recorded — never faked.
+    """
+    row = conn.cursor().execute(
+        "SELECT name, model, harness FROM sessions WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    name, model, harness = row
+    return {"session_name": name, "model": model, "harness": harness}
+
+
 def resolve_citations(conn, chunk_ids: list[int]) -> list[dict]:
     """Enrich each cited chunk_id with source_name/file_name/page_number.
 

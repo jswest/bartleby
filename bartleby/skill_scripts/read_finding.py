@@ -6,13 +6,15 @@ full finding — the same shape ``save_finding`` / ``edit_finding`` emit, so the
 verbatim-body contract still holds (the agent echoes ``body`` back unchanged).
 
 ``session_id`` / ``session_name`` describe the session that *authored* the
-finding. ``chunk_ids`` are the finding's own body chunks (``source_kind =
+finding, and ``model`` / ``harness`` the backend behind it (null when
+unrecorded). ``chunk_ids`` are the finding's own body chunks (``source_kind =
 'finding'``); ``citations`` resolve the chunks the finding cites.
 
 Output:
     {
       "finding_id": int,
       "session_id": int, "session_name": str,
+      "model": str|null, "harness": str|null,
       "title": str, "description": str,
       "body": str,
       "created_at": str,
@@ -38,6 +40,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     require_memory_enabled,
     resolve_citations,
+    session_provenance,
 )
 
 
@@ -63,10 +66,6 @@ def work(*, conn, args, session_id) -> dict:
         )
     owning_session_id, title, description, body, created_at = row
 
-    session_name = cur.execute(
-        "SELECT name FROM sessions WHERE session_id = ?", (owning_session_id,)
-    ).fetchone()[0]
-
     chunk_ids = [
         r[0] for r in cur.execute(
             "SELECT chunk_id FROM chunks WHERE source_kind = 'finding' "
@@ -84,7 +83,7 @@ def work(*, conn, args, session_id) -> dict:
     return {
         "finding_id": args.finding_id,
         "session_id": owning_session_id,
-        "session_name": session_name,
+        **session_provenance(conn, owning_session_id),
         "title": title,
         "description": description,
         "body": body,

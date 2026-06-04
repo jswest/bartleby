@@ -54,9 +54,16 @@ def _upgrade_v5_to_v6(conn: apsw.Connection) -> None:
     cur.execute("CREATE INDEX idx_document_tags_tag ON document_tags(tag_id)")
 
 
+def _upgrade_v6_to_v7(conn: apsw.Connection) -> None:
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
+    cur.execute("ALTER TABLE sessions ADD COLUMN harness TEXT")
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
+    6: _upgrade_v6_to_v7,
 }
 
 

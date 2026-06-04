@@ -11,6 +11,7 @@ gate (SPEC §5.4).
 
 from __future__ import annotations
 
+import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,29 @@ import apsw
 
 from bartleby.db.connection import open_db
 from bartleby.project import get_project_dir
+
+
+# Agent harnesses leak their identity through environment variables. Each entry
+# is (harness label, env var whose mere presence is an unambiguous signature).
+# Order matters only if two harnesses ever collide — keep the most specific
+# first. We deliberately recognize only signatures we can verify and return
+# None for everything else: a wrong label is worse than an honest "unknown"
+# (see issue #62). Add Goose / Pi / Ollama entries here as each is confirmed.
+_HARNESS_SIGNATURES: tuple[tuple[str, str], ...] = (
+    ("claude-code", "CLAUDECODE"),
+)
+
+
+def detect_harness() -> str | None:
+    """Best-effort harness identification from the environment, else None.
+
+    Read at call time (not import) so it reflects the process actually
+    spawning the skill, and so tests can control it via env.
+    """
+    for label, env_var in _HARNESS_SIGNATURES:
+        if os.environ.get(env_var):
+            return label
+    return None
 
 
 _ADJECTIVES = (
@@ -47,6 +71,8 @@ class SessionInfo(TypedDict):
     session_id: int
     name: str
     memory_enabled: bool
+    model: str | None
+    harness: str | None
     created_at: str
     ended_at: str | None
 
@@ -86,14 +112,16 @@ def _row_to_info(row) -> SessionInfo:
         session_id=row[0],
         name=row[1],
         memory_enabled=bool(row[2]),
-        created_at=row[3],
-        ended_at=row[4],
+        model=row[3],
+        harness=row[4],
+        created_at=row[5],
+        ended_at=row[6],
     )
 
 
 def _fetch_session(conn, session_id: int) -> SessionInfo | None:
     row = conn.cursor().execute(
-        "SELECT session_id, name, memory_enabled, created_at, ended_at "
+        "SELECT session_id, name, memory_enabled, model, harness, created_at, ended_at "
         "FROM sessions WHERE session_id = ?",
         (session_id,),
     ).fetchone()
@@ -104,13 +132,22 @@ def start_session(
     project_name: str,
     *,
     memory_enabled: bool = True,
+    model: str | None = None,
+    harness: str | None = None,
     max_attempts: int = 32,
 ) -> SessionInfo:
     """Insert a new session, mark it active, return its info.
 
     Generates a memorable ``adjective-noun`` name; on collision (UNIQUE),
     retries with a fresh draw up to ``max_attempts`` times.
+
+    ``model`` / ``harness`` record which backend authored the session's
+    findings (issue #62). An explicit ``harness`` wins; when it's omitted we
+    fall back to :func:`detect_harness`. ``model`` is rarely discoverable from
+    the environment, so it stays NULL unless declared here or set later via
+    :func:`set_session_provenance`.
     """
+    harness = harness or detect_harness()
     conn = open_db(project_name)
     try:
         cur = conn.cursor()
@@ -118,8 +155,9 @@ def start_session(
             name = generate_name()
             try:
                 cur.execute(
-                    "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-                    (name, 1 if memory_enabled else 0),
+                    "INSERT INTO sessions (name, memory_enabled, model, harness) "
+                    "VALUES (?, ?, ?, ?)",
+                    (name, 1 if memory_enabled else 0, model, harness),
                 )
             except apsw.ConstraintError:
                 continue
@@ -174,6 +212,38 @@ def end_active_session(project_name: str) -> SessionInfo | None:
         conn.close()
     clear_active_session(project_name)
     return info
+
+
+def set_session_provenance(
+    project_name: str,
+    *,
+    model: str | None = None,
+    harness: str | None = None,
+) -> SessionInfo | None:
+    """Update the active session's ``model`` and/or ``harness`` in place.
+
+    Only the fields you pass are written, so you can correct one without
+    clobbering the other. Supports the blind-comparison workflow (start a
+    session with provenance unset, stamp it after the fact) and fixing a wrong
+    auto-detection. Returns the updated info, or ``None`` if no active session.
+    """
+    sid = read_active_session_id(project_name)
+    if sid is None:
+        return None
+    conn = open_db(project_name)
+    try:
+        # COALESCE keeps a field untouched when its arg is None (mirrors the
+        # "only write what you pass" contract); an UPDATE against a vanished
+        # row is a harmless no-op, so no existence pre-check is needed.
+        conn.cursor().execute(
+            "UPDATE sessions "
+            "SET model = COALESCE(?, model), harness = COALESCE(?, harness) "
+            "WHERE session_id = ?",
+            (model, harness, sid),
+        )
+        return _fetch_session(conn, sid)
+    finally:
+        conn.close()
 
 
 def ensure_active_session(project_name: str) -> int:
