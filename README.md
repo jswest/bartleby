@@ -315,21 +315,22 @@ If no session is specified, shows the most recent session's logs.
 
 ### `bartleby serve`
 
-Launch a local SvelteKit UI for browsing the active project — findings and documents, with inline citations that link straight into the archived PDFs at the right page.
+Launch a local SvelteKit UI for browsing *and searching* the active project — findings, documents, and full corpus search, with inline citations that link straight into the archived PDFs at the right page.
 
 ```
 bartleby serve
 ```
 
-Three views:
+Four views:
 
 - `/` — landing page with counts for the active project.
+- `/search` — search the whole corpus using the same engine the agent uses. **Search** mode fuses full-text + semantic ranking (RRF) across documents, summaries, findings, and images; **Scan** mode enumerates *every* chunk matching a literal phrase, paginated. Filter by source kind, tag, and document scope; expand any hit to its full text or open the source file at the cited page. (Semantic queries load the embedding model per request, so the first hit takes a few seconds — the page shows a loading state.)
 - `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page.
 - `/documents` — every ingested document, alphabetized by summary title. Click through to a split view: the one-shot summary on the left, the original document on the right.
 
 ![Findings view: the saved finding's body on the left with inline citation chips, the source PDF on the right at the cited page.](./docs/serve-findings.png)
 
-Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. The UI opens the project database read-only, so it's safe to leave running alongside an ingest or a research session — and it picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at.
+Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; search runs the skill scripts (`search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
 
 ---
 

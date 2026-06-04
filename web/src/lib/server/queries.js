@@ -121,6 +121,19 @@ export function getDocument(documentId) {
   `).get(documentId);
 }
 
+// Tag vocabulary, with the document count for each — used to populate the
+// search filter. Tags with no documents are dropped (nothing to filter to).
+export function listTags() {
+  const { db } = getDb();
+  return db.prepare(`
+    SELECT t.name, COUNT(dt.document_id) AS document_count
+    FROM tags t
+    JOIN document_tags dt USING (tag_id)
+    GROUP BY t.tag_id
+    ORDER BY t.name COLLATE NOCASE
+  `).all();
+}
+
 export function getCounts() {
   const { db } = getDb();
   const documents = db.prepare('SELECT COUNT(*) AS n FROM documents').get().n;
