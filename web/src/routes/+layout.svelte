@@ -28,6 +28,7 @@
       <a href="/search" class:active={isActive("/search")}>Search</a>
       <a href="/findings" class:active={isActive("/findings")}>Findings</a>
       <a href="/documents" class:active={isActive("/documents")}>Documents</a>
+      <a href="/tags" class:active={isActive("/tags")}>Tags</a>
     </div>
     <span class="project display">{data.project}</span>
   </nav>

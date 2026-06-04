@@ -1,5 +1,15 @@
 import { getDb } from './db.js';
 
+// A document's assigned tags as a JSON array, ordered by name. Correlates on the
+// outer `d.document_id`, so any SELECT using this must alias documents as `d`.
+// Empty (the common case — most documents are untagged) yields '[]'.
+const TAGS_JSON_SUBQUERY = `
+  (SELECT json_group_array(json_object('tag_id', tag_id, 'name', name, 'description', description))
+   FROM (SELECT t.tag_id, t.name, t.description
+         FROM document_tags dt JOIN tags t USING (tag_id)
+         WHERE dt.document_id = d.document_id
+         ORDER BY t.name COLLATE NOCASE)) AS tags_json`;
+
 export function listFindings() {
   const { db } = getDb();
   return db.prepare(`
@@ -101,24 +111,33 @@ export function getDocumentFilePath(documentId) {
 // (rendered with the file name as a fallback title).
 export function listDocuments() {
   const { db } = getDb();
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT d.document_id, d.file_name, d.page_count, d.created_at,
-           s.title, s.description
+           s.title, s.description, ${TAGS_JSON_SUBQUERY}
     FROM documents d
     LEFT JOIN summaries s USING (document_id)
     ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
   `).all();
+  return rows.map(withTags);
 }
 
 export function getDocument(documentId) {
   const { db } = getDb();
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT d.document_id, d.file_name, d.page_count, d.created_at,
-           s.title, s.description, s.text AS summary_text, s.model
+           s.title, s.description, s.text AS summary_text, s.model, ${TAGS_JSON_SUBQUERY}
     FROM documents d
     LEFT JOIN summaries s USING (document_id)
     WHERE d.document_id = ?
   `).get(documentId);
+  return row ? withTags(row) : row;
+}
+
+// Replace the raw tags_json string from TAGS_JSON_SUBQUERY with a parsed `tags`
+// array of {tag_id, name, description}.
+function withTags(row) {
+  const { tags_json, ...rest } = row;
+  return { ...rest, tags: JSON.parse(tags_json) };
 }
 
 // Tag vocabulary, with the document count for each — used to populate the
@@ -132,6 +151,42 @@ export function listTags() {
     GROUP BY t.tag_id
     ORDER BY t.name COLLATE NOCASE
   `).all();
+}
+
+// The full tag vocabulary for the /tags index — includes the description and,
+// unlike listTags() above, keeps tags with zero documents (a vocabulary entry
+// is worth showing even before anything is assigned to it). Mirrors the
+// read_tags skill's SQL.
+export function listAllTags() {
+  const { db } = getDb();
+  return db.prepare(`
+    SELECT t.tag_id, t.name, t.description, COALESCE(dt.n, 0) AS document_count
+    FROM tags t
+    LEFT JOIN (SELECT tag_id, COUNT(*) AS n FROM document_tags GROUP BY tag_id) dt
+      USING (tag_id)
+    ORDER BY t.name COLLATE NOCASE
+  `).all();
+}
+
+// A single tag plus the documents carrying it (same shape as listDocuments,
+// tags included). Returns null when the tag id is unknown.
+export function getTag(tagId) {
+  const { db } = getDb();
+  const tag = db.prepare(
+    'SELECT tag_id, name, description FROM tags WHERE tag_id = ?'
+  ).get(tagId);
+  if (!tag) return null;
+  const rows = db.prepare(`
+    SELECT d.document_id, d.file_name, d.page_count, d.created_at,
+           s.title, s.description, ${TAGS_JSON_SUBQUERY}
+    FROM document_tags dt
+    JOIN documents d USING (document_id)
+    LEFT JOIN summaries s USING (document_id)
+    WHERE dt.tag_id = ?
+    ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
+  `).all(tagId);
+  tag.documents = rows.map(withTags);
+  return tag;
 }
 
 export function getCounts() {
