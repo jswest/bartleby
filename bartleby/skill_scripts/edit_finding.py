@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     extract_citations,
     rebuild_finding_chunks,
@@ -44,7 +44,7 @@ from bartleby.skill_scripts._common import (
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="edit_finding")
+    p = build_arg_parser("edit_finding", __doc__)
     p.add_argument("--finding-id", type=int, required=True, dest="finding_id")
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)

@@ -82,7 +82,7 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     chunk_locations, comma_int_list, source_names,
 )
@@ -109,7 +109,7 @@ def _nonneg_int(value: str) -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="read_chunks")
+    p = build_arg_parser("read_chunks", __doc__)
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--document", type=_positive_int, dest="document_id")
     mode.add_argument(

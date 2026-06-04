@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._tags import assign, get_document, get_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="assign_tag")
+    p = build_arg_parser("assign_tag", __doc__)
     p.add_argument("--document", type=int, required=True, dest="document_id")
     p.add_argument("--tag", type=str, required=True)
     p.add_argument("--project", type=str, default=None)

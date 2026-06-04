@@ -41,6 +41,26 @@ class SkillError(Exception):
         self.extra = extra
 
 
+def build_arg_parser(
+    prog: str, description: str | None = None
+) -> argparse.ArgumentParser:
+    """Build a skill script's ``ArgumentParser``.
+
+    Pass the module docstring as ``description`` (i.e. ``__doc__``). It's
+    rendered raw — not reflowed — so the ``Output:`` JSON block in the
+    docstring survives intact, which means ``--help`` shows the agent both the
+    arguments *and* the response shape. Agents read SKILL.md and ``--help``;
+    the JSON contract otherwise lives only in docstrings they never see (issue
+    #47). The raw formatter must travel with the docstring, so it lives here
+    rather than at each of the ~18 call sites.
+    """
+    return argparse.ArgumentParser(
+        prog=prog,
+        description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
 def _print_json(payload: Any) -> None:
     json.dump(payload, sys.stdout, separators=(",", ":"), default=str)
     sys.stdout.write("\n")

@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._tags import get_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="delete_tag")
+    p = build_arg_parser("delete_tag", __doc__)
     p.add_argument("--name", type=str, required=True)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)

@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._tags import get_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="merge_tags")
+    p = build_arg_parser("merge_tags", __doc__)
     p.add_argument("--from", type=str, required=True, dest="from_name")
     p.add_argument("--to", type=str, required=True, dest="to_name")
     p.add_argument("--project", type=str, default=None)

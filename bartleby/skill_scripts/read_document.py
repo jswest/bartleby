@@ -26,14 +26,14 @@ from __future__ import annotations
 import argparse
 
 from bartleby.config import load_config
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 
 
 DEFAULT_MAX_READ_TOKENS = 50_000
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="read_document")
+    p = build_arg_parser("read_document", __doc__)
     p.add_argument("--document", type=int, required=True, dest="document_id")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--summary", action="store_true")
