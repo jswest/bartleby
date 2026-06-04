@@ -14,6 +14,7 @@ import sys
 
 
 SCRIPTS = (
+    "describe_corpus",
     "list_documents",
     "search",
     "scan",
