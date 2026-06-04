@@ -30,16 +30,14 @@ audit log records the editor.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    extract_citations,
+    load_finding_body,
     rebuild_finding_chunks,
-    reject_malformed_citations,
     replace_finding_citations,
     resolve_citations,
-    validate_chunk_ids_exist,
+    validated_replacement,
 )
 
 
@@ -51,38 +49,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--body-file", type=str, default=None, dest="body_file")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
-
-
-def _validated_replacement(new_value: str | None, current: str, *, code: str, label: str) -> str:
-    """Return ``new_value`` (validated non-blank) or ``current`` if unchanged."""
-    if new_value is None:
-        return current
-    if not new_value.strip():
-        raise SkillError(code, f"Finding {label} must be non-empty.")
-    return new_value
-
-
-def _load_new_body(body_file: str, conn) -> tuple[str, list[int]]:
-    body_path = Path(body_file)
-    if not body_path.exists() or not body_path.is_file():
-        raise SkillError(
-            "BODY_FILE_NOT_FOUND",
-            f"--body-file path does not exist: {body_path}",
-        )
-    body = body_path.read_text(encoding="utf-8")
-    if not body.strip():
-        raise SkillError("EMPTY_BODY", "Finding body is empty.")
-
-    reject_malformed_citations(body)
-    citations = extract_citations(body)
-    if not citations:
-        raise SkillError(
-            "NO_INLINE_CITATIONS",
-            "Finding body must include at least one inline citation marker "
-            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
-        )
-    validate_chunk_ids_exist(conn, citations)
-    return body, citations
 
 
 def _current_chunk_and_citation_ids(cur, finding_id: int) -> tuple[list[int], list[int]]:
@@ -122,16 +88,16 @@ def work(*, conn, args, session_id) -> dict:
         )
     owning_session_id, current_title, current_description, current_body = existing
 
-    new_title = _validated_replacement(
+    new_title = validated_replacement(
         args.title, current_title, code="EMPTY_TITLE", label="title",
     )
-    new_description = _validated_replacement(
+    new_description = validated_replacement(
         args.description, current_description,
         code="EMPTY_DESCRIPTION", label="description",
     )
 
     if args.body_file is not None:
-        new_body, new_citations = _load_new_body(args.body_file, conn)
+        new_body, new_citations = load_finding_body(conn, args.body_file)
     else:
         new_body, new_citations = current_body, None
 

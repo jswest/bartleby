@@ -54,6 +54,8 @@ The skill ships a `scripts/` directory containing small Python scripts that the 
 | `read_document` | Read a full document and/or its summary. Refuses oversized documents without `--force`. |
 | `save_summary` | Save an agent-authored summary back into the database (chunked and embedded). |
 | `save_finding` | Save a finding (markdown text + structural citations) into the database. |
+| `merge_findings` | Collapse a cluster of duplicate findings into one. The `--into` target survives (keeps its id); you author the consolidated body via `--body-file`; the `--from` sources are deleted. The curation counterpart to `merge_tags`. |
+| `delete_finding` | Retract a finding outright — its row, body chunks, and citations. Cited document chunks (evidence) are untouched. The curation counterpart to `delete_tag`. |
 | `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count. Paginated. The enumeration counterpart to `search --findings`. |
 | `read_finding` | Read one whole finding by id — full body, the finding's chunks, and resolved citations. Same shape as `save_finding`. |
 
@@ -104,6 +106,8 @@ Findings are chunked and embedded into the same vector space as documents and ag
 Findings are tagged with `source_kind = 'finding'` and excluded from search by default. The agent must opt in via `--findings` to include them. The skill's prompt guides the agent on when to do this (typically: at the start of a new topic, to check for prior relevant work; never as primary evidence in a citation).
 
 Beyond relevance search, findings have two direct read paths: `list_findings` enumerates them (newest first, for browsing), and `read_finding --finding-id <id>` returns one whole finding. Both honor memory-off the same way `search` does — but where `search` silently drops findings, these return an explicit `{"code": "MEMORY_OFF"}` error, since a direct "read my findings" command failing quietly would be more confusing than an honest refusal.
+
+Findings also have a curation path so memory can be tended rather than only grown: `delete_finding --finding-id <id>` retracts one (its row, body chunks, and citations), and `merge_findings --from <ids> --into <id> --body-file <path>` folds a cluster of duplicate iterations into a single consolidated finding (the target survives, the agent authors the merged body, the sources are deleted). Both touch only finding rows — the cited document chunks are never affected, because findings are derivative hints, not evidence.
 
 ---
 

@@ -23,6 +23,8 @@ SCRIPTS = (
     "save_summary",
     "save_finding",
     "edit_finding",
+    "delete_finding",
+    "merge_findings",
     "list_findings",
     "read_finding",
     "read_tags",
