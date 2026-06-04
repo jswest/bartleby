@@ -6,10 +6,9 @@
   }
 
   // Enriched server-side: hit.title (summary/finding title), hit.description,
-  // hit.file_name (the originating file, shown as a subtitle), hit.href (source
-  // PDF at the cited page, or the finding page).
+  // hit.file_name (the originating file, shown as a subtitle), hit.href (the
+  // document detail page at the cited page, or the finding page).
   $: title = hit.title ?? stripExt(hit.file_name) ?? hit.source_name;
-  $: external = hit.source_kind !== "finding"; // findings link in-app, not to a file
   $: scorePct = Math.round((hit.normalized_score ?? 0) * 100);
 </script>
 
@@ -17,8 +16,8 @@
   <div class="head">
     <h3 class="title">
       {#if hit.href}
-        <a href={hit.href} target={external ? "_blank" : undefined} rel={external ? "noopener noreferrer" : undefined}>
-          {title}<span class="open">{external ? " ↗" : ""}{hit.page_number ? ` p.${hit.page_number}` : ""}</span>
+        <a href={hit.href}>
+          {title}{#if hit.page_number}<span class="page-hint"> p.{hit.page_number}</span>{/if}
         </a>
       {:else}
         {title}
@@ -71,7 +70,7 @@
   .title a:hover {
     color: var(--color-off);
   }
-  .title .open {
+  .title .page-hint {
     font-family: var(--font-sans);
     font-size: 0.75rem;
     font-weight: 600;

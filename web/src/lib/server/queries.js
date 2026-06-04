@@ -116,11 +116,17 @@ function titleMeta(db, table, keyCol, ids) {
   return out;
 }
 
+// The document detail route (summary + PDF viewer), opened at the cited page
+// via ?page= — the [id] route seeds its viewer iframe from that param.
+function documentHref(documentId, pageNumber) {
+  return `/documents/${documentId}${pageNumber ? `?page=${pageNumber}` : ''}`;
+}
+
 // Enrich ranked `search` hits with a display title, description, and a single
-// destination href: the source PDF at the cited page for document-backed hits,
-// the finding page for findings. Keeps the result component free of source_kind
-// branching. (resolveSource already maps every kind → {document_id, file_name,
-// page_number}; we layer title/description on top.)
+// destination href: the document detail page at the cited page for
+// document-backed hits, the finding page for findings. Keeps the result
+// component free of source_kind branching. (resolveSource already maps every
+// kind → {document_id, file_name, page_number}; we layer title/description on top.)
 export function enrichHits(hits) {
   const { db } = getDb();
   const resolved = hits.map((h) => resolveSource(h.source_kind, h.source_id, h.page_number));
@@ -142,9 +148,7 @@ export function enrichHits(hits) {
     }
     const r = resolved[i];
     const meta = r.document_id != null ? summaries.get(r.document_id) : null;
-    const href = r.document_id != null
-      ? `/files/${r.document_id}${r.page_number ? `#page=${r.page_number}` : ''}`
-      : null;
+    const href = r.document_id != null ? documentHref(r.document_id, r.page_number) : null;
     return {
       ...h,
       title: meta?.title ?? null,
@@ -167,7 +171,7 @@ export function enrichScanMatches(matches) {
       ...m,
       title: meta?.title ?? null,
       description: meta?.description ?? null,
-      href: `/files/${m.document_id}${m.page_number ? `#page=${m.page_number}` : ''}`
+      href: documentHref(m.document_id, m.page_number)
     };
   });
 }
