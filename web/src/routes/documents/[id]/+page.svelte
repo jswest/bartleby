@@ -1,10 +1,19 @@
 <script>
   import { marked } from "marked";
+  import { page } from "$app/stores";
   import { stripExt } from "$lib/format.js";
   export let data;
 
   $: doc = data.document;
   $: summaryHtml = doc.summary_text ? marked.parse(doc.summary_text) : null;
+
+  // ?page=N (set by search/scan result links) jumps the PDF viewer to the
+  // cited page. Sanitized to a positive integer; anything else opens page 1.
+  $: pageNum = (() => {
+    const n = parseInt($page.url.searchParams.get("page"), 10);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  })();
+  $: viewerSrc = `/files/${doc.document_id}${pageNum ? `#page=${pageNum}` : ""}`;
 </script>
 
 <div class="split">
@@ -36,7 +45,9 @@
   </article>
 
   <aside class="viewer">
-    <iframe title="Source document" src="/files/{doc.document_id}"></iframe>
+    {#key viewerSrc}
+      <iframe title="Source document" src={viewerSrc}></iframe>
+    {/key}
   </aside>
 </div>
 
