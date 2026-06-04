@@ -8,7 +8,9 @@ PDF path is converter-aware (``pdfplumber`` default, ``docling`` opt-in).
 HTML path is converter-aware too: ``docling`` is the default; ``sec2md`` is
 opt-in for iXBRL EDGAR filings (sniffed per-file, non-iXBRL HTML falls back
 to docling). Image files (jpg/png/etc.) go straight through the VLM
-pipeline. txt/md keep the original ``convert_and_chunk`` path.
+pipeline. txt/md keep the original ``convert_and_chunk`` path — except an
+EDGAR full-submission ``.txt`` (detected by its SGML envelope), whose inner
+documents are unwrapped and routed individually.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from bartleby.db.chunks import (
     insert_summary_chunks,
 )
 from bartleby.db.connection import open_db
+from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
 from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
@@ -380,6 +383,17 @@ def _ingest_text_document(
     return document_id, result.full_text
 
 
+def _sec2md_chunk_to_row(chunk, *, fallback_heading: str | None = None) -> ChunkRow:
+    """Map a ``Sec2mdChunk`` to a ``ChunkRow``, falling back to ``fallback_heading``
+    when sec2md didn't detect a section header for the chunk."""
+    return ChunkRow(
+        text=chunk.text,
+        section_heading=chunk.section_heading or fallback_heading,
+        content_type=chunk.content_type,
+        page_number=chunk.page_number,
+    )
+
+
 def _ingest_html_sec2md(
     conn,
     archived: Path,
@@ -403,16 +417,73 @@ def _ingest_html_sec2md(
     if result.chunks:
         if on_stage is not None:
             on_stage("embedding")
-        rows = [
-            ChunkRow(text=c.text, section_heading=c.section_heading,
-                     content_type=c.content_type, page_number=c.page_number)
-            for c in result.chunks
-        ]
+        rows = [_sec2md_chunk_to_row(c) for c in result.chunks]
         embeddings = embed_texts([r.text for r in rows])
         insert_document_chunks(
             conn, document_id, _build_chunk_inputs(rows, embeddings),
         )
     return document_id, result.full_text
+
+
+def _ingest_edgar_submission(
+    conn,
+    archived: Path,
+    *,
+    file_hash: str,
+    file_name: str,
+    on_stage: Callable[[str], None] | None = None,
+) -> tuple[int, str]:
+    """EDGAR full-submission `.txt`: unwrap the SGML envelope and route each
+    inner document to its converter, landing as one document row.
+
+    Inner HTML/iXBRL bodies always go through sec2md (the only thing that reads
+    SEC HTML — there is no working fallback here, so the dependency is hard);
+    plain-text bodies go through the character chunker; graphics and XBRL data
+    files are skipped. Origin of each chunk is recorded in ``section_heading``.
+    """
+    if on_stage is not None:
+        on_stage("extracting")
+    inner_documents = edgar_pipeline.parse(archived.read_bytes())
+
+    rows: list[ChunkRow] = []
+    full_text_parts: list[str] = []
+    for doc in inner_documents:
+        label = doc.type or doc.filename or "document"
+        kind = edgar_pipeline.classify(doc)
+        if kind == "skip":
+            console.warn(f"{file_name}: skipping inner document {label}.")
+            continue
+        if kind == "html":
+            result = sec2md_pipeline.convert_bytes(doc.text.encode("utf-8"))
+            full_text_parts.append(result.full_text)
+            rows.extend(
+                _sec2md_chunk_to_row(c, fallback_heading=label)
+                for c in result.chunks
+            )
+        else:  # "text"
+            full_text_parts.append(doc.text)
+            rows.extend(
+                ChunkRow(text=t, section_heading=label, content_type=None)
+                for t in chunk_text(doc.text)
+            )
+
+    full_text = "\n\f\n".join(part for part in full_text_parts if part)
+    document_id = _insert_document(
+        conn,
+        file_hash=file_hash,
+        file_name=file_name,
+        archive_path=archived,
+        page_count=None,
+        full_text=full_text,
+    )
+    if rows:
+        if on_stage is not None:
+            on_stage("embedding")
+        embeddings = embed_texts([r.text for r in rows])
+        insert_document_chunks(
+            conn, document_id, _build_chunk_inputs(rows, embeddings),
+        )
+    return document_id, full_text
 
 
 def _ingest_pdf_pdfplumber(
@@ -738,6 +809,14 @@ def _process_one(
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
             )
+    elif edgar_pipeline.detect(archived):
+        # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
+        # wrapper is caught here instead of falling to the character chunker.
+        document_id, full_text = _ingest_edgar_submission(
+            conn, archived,
+            file_hash=file_hash, file_name=path.name,
+            on_stage=on_stage,
+        )
     elif ext in HTML_EXTENSIONS and html_converter == "sec2md" and sec2md_pipeline.is_ixbrl(archived):
         document_id, full_text = _ingest_html_sec2md(
             conn, archived,
