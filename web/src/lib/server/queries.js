@@ -99,6 +99,79 @@ function resolveSource(kind, sourceId, pageNumber) {
   return { document_id: null, file_name: null, page_number: null };
 }
 
+// Batch-load `title, description` rows from `table`, keyed by `keyCol`. Used to
+// enrich search/scan hits, which the skill returns with filenames/ids only —
+// the human-facing title/description live in `summaries` (by document_id) and
+// `findings` (by finding_id).
+function titleMeta(db, table, keyCol, ids) {
+  const uniq = [...new Set(ids.filter((id) => id != null))];
+  const out = new Map();
+  if (uniq.length === 0) return out;
+  const ph = uniq.map(() => '?').join(',');
+  for (const row of db.prepare(
+    `SELECT ${keyCol}, title, description FROM ${table} WHERE ${keyCol} IN (${ph})`
+  ).all(...uniq)) {
+    out.set(row[keyCol], row);
+  }
+  return out;
+}
+
+// Enrich ranked `search` hits with a display title, description, and a single
+// destination href: the source PDF at the cited page for document-backed hits,
+// the finding page for findings. Keeps the result component free of source_kind
+// branching. (resolveSource already maps every kind → {document_id, file_name,
+// page_number}; we layer title/description on top.)
+export function enrichHits(hits) {
+  const { db } = getDb();
+  const resolved = hits.map((h) => resolveSource(h.source_kind, h.source_id, h.page_number));
+  const summaries = titleMeta(db, 'summaries', 'document_id', resolved.map((r) => r.document_id));
+  const findings = titleMeta(db, 'findings', 'finding_id',
+    hits.filter((h) => h.source_kind === 'finding').map((h) => h.source_id));
+
+  return hits.map((h, i) => {
+    if (h.source_kind === 'finding') {
+      const f = findings.get(h.source_id);
+      return {
+        ...h,
+        title: f?.title ?? h.source_name,
+        description: f?.description ?? null,
+        file_name: null,
+        page_number: null,
+        href: `/findings/${h.source_id}`
+      };
+    }
+    const r = resolved[i];
+    const meta = r.document_id != null ? summaries.get(r.document_id) : null;
+    const href = r.document_id != null
+      ? `/files/${r.document_id}${r.page_number ? `#page=${r.page_number}` : ''}`
+      : null;
+    return {
+      ...h,
+      title: meta?.title ?? null,
+      description: meta?.description ?? null,
+      file_name: r.file_name ?? h.file_name ?? null,
+      page_number: r.page_number,
+      href
+    };
+  });
+}
+
+// Same enrichment for `scan` matches, which are documents-only and already
+// carry document_id / file_name / page_number directly.
+export function enrichScanMatches(matches) {
+  const { db } = getDb();
+  const summaries = titleMeta(db, 'summaries', 'document_id', matches.map((m) => m.document_id));
+  return matches.map((m) => {
+    const meta = summaries.get(m.document_id);
+    return {
+      ...m,
+      title: meta?.title ?? null,
+      description: meta?.description ?? null,
+      href: `/files/${m.document_id}${m.page_number ? `#page=${m.page_number}` : ''}`
+    };
+  });
+}
+
 export function getDocumentFilePath(documentId) {
   const { db } = getDb();
   const row = db.prepare(
