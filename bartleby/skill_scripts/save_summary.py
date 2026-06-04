@@ -20,14 +20,14 @@ from bartleby.db.chunks import (
 from bartleby.ingest.chunk import chunk_markdown_string
 from bartleby.ingest.embed import embed_texts
 from bartleby.ingest.summarize import normalize_authored_date
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 
 
 _AUTHOR_MODEL = "agent"
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="save_summary")
+    p = build_arg_parser("save_summary", __doc__)
     p.add_argument("--document", type=int, required=True, dest="document_id")
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)

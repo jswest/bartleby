@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import run
+from bartleby.skill_runner import build_arg_parser, run
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="read_tags")
+    p = build_arg_parser("read_tags", __doc__)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 

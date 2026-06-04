@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts import _tags as tags_helpers
 from bartleby.skill_scripts._tags import (
     assign,
@@ -63,7 +63,7 @@ from bartleby.skill_scripts._tags import (
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="tag")
+    p = build_arg_parser("tag", __doc__)
     scope = p.add_mutually_exclusive_group(required=True)
     scope.add_argument("--document", type=int, default=None, dest="document_id")
     scope.add_argument("--all", action="store_true", dest="all_documents")

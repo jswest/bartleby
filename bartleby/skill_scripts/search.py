@@ -48,7 +48,7 @@ import struct
 import subprocess
 
 from bartleby.db.schema import EMBEDDING_DIM
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     chunk_locations, comma_int_list, source_names,
 )
@@ -79,7 +79,7 @@ def _positive_int(s: str) -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="search")
+    p = build_arg_parser("search", __doc__)
     p.add_argument("query", type=str)
     p.add_argument("--documents", action="store_true")
     p.add_argument("--summaries", action="store_true")

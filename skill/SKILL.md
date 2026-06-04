@@ -56,7 +56,7 @@ bartleby skill assign_tag --document 9 --tag bad_ocr     # attach a tag you dete
 bartleby skill unassign_tag --document 9 --tag bad_ocr   # detach one assignment (does not delete the tag)
 ```
 
-Every script accepts `--help` for its full argument list. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
+Every script accepts `--help`, and **`--help` documents both halves of the contract: the arguments _and_ the exact JSON response shape** (an `Output:` block listing the top-level keys with a sample object). Run `bartleby skill <name> --help` whenever you're about to parse a script's output for the first time — don't guess the shape or discover it by running a real call and inspecting the result. The top-level keys differ by script on purpose (`search` returns `results`, `scan` returns `matches`, `list_documents` → `documents`, `list_findings` → `findings`, the `read_*` scripts return their object directly), so check `--help` rather than assuming one script's keys carry to another. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
 
 ## What you can and cannot run
 

@@ -26,12 +26,12 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._tags import find_similar_tag, normalize_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="add_tag")
+    p = build_arg_parser("add_tag", __doc__)
     p.add_argument("--name", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--project", type=str, default=None)

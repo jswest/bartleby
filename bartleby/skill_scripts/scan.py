@@ -55,7 +55,7 @@ from __future__ import annotations
 import argparse
 import re
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import comma_int_list
 
 
@@ -84,7 +84,7 @@ def _nonneg_int(value: str) -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="scan")
+    p = build_arg_parser("scan", __doc__)
     p.add_argument("query", type=str)
     p.add_argument(
         "--match-terms",

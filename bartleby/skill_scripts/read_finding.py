@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, run
+from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     require_memory_enabled,
     resolve_citations,
@@ -42,7 +42,7 @@ from bartleby.skill_scripts._common import (
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="read_finding")
+    p = build_arg_parser("read_finding", __doc__)
     p.add_argument("--finding-id", type=int, required=True, dest="finding_id")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)

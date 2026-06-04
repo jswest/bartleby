@@ -33,12 +33,12 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import run
+from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import require_memory_enabled
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="list_findings")
+    p = build_arg_parser("list_findings", __doc__)
     p.add_argument("--project", type=str, default=None)
     p.add_argument("--limit", type=int, default=200)
     p.add_argument("--offset", type=int, default=0)
