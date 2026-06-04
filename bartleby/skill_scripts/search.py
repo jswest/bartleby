@@ -280,22 +280,20 @@ def _semantic_search(
     scope: dict[str, list[int] | None],
     limit: int,
 ) -> list[int]:
-    # sqlite-vec's MATCH operator cannot accept extra WHERE predicates on the
-    # vec0 virtual table, so we over-fetch nearest neighbors and filter them
-    # in the outer query against the chunks table.
+    # Push the scope predicate into the KNN via ``rowid IN (subquery)`` so the
+    # k neighbors vec0 returns are the k nearest *in-scope* chunks. A bare
+    # post-filter (fetch k globally-nearest, then drop out-of-scope rows)
+    # collapses to ~nothing whenever the scope is a small slice of the corpus,
+    # because the globally-nearest chunks rarely fall inside it — issue #55.
+    # vec0 accepts ``rowid IN`` alongside MATCH/k as of sqlite-vec 0.1.x.
+    # ``k`` already caps the row count, so no outer LIMIT is needed.
     scope_sql, scope_params = _scope_clause(scope)
     rows = conn.cursor().execute(
-        f"WITH nn AS ( "
-        f"  SELECT rowid AS chunk_id, distance FROM chunks_vec "
-        f"  WHERE embedding MATCH ? AND k = ? "
-        f"  ORDER BY distance "
-        f") "
-        f"SELECT nn.chunk_id FROM nn "
-        f"JOIN chunks ON chunks.chunk_id = nn.chunk_id "
-        f"WHERE {scope_sql} "
-        f"ORDER BY nn.distance "
-        f"LIMIT ?",
-        [query_bytes, limit, *scope_params, limit],
+        f"SELECT rowid FROM chunks_vec "
+        f"WHERE embedding MATCH ? AND k = ? "
+        f"  AND rowid IN (SELECT chunk_id FROM chunks WHERE {scope_sql}) "
+        f"ORDER BY distance",
+        [query_bytes, limit, *scope_params],
     )
     return [row[0] for row in rows]
 
