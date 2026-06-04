@@ -286,14 +286,17 @@ _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, 
 Manage agent sessions. Sessions are first-class rows in the database; findings and audit log entries are tagged with a `session_id`.
 
 ```
-bartleby session start [--no-memory]   # Start a new session, print its ID and name
-bartleby session current               # Show the active session
-bartleby session end                   # End the active session (cosmetic; sessions don't really "end")
+bartleby session start [--no-memory] [--harness <name>] [--model <id>]   # Start a new session
+bartleby session current                                                 # Show the active session
+bartleby session end                                                     # End the active session (cosmetic)
+bartleby session set [--harness <name>] [--model <id>]                   # Stamp the active session's backend
 ```
 
 **Most users will never run `bartleby session start`.** If no session is active when the skill calls a script, the skill auto-creates one with default settings (memory on). You only need to start a session explicitly if you want `--no-memory`.
 
 The `--no-memory` flag creates a session that cannot read findings from prior sessions. This is enforced at the script level — the skill's `search` script returns no findings when called against a memory-off session, regardless of how the agent is prompted.
+
+`--harness` / `--model` record which backend authors the session's findings, so a corpus built across multiple models/harnesses stays self-describing (the values show up in `list_findings` / `read_finding`). `--harness` is best-effort auto-detected (e.g. Claude Code) when omitted; `--model` usually has no environment signal, so declare it explicitly or stamp it after the fact with `bartleby session set`. Unknown values stay null — never guessed. This is most useful when you start a session yourself before pointing an agent at the corpus; for blind multi-model comparison, leave them unset at start and `session set` them after assessing.
 
 ### `bartleby embed`
 

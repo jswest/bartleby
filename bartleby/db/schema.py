@@ -5,7 +5,7 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 EMBEDDING_DIM = 768
 
@@ -42,6 +42,8 @@ CREATE TABLE sessions (
     session_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     memory_enabled INTEGER NOT NULL DEFAULT 1,
+    model TEXT,
+    harness TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     ended_at TEXT
 );

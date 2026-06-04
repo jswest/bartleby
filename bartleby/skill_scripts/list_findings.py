@@ -7,8 +7,9 @@ fragments via ``search --findings`` — this script is the missing "what
 findings exist?" path. Newest first (``ORDER BY finding_id DESC``).
 
 Per finding: ``finding_id``, ``title``, ``description``, ``session_name``
-(the session that authored it), ``created_at``, and ``citation_count`` (how
-many chunks it cites). To read a whole finding, call
+(the session that authored it), ``model`` / ``harness`` (the backend behind
+it, null when unrecorded), ``created_at``, and ``citation_count`` (how many
+chunks it cites). To read a whole finding, call
 ``read_finding --finding-id <N>``.
 
 Output:
@@ -17,6 +18,7 @@ Output:
         "finding_id": int,
         "title": str, "description": str,
         "session_name": str,
+        "model": str|null, "harness": str|null,
         "created_at": str,
         "citation_count": int,
       }, ...],
@@ -52,8 +54,8 @@ def work(*, conn, args, session_id) -> dict:
     total = cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
 
     rows = cur.execute(
-        "SELECT f.finding_id, f.title, f.description, s.name, f.created_at, "
-        "       COALESCE(fc.n, 0) AS citation_count "
+        "SELECT f.finding_id, f.title, f.description, s.name, s.model, s.harness, "
+        "       f.created_at, COALESCE(fc.n, 0) AS citation_count "
         "FROM findings f "
         "LEFT JOIN sessions s ON s.session_id = f.session_id "
         "LEFT JOIN (SELECT finding_id, COUNT(*) AS n FROM finding_citations "
@@ -68,10 +70,12 @@ def work(*, conn, args, session_id) -> dict:
             "title": title,
             "description": description,
             "session_name": session_name,
+            "model": model,
+            "harness": harness,
             "created_at": created_at,
             "citation_count": citation_count,
         }
-        for finding_id, title, description, session_name, created_at, citation_count in rows
+        for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
     ]
 
     next_offset = args.offset + len(findings)
