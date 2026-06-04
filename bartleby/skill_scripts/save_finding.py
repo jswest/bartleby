@@ -34,13 +34,11 @@ single-source-of-truth contract.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    extract_citations,
+    load_finding_body,
     rebuild_finding_chunks,
-    reject_malformed_citations,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
@@ -57,33 +55,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _read_body(body_file: str) -> str:
-    body_path = Path(body_file)
-    if not body_path.exists() or not body_path.is_file():
-        raise SkillError(
-            "BODY_FILE_NOT_FOUND",
-            f"--body-file path does not exist: {body_path}",
-        )
-    body = body_path.read_text(encoding="utf-8")
-    if not body.strip():
-        raise SkillError("EMPTY_BODY", "Finding body is empty.")
-    return body
-
-
-def _citations_from_body(conn, body: str) -> list[int]:
-    """Extract markers, require at least one, and verify each chunk exists."""
-    reject_malformed_citations(body)
-    citations = extract_citations(body)
-    if not citations:
-        raise SkillError(
-            "NO_INLINE_CITATIONS",
-            "Finding body must include at least one inline citation marker "
-            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
-        )
-    validate_chunk_ids_exist(conn, citations)
-    return citations
-
-
 def work(*, conn, args, session_id) -> dict:
     if not args.title or not args.title.strip():
         raise SkillError("EMPTY_TITLE", "Finding title must be non-empty.")
@@ -92,8 +63,7 @@ def work(*, conn, args, session_id) -> dict:
             "EMPTY_DESCRIPTION", "Finding description must be non-empty."
         )
 
-    body = _read_body(args.body_file)
-    citations = _citations_from_body(conn, body)
+    body, citations = load_finding_body(conn, args.body_file)
 
     cur = conn.cursor()
     cur.execute(

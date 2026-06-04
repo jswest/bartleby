@@ -259,3 +259,24 @@ li.entity {
   color: var(--color-off);
   font-style: italic;
 }
+
+/* A document's tag chips. Used under the meta line on the documents/tag lists
+   and below the description on the document detail page. Hover surfaces the
+   tag's description via a native title= tooltip. */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+}
+.tag {
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--color-off);
+  background: var(--color-token);
+  border: 1px solid var(--color-token-dark);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  cursor: default;
+}

@@ -162,6 +162,45 @@ def test_ensure_active_session_replaces_stale_pointer(project):
         conn.close()
 
 
+def test_ensure_named_session_creates_memory_enabled_row(project):
+    sid = session_mod.ensure_named_session(project, "web-reader")
+    assert sid >= 1
+
+    conn = open_db(project)
+    try:
+        row = conn.cursor().execute(
+            "SELECT name, memory_enabled FROM sessions WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+        assert row == ("web-reader", 1)
+    finally:
+        conn.close()
+
+
+def test_ensure_named_session_is_idempotent(project):
+    first = session_mod.ensure_named_session(project, "web-reader")
+    second = session_mod.ensure_named_session(project, "web-reader")
+    assert first == second
+
+    conn = open_db(project)
+    try:
+        n = conn.cursor().execute(
+            "SELECT COUNT(*) FROM sessions WHERE name = ?", ("web-reader",)
+        ).fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
+def test_ensure_named_session_never_touches_active_pointer(project):
+    agent = session_mod.start_session(project)
+    # The web caller pins its own session...
+    web = session_mod.ensure_named_session(project, "web-reader")
+    assert web != agent["session_id"]
+    # ...without disturbing the agent's active-session pointer.
+    assert session_mod.read_active_session_id(project) == agent["session_id"]
+
+
 def test_generate_name_is_kebab_pair():
     name = session_mod.generate_name()
     a, _, b = name.partition("-")

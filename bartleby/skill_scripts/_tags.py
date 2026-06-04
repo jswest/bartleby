@@ -79,12 +79,26 @@ def get_tag_by_name(conn, name: str) -> TagRow | None:
     return TagRow(*row) if row else None
 
 
-def get_document(conn, document_id: int) -> tuple[int, str] | None:
-    """Return ``(document_id, file_name)`` for a document, or None if absent."""
-    return conn.cursor().execute(
-        "SELECT document_id, file_name FROM documents WHERE document_id = ?",
-        (document_id,),
-    ).fetchone()
+def resolve_documents(
+    conn, document_ids: list[int],
+) -> tuple[list[tuple[int, str]], list[int]]:
+    """Split requested ids into ``(found, not_found)`` in one query.
+
+    ``found`` is ``[(document_id, file_name), ...]`` and ``not_found`` is the
+    ids with no document — both in first-occurrence input order, deduped. Lets
+    a batch assign/unassign skip absent ids without aborting the rest (the
+    per-document analogue of ``tag``'s ``failed`` list).
+    """
+    ordered = list(dict.fromkeys(document_ids))  # dedup, preserve order
+    placeholders = ",".join("?" * len(ordered))
+    names = dict(conn.cursor().execute(
+        f"SELECT document_id, file_name FROM documents "
+        f"WHERE document_id IN ({placeholders})",
+        ordered,
+    ))
+    found = [(d, names[d]) for d in ordered if d in names]
+    not_found = [d for d in ordered if d not in names]
+    return found, not_found
 
 
 def resolve_tag_names(conn, names: list[str]) -> list[int]:

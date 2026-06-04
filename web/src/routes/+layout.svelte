@@ -14,19 +14,25 @@
   // A nav link is "active" if the current path matches exactly OR is a child
   // of the link's target (so /findings/15 lights up the Findings nav too).
   // Home is exact-match only — otherwise it'd be active everywhere.
+  //
+  // isActive must be reactive ($:), not a plain function: Svelte only
+  // re-evaluates `class:active={isActive(...)}` when a variable named in the
+  // expression changes. A plain function references only itself (constant), so
+  // the binding would be computed once and freeze — leaving whichever link was
+  // active on first load stuck underlined across client-side navigations.
   $: path = $page.url.pathname;
-  function isActive(href) {
-    if (href === "/") return path === "/";
-    return path === href || path.startsWith(href + "/");
-  }
+  $: isActive = (href) =>
+    href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
 </script>
 
 <header>
   <nav class="bar">
     <a class="brand display" href="/" class:active={isActive("/")}>Bartleby</a>
     <div class="links">
+      <a href="/search" class:active={isActive("/search")}>Search</a>
       <a href="/findings" class:active={isActive("/findings")}>Findings</a>
       <a href="/documents" class:active={isActive("/documents")}>Documents</a>
+      <a href="/tags" class:active={isActive("/tags")}>Tags</a>
     </div>
     <span class="project display">{data.project}</span>
   </nav>
