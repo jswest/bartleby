@@ -1,7 +1,7 @@
 <script>
   import { marked } from "marked";
   import { page } from "$app/stores";
-  import { stripExt } from "$lib/format.js";
+  import { pluralize, stripExt } from "$lib/format.js";
   export let data;
 
   $: doc = data.document;
@@ -20,7 +20,7 @@
   <article class="report">
     <h1>{doc.title ?? stripExt(doc.file_name)}</h1>
     <p class="meta">
-      {doc.file_name}{doc.page_count ? ` · ${doc.page_count} page${doc.page_count === 1 ? "" : "s"}` : ""}
+      {doc.file_name}{doc.page_count ? ` · ${pluralize(doc.page_count, "page")}` : ""}
       {#if doc.model} · summarized by {doc.model}{/if}
     </p>
     {#if doc.description}

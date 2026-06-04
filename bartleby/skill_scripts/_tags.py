@@ -136,6 +136,25 @@ def documents_with_any_tag(conn, tag_ids: list[int]) -> list[int]:
     ]
 
 
+def intersect_tag_filter(
+    conn, in_documents: list[int] | None, tag_names: list[str] | None,
+) -> tuple[list[int] | None, list[str] | None]:
+    """Fold ``--tag`` into ``in_documents`` as an intersection.
+
+    Shared by ``search`` and ``scan``. Without tags, ``in_documents`` passes
+    through unchanged. With tags, the result is the intersection of the
+    explicit document set (if any) and the documents carrying any of the named
+    tags. An empty intersection yields ``[]`` — the caller short-circuits to
+    zero hits.
+    """
+    if not tag_names:
+        return in_documents, None
+    tagged = documents_with_any_tag(conn, resolve_tag_names(conn, tag_names))
+    if in_documents is None:
+        return tagged, tag_names
+    return sorted(set(in_documents) & set(tagged)), tag_names
+
+
 # ---------- similarity check ----------
 
 

@@ -7,8 +7,7 @@ import sys
 from rich.console import Console
 from rich.table import Table
 
-from bartleby.db.connection import open_db
-from bartleby.project import get_active_project
+from bartleby.db.connection import open_db, resolve_project_name
 
 
 _ARGS_TRUNCATE = 80
@@ -47,11 +46,10 @@ def _resolve_session(conn, session: str | None):
 
 
 def main(*, session: str | None = None, limit: int = 50, project: str | None = None) -> None:
-    project_name = project or get_active_project()
-    if not project_name:
-        _console.print(
-            "[red]No active project. Run `bartleby project create <name>`.[/red]"
-        )
+    try:
+        project_name = resolve_project_name(project)
+    except RuntimeError as e:
+        _console.print(f"[red]{e}[/red]")
         sys.exit(1)
 
     conn = open_db(project_name)

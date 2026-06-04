@@ -84,34 +84,15 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    chunk_locations, comma_int_list, source_names,
+    apply_preview, chunk_locations, comma_int_list, nonneg_int, positive_int,
+    source_names,
 )
-
-
-def _positive_int(value: str) -> int:
-    try:
-        n = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
-    if n < 1:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return n
-
-
-def _nonneg_int(value: str) -> int:
-    try:
-        n = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
-    if n < 0:
-        raise argparse.ArgumentTypeError("must be >= 0")
-    return n
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_chunks", __doc__)
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--document", type=_positive_int, dest="document_id")
+    mode.add_argument("--document", type=positive_int, dest="document_id")
     mode.add_argument(
         "--chunks",
         type=comma_int_list("chunk_id"),
@@ -120,7 +101,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     mode.add_argument(
         "--around-chunk",
-        type=_positive_int,
+        type=positive_int,
         dest="around_chunk",
         help="Target chunk_id; returns target plus --window chunks on each side.",
     )
@@ -128,24 +109,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--limit", type=int, default=50)
     p.add_argument(
         "--window",
-        type=_nonneg_int,
+        type=nonneg_int,
         default=3,
         help="Used with --around-chunk: neighbors on each side (default 3).",
     )
     p.add_argument(
         "--preview",
-        type=_positive_int,
+        type=positive_int,
         default=None,
         help="Truncate each chunk's text to the first N chars (append '…' if trimmed).",
     )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
-
-
-def _apply_preview(text: str, preview: int | None) -> str:
-    if preview is None or len(text) <= preview:
-        return text
-    return text[:preview] + "…"
 
 
 def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
@@ -156,7 +131,7 @@ def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
             "section_heading": heading,
             "page_number": page,
             "content_type": ctype,
-            "text": _apply_preview(text, preview),
+            "text": apply_preview(text, preview),
             "text_length": len(text),
         }
         for cid, idx, heading, page, ctype, text in rows
@@ -202,7 +177,7 @@ def _read_by_chunk_ids(conn, chunk_ids: list[int], preview: int | None) -> dict:
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,
-            "text": _apply_preview(text, preview),
+            "text": apply_preview(text, preview),
             "text_length": len(text),
         })
 

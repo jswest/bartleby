@@ -6,7 +6,7 @@ import sys
 
 from rich.console import Console
 
-from bartleby.project import get_active_project
+from bartleby.db.connection import resolve_project_name
 from bartleby.session import (
     SessionInfo,
     end_active_session,
@@ -20,13 +20,11 @@ _console = Console()
 
 
 def _resolve_project(name: str | None) -> str:
-    project = name or get_active_project()
-    if not project:
-        _console.print(
-            "[red]No active project. Run `bartleby project create <name>`.[/red]"
-        )
+    try:
+        return resolve_project_name(name)
+    except RuntimeError as e:
+        _console.print(f"[red]{e}[/red]")
         sys.exit(1)
-    return project
 
 
 def _print_session(info: SessionInfo, *, prefix: str = "") -> None:

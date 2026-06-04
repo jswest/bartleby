@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { getFinding } from '$lib/server/queries.js';
+import { parseIdParam } from '$lib/server/params.js';
 
 export function load({ params }) {
-  const findingId = Number(params.id);
-  if (!Number.isInteger(findingId)) throw error(404, 'Not found');
+  const findingId = parseIdParam(params.id);
   const finding = getFinding(findingId);
   if (!finding) throw error(404, 'Not found');
   return { finding };

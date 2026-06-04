@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Callable
 
 from loguru import logger
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -40,7 +39,7 @@ from bartleby.db.chunks import (
     insert_image_chunks,
     insert_summary_chunks,
 )
-from bartleby.db.connection import open_db
+from bartleby.db.connection import open_db, resolve_project_name
 from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
 from bartleby.ingest import ocr as ocr_module
@@ -58,15 +57,15 @@ from bartleby.ingest.embed import embed_texts
 from bartleby.ingest.summarize import SummaryResult, count_tokens, summarize
 from bartleby.ingest.text import chunk_text
 from bartleby.lib import console
-from bartleby.project import get_active_project, get_project_dir
+from bartleby.lib.consts import (
+    DEFAULT_HTML_CONVERTER,
+    DEFAULT_OCR_MIN_CONFIDENCE,
+    DEFAULT_PDF_CONVERTER,
+    DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_VISION_MAX_DIMENSION,
+)
+from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
-
-
-DEFAULT_PDF_CONVERTER = "pdfplumber"
-DEFAULT_HTML_CONVERTER = "docling"
-DEFAULT_SPARSE_TEXT_THRESHOLD = 100
-DEFAULT_OCR_MIN_CONFIDENCE = 30
-DEFAULT_VISION_MAX_DIMENSION = 1024
 
 
 # -------------------- shared helpers --------------------
@@ -890,11 +889,7 @@ def main(
     logger.remove()
     logger.add(sys.stderr, level="DEBUG" if verbose else "WARNING")
 
-    project_name = project or get_active_project()
-    if not project_name:
-        raise RuntimeError(
-            "No active project. Run `bartleby project create <name>` first."
-        )
+    project_name = resolve_project_name(project)
 
     config = load_config()
     llm_provider, llm_model = _resolve_llm_provider(

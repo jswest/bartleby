@@ -224,6 +224,61 @@ def resolve_citations(conn, chunk_ids: list[int]) -> list[dict]:
     return out
 
 
+def positive_int(value: str) -> int:
+    """argparse ``type=`` for an integer >= 1."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return n
+
+
+def nonneg_int(value: str) -> int:
+    """argparse ``type=`` for an integer >= 0."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return n
+
+
+def apply_preview(text: str, preview: int | None) -> str:
+    """Truncate ``text`` to ``preview`` chars (appending ``…``); pass through
+    unchanged when ``preview`` is ``None`` or the text already fits."""
+    if preview is None or len(text) <= preview:
+        return text
+    return text[:preview] + "…"
+
+
+def finding_chunk_and_citation_ids(
+    cur, finding_id: int,
+) -> tuple[list[int], list[int]]:
+    """Return ``(chunk_ids, citation_ids)`` for a finding.
+
+    ``chunk_ids`` are the finding's own body chunks (``source_kind =
+    'finding'``) in ``chunk_index`` order; ``citation_ids`` are the chunks it
+    cites (from ``finding_citations``).
+    """
+    chunk_ids = [
+        r[0] for r in cur.execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind = 'finding' "
+            "AND source_id = ? ORDER BY chunk_index",
+            (finding_id,),
+        )
+    ]
+    citation_ids = [
+        r[0] for r in cur.execute(
+            "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
+            (finding_id,),
+        )
+    ]
+    return chunk_ids, citation_ids
+
+
 def comma_int_list(label: str) -> Callable[[str], list[int]]:
     """argparse ``type=`` factory for a comma-separated list of ints.
 

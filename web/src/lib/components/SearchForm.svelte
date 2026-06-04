@@ -1,11 +1,8 @@
 <script>
+  import { ALL_KINDS, DEFAULT_KINDS } from "$lib/constants.js";
+
   export let params;
   export let availableTags = [];
-
-  // Must mirror DEFAULT_KINDS in +page.server.js — the set checked on first
-  // load and whenever no kind is explicitly selected.
-  const DEFAULT_KINDS = ["documents", "findings", "images"];
-  const ALL_KINDS = ["documents", "summaries", "findings", "images"];
 
   // Local copy of the mode so the form can show/hide mode-specific fields
   // before submit. Everything else submits straight from the inputs.

@@ -4,6 +4,7 @@
   import SearchResult from "$lib/components/SearchResult.svelte";
   import ScanMatch from "$lib/components/ScanMatch.svelte";
   import Pagination from "$lib/components/Pagination.svelte";
+  import { pluralize } from "$lib/format.js";
 
   export let data;
 
@@ -43,7 +44,7 @@
       <p class="empty">No chunks match “{result.query}”.</p>
     {:else}
       <p class="summary">
-        {result.total} match{result.total === 1 ? "" : "es"} for the
+        {pluralize(result.total, "match", "matches")} for the
         {result.match_mode} “{result.query}”.
       </p>
       <Pagination
@@ -69,7 +70,7 @@
       <p class="empty">No results for “{result.query}”.</p>
     {:else}
       <p class="summary">
-        {result.results.length} result{result.results.length === 1 ? "" : "s"}
+        {pluralize(result.results.length, "result")}
         for “{result.query}” across {result.source_kinds.join(", ")}.
         {#if result.memory_excluded}<span class="note">Findings excluded (memory off).</span>{/if}
       </p>
