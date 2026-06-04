@@ -1,13 +1,10 @@
 <script>
   import { marked } from "marked";
+  import { stripExt } from "$lib/format.js";
   export let data;
 
   $: doc = data.document;
   $: summaryHtml = doc.summary_text ? marked.parse(doc.summary_text) : null;
-
-  function stripExt(name) {
-    return name.replace(/\.[^.]+$/, "");
-  }
 </script>
 
 <div class="split">
@@ -19,6 +16,14 @@
     </p>
     {#if doc.description}
       <p class="desc">{doc.description}</p>
+    {/if}
+
+    {#if doc.tags.length}
+      <div class="tags">
+        {#each doc.tags as t}
+          <span class="tag" title={t.description}>{t.name}</span>
+        {/each}
+      </div>
     {/if}
 
     {#if summaryHtml}

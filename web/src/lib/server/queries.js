@@ -1,5 +1,15 @@
 import { getDb } from './db.js';
 
+// A document's assigned tags as a JSON array, ordered by name. Correlates on the
+// outer `d.document_id`, so any SELECT using this must alias documents as `d`.
+// Empty (the common case — most documents are untagged) yields '[]'.
+const TAGS_JSON_SUBQUERY = `
+  (SELECT json_group_array(json_object('tag_id', tag_id, 'name', name, 'description', description))
+   FROM (SELECT t.tag_id, t.name, t.description
+         FROM document_tags dt JOIN tags t USING (tag_id)
+         WHERE dt.document_id = d.document_id
+         ORDER BY t.name COLLATE NOCASE)) AS tags_json`;
+
 export function listFindings() {
   const { db } = getDb();
   return db.prepare(`
@@ -89,6 +99,79 @@ function resolveSource(kind, sourceId, pageNumber) {
   return { document_id: null, file_name: null, page_number: null };
 }
 
+// Batch-load `title, description` rows from `table`, keyed by `keyCol`. Used to
+// enrich search/scan hits, which the skill returns with filenames/ids only —
+// the human-facing title/description live in `summaries` (by document_id) and
+// `findings` (by finding_id).
+function titleMeta(db, table, keyCol, ids) {
+  const uniq = [...new Set(ids.filter((id) => id != null))];
+  const out = new Map();
+  if (uniq.length === 0) return out;
+  const ph = uniq.map(() => '?').join(',');
+  for (const row of db.prepare(
+    `SELECT ${keyCol}, title, description FROM ${table} WHERE ${keyCol} IN (${ph})`
+  ).all(...uniq)) {
+    out.set(row[keyCol], row);
+  }
+  return out;
+}
+
+// Enrich ranked `search` hits with a display title, description, and a single
+// destination href: the source PDF at the cited page for document-backed hits,
+// the finding page for findings. Keeps the result component free of source_kind
+// branching. (resolveSource already maps every kind → {document_id, file_name,
+// page_number}; we layer title/description on top.)
+export function enrichHits(hits) {
+  const { db } = getDb();
+  const resolved = hits.map((h) => resolveSource(h.source_kind, h.source_id, h.page_number));
+  const summaries = titleMeta(db, 'summaries', 'document_id', resolved.map((r) => r.document_id));
+  const findings = titleMeta(db, 'findings', 'finding_id',
+    hits.filter((h) => h.source_kind === 'finding').map((h) => h.source_id));
+
+  return hits.map((h, i) => {
+    if (h.source_kind === 'finding') {
+      const f = findings.get(h.source_id);
+      return {
+        ...h,
+        title: f?.title ?? h.source_name,
+        description: f?.description ?? null,
+        file_name: null,
+        page_number: null,
+        href: `/findings/${h.source_id}`
+      };
+    }
+    const r = resolved[i];
+    const meta = r.document_id != null ? summaries.get(r.document_id) : null;
+    const href = r.document_id != null
+      ? `/files/${r.document_id}${r.page_number ? `#page=${r.page_number}` : ''}`
+      : null;
+    return {
+      ...h,
+      title: meta?.title ?? null,
+      description: meta?.description ?? null,
+      file_name: r.file_name ?? h.file_name ?? null,
+      page_number: r.page_number,
+      href
+    };
+  });
+}
+
+// Same enrichment for `scan` matches, which are documents-only and already
+// carry document_id / file_name / page_number directly.
+export function enrichScanMatches(matches) {
+  const { db } = getDb();
+  const summaries = titleMeta(db, 'summaries', 'document_id', matches.map((m) => m.document_id));
+  return matches.map((m) => {
+    const meta = summaries.get(m.document_id);
+    return {
+      ...m,
+      title: meta?.title ?? null,
+      description: meta?.description ?? null,
+      href: `/files/${m.document_id}${m.page_number ? `#page=${m.page_number}` : ''}`
+    };
+  });
+}
+
 export function getDocumentFilePath(documentId) {
   const { db } = getDb();
   const row = db.prepare(
@@ -101,24 +184,33 @@ export function getDocumentFilePath(documentId) {
 // (rendered with the file name as a fallback title).
 export function listDocuments() {
   const { db } = getDb();
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT d.document_id, d.file_name, d.page_count, d.created_at,
-           s.title, s.description
+           s.title, s.description, ${TAGS_JSON_SUBQUERY}
     FROM documents d
     LEFT JOIN summaries s USING (document_id)
     ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
   `).all();
+  return rows.map(withTags);
 }
 
 export function getDocument(documentId) {
   const { db } = getDb();
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT d.document_id, d.file_name, d.page_count, d.created_at,
-           s.title, s.description, s.text AS summary_text, s.model
+           s.title, s.description, s.text AS summary_text, s.model, ${TAGS_JSON_SUBQUERY}
     FROM documents d
     LEFT JOIN summaries s USING (document_id)
     WHERE d.document_id = ?
   `).get(documentId);
+  return row ? withTags(row) : row;
+}
+
+// Replace the raw tags_json string from TAGS_JSON_SUBQUERY with a parsed `tags`
+// array of {tag_id, name, description}.
+function withTags(row) {
+  const { tags_json, ...rest } = row;
+  return { ...rest, tags: JSON.parse(tags_json) };
 }
 
 // Tag vocabulary, with the document count for each — used to populate the
@@ -132,6 +224,42 @@ export function listTags() {
     GROUP BY t.tag_id
     ORDER BY t.name COLLATE NOCASE
   `).all();
+}
+
+// The full tag vocabulary for the /tags index — includes the description and,
+// unlike listTags() above, keeps tags with zero documents (a vocabulary entry
+// is worth showing even before anything is assigned to it). Mirrors the
+// read_tags skill's SQL.
+export function listAllTags() {
+  const { db } = getDb();
+  return db.prepare(`
+    SELECT t.tag_id, t.name, t.description, COALESCE(dt.n, 0) AS document_count
+    FROM tags t
+    LEFT JOIN (SELECT tag_id, COUNT(*) AS n FROM document_tags GROUP BY tag_id) dt
+      USING (tag_id)
+    ORDER BY t.name COLLATE NOCASE
+  `).all();
+}
+
+// A single tag plus the documents carrying it (same shape as listDocuments,
+// tags included). Returns null when the tag id is unknown.
+export function getTag(tagId) {
+  const { db } = getDb();
+  const tag = db.prepare(
+    'SELECT tag_id, name, description FROM tags WHERE tag_id = ?'
+  ).get(tagId);
+  if (!tag) return null;
+  const rows = db.prepare(`
+    SELECT d.document_id, d.file_name, d.page_count, d.created_at,
+           s.title, s.description, ${TAGS_JSON_SUBQUERY}
+    FROM document_tags dt
+    JOIN documents d USING (document_id)
+    LEFT JOIN summaries s USING (document_id)
+    WHERE dt.tag_id = ?
+    ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
+  `).all(tagId);
+  tag.documents = rows.map(withTags);
+  return tag;
 }
 
 export function getCounts() {

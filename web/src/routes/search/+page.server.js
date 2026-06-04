@@ -1,5 +1,5 @@
 import { runSkill, SkillError } from '$lib/server/skill.js';
-import { listTags } from '$lib/server/queries.js';
+import { listTags, enrichHits, enrichScanMatches } from '$lib/server/queries.js';
 
 // Source kinds the `search` script understands. The web defaults to everything
 // a human typically wants — documents, their own findings, and images — but
@@ -41,6 +41,8 @@ export async function load({ url }) {
       if (matchTerms) args.push('--match-terms');
       if (offset) args.push('--offset', offset);
       result = await runSkill('scan', args);
+      // Add summary title/description + a source link to each match.
+      result.matches = enrichScanMatches(result.matches);
     } else {
       // Empty selection (incl. "user unchecked everything" — GET forms can't
       // tell that from a first visit) falls back to the web default set.
@@ -48,6 +50,7 @@ export async function load({ url }) {
       for (const k of effective) args.push(`--${k}`);
       if (context) args.push('--add-context', context);
       result = await runSkill('search', args);
+      result.results = enrichHits(result.results);
     }
     return { params, available, result, error: null };
   } catch (e) {
