@@ -854,3 +854,112 @@ def test_scribe_truncation_note_in_summary(
         assert "token document" in text
     finally:
         conn.close()
+
+
+_EDGAR_SUBMISSION = """\
+<SEC-DOCUMENT>0001234567-24-000001.txt : 20240215
+<SEC-HEADER>0001234567-24-000001.hdr.sgml : 20240215
+CONFORMED SUBMISSION TYPE:\t10-K
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>10-K
+<SEQUENCE>1
+<FILENAME>acme-10k.htm
+<TEXT>
+<html><body><p>Risk factors and revenue figures.</p></body></html>
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-31.1
+<SEQUENCE>2
+<FILENAME>ex31-1.htm
+<TEXT>
+<html><body><p>Certification.</p></body></html>
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-99.1
+<SEQUENCE>3
+<FILENAME>ex99-1.txt
+<TEXT>
+Plain text press release body.
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>GRAPHIC
+<SEQUENCE>4
+<FILENAME>logo.jpg
+<TEXT>
+begin 644 logo.jpg
+M_]C_X``02D9)
+end
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
+"""
+
+
+def test_scribe_unwraps_edgar_full_submission(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """An EDGAR full-submission `.txt` is detected, unwrapped, and its inner
+    HTML routed to sec2md — never to the plain character chunker."""
+    from bartleby.ingest.sec2md import Sec2mdChunk, Sec2mdResult
+
+    calls: list[bytes] = []
+
+    def fake_convert_bytes(html: bytes) -> Sec2mdResult:
+        calls.append(html)
+        return Sec2mdResult(
+            full_text="Risk factors and revenue.",
+            page_count=1,
+            chunks=[
+                Sec2mdChunk(text="Risk factors.", section_heading="Item 1A",
+                            content_type="sec_text", page_number=1),
+                Sec2mdChunk(text="Revenue table.", section_heading=None,
+                            content_type="sec_table", page_number=1),
+            ],
+        )
+
+    monkeypatch.setattr("bartleby.ingest.sec2md.convert_bytes", fake_convert_bytes)
+
+    src = _write_txt(tmp_path / "0001234567-24-000001.txt", _EDGAR_SUBMISSION)
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # One document row for the whole submission.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        # Both inner HTML bodies (10-K + EX-31.1) went through sec2md.
+        assert len(calls) == 2
+
+        # 2 chunks per HTML doc + 1 from the plain-text exhibit; graphic skipped.
+        n = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0]
+        assert n == 5
+        assert cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == n
+        assert cur.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0] == n
+
+        headings = {
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT section_heading FROM chunks "
+                "WHERE source_kind='document'"
+            )
+        }
+        # sec2md's own header is kept; a missing one falls back to inner TYPE,
+        # and the text exhibit is tagged with its TYPE too.
+        assert "Item 1A" in headings
+        assert "EX-99.1" in headings
+
+        # No raw SGML/tag-soup leaked into any chunk.
+        texts = " ".join(
+            r[0] for r in cur.execute(
+                "SELECT text FROM chunks WHERE source_kind='document'"
+            )
+        )
+        assert "<SEC-DOCUMENT>" not in texts
+        assert "<DOCUMENT>" not in texts
+    finally:
+        conn.close()

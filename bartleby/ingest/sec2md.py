@@ -57,18 +57,26 @@ def is_ixbrl(path: Path) -> bool:
 
 
 def convert(path: Path) -> Sec2mdResult:
-    """Convert one iXBRL `.htm`/`.html` filing into chunks ready for embedding.
+    """Convert one iXBRL `.htm`/`.html` filing on disk into chunks.
 
-    Reads bytes off disk (sec2md doesn't accept file paths), drives
-    ``parse_filing`` + ``chunk_pages`` with a token cap matched to the
+    Thin wrapper over :func:`convert_bytes` — sec2md doesn't accept file
+    paths, so we read the bytes off disk and hand them over.
+    """
+    return convert_bytes(path.read_bytes())
+
+
+def convert_bytes(html: bytes) -> Sec2mdResult:
+    """Convert iXBRL/SEC HTML bytes into chunks ready for embedding.
+
+    Drives ``parse_filing`` + ``chunk_pages`` with a token cap matched to the
     embedder. Each ``Chunk`` is mapped to a ``Sec2mdChunk`` for the scribe to
-    persist via ``insert_document_chunks``.
+    persist via ``insert_document_chunks``. Takes bytes (not a path) so EDGAR
+    full-submission inner bodies, which live in memory after unwrapping, can be
+    converted without round-tripping through disk.
     """
     _require_sec2md()
     import sec2md
     from bs4 import XMLParsedAsHTMLWarning
-
-    html = path.read_bytes()
 
     # sec2md's BeautifulSoup invocation triggers a noisy XMLParsedAsHTMLWarning
     # because iXBRL files declare an XML prolog. The warning is purely
