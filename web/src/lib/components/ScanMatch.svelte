@@ -1,9 +1,7 @@
 <script>
-  export let match;
+  import { stripExt } from "$lib/format.js";
 
-  function stripExt(name) {
-    return name ? name.replace(/\.[^.]+$/, "") : name;
-  }
+  export let match;
 
   // Enriched server-side: match.title (summary title), match.description,
   // match.href (the document detail page at the cited page). Scan is documents-only.

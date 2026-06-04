@@ -1,11 +1,10 @@
 import { runSkill, SkillError } from '$lib/server/skill.js';
 import { listTags, enrichHits, enrichScanMatches } from '$lib/server/queries.js';
+import { ALL_KINDS, DEFAULT_KINDS } from '$lib/constants.js';
 
-// Source kinds the `search` script understands. The web defaults to everything
-// a human typically wants — documents, their own findings, and images — but
-// summaries stay opt-in (they're derived, noisier as search targets).
-const SOURCE_KINDS = ['documents', 'summaries', 'findings', 'images'];
-const DEFAULT_KINDS = ['documents', 'findings', 'images'];
+// The web defaults to everything a human typically wants — documents, their own
+// findings, and images — but summaries stay opt-in (derived, noisier as search
+// targets). ALL_KINDS is the full set the `search` script understands.
 
 function clampInt(raw, lo, hi, fallback) {
   const n = parseInt(raw ?? '', 10);
@@ -17,7 +16,7 @@ export async function load({ url }) {
   const sp = url.searchParams;
   const q = (sp.get('q') ?? '').trim();
   const mode = sp.get('mode') === 'scan' ? 'scan' : 'search';
-  const kinds = sp.getAll('kind').filter((k) => SOURCE_KINDS.includes(k));
+  const kinds = sp.getAll('kind').filter((k) => ALL_KINDS.includes(k));
   const tags = sp.getAll('tag');
   const docs = (sp.get('docs') ?? '').trim();
   const context = clampInt(sp.get('context'), 0, 5, 0);

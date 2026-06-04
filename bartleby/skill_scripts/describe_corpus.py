@@ -43,23 +43,14 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
-
-
-def _positive_int(value: str) -> int:
-    try:
-        n = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
-    if n < 1:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return n
+from bartleby.skill_scripts._common import positive_int
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("describe_corpus", __doc__)
     p.add_argument("--project", type=str, default=None)
     p.add_argument(
-        "--top-n", type=_positive_int, default=5, dest="top_n",
+        "--top-n", type=positive_int, default=5, dest="top_n",
         help="How many largest-by-token documents to list (default 5).",
     )
     return p.parse_args(argv)

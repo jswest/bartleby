@@ -1,9 +1,7 @@
 <script>
-  export let hit;
+  import { stripExt } from "$lib/format.js";
 
-  function stripExt(name) {
-    return name ? name.replace(/\.[^.]+$/, "") : name;
-  }
+  export let hit;
 
   // Enriched server-side: hit.title (summary/finding title), hit.description,
   // hit.file_name (the originating file, shown as a subtitle), hit.href (the

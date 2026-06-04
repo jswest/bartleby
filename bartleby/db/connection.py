@@ -23,7 +23,13 @@ def project_db_path(project_name: str) -> Path:
     return PROJECTS_DIR / project_name / "bartleby.db"
 
 
-def _resolve_project_name(project_name: str | None) -> str:
+def resolve_project_name(project_name: str | None) -> str:
+    """Return ``project_name`` or the active project; raise if neither exists.
+
+    The single resolve-or-fail path for an optional ``--project`` argument,
+    shared by ``open_db`` and the CLI commands (``scribe``/``session``/
+    ``logs``).
+    """
     if project_name:
         return project_name
     from bartleby.project import get_active_project
@@ -52,7 +58,7 @@ def open_db(project_name: str | None = None) -> apsw.Connection:
     Loads sqlite-vec, enables FK checks, and raises if the schema version
     does not match ``SCHEMA_VERSION``.
     """
-    name = _resolve_project_name(project_name)
+    name = resolve_project_name(project_name)
     db_path = project_db_path(name)
     if not db_path.exists():
         raise FileNotFoundError(

@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDocumentFilePath } from '$lib/server/queries.js';
+import { parseIdParam } from '$lib/server/params.js';
 
 // Extensions that the ingest pipeline accepts (see bartleby/ingest/chunk.py).
 // Anything else falls back to octet-stream — the browser will offer download.
@@ -22,8 +23,7 @@ const MIME_BY_EXT = {
 };
 
 export function GET({ params }) {
-  const documentId = Number(params.document_id);
-  if (!Number.isInteger(documentId)) throw error(404, 'Not found');
+  const documentId = parseIdParam(params.document_id);
 
   const filePath = getDocumentFilePath(documentId);
   if (!filePath || !fs.existsSync(filePath)) throw error(404, 'File missing');

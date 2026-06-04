@@ -5,8 +5,15 @@ from rich.panel import Panel
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
+from bartleby.lib.consts import (
+    DEFAULT_HTML_CONVERTER,
+    DEFAULT_OCR_MIN_CONFIDENCE,
+    DEFAULT_PDF_CONVERTER,
+    DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_VISION_MAX_DIMENSION,
+)
+from bartleby.providers import ALLOWED_PROVIDERS
 
-ALLOWED_PROVIDERS = ["anthropic", "openai", "ollama", "wsjpt"]
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
 ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
 ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
@@ -30,12 +37,6 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_SUMMARIZE_TOKENS = 50_000
 DEFAULT_MAX_READ_TOKENS = 50_000
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
-
-DEFAULT_PDF_CONVERTER = "pdfplumber"
-DEFAULT_HTML_CONVERTER = "docling"
-DEFAULT_VISION_MAX_DIMENSION = 1024
-DEFAULT_SPARSE_TEXT_THRESHOLD = 100
-DEFAULT_OCR_MIN_CONFIDENCE = 30
 
 console = Console()
 

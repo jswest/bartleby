@@ -42,7 +42,6 @@ from bartleby.skill_scripts._common import (
     replace_finding_citations,
     resolve_citations,
     session_provenance,
-    validate_chunk_ids_exist,
 )
 
 

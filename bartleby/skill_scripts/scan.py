@@ -56,31 +56,14 @@ import argparse
 import re
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import comma_int_list
+from bartleby.skill_scripts._common import (
+    apply_preview, comma_int_list, nonneg_int, positive_int,
+)
+from bartleby.skill_scripts._tags import intersect_tag_filter
 
 
 DEFAULT_PREVIEW = 240
 DEFAULT_LIMIT = 100
-
-
-def _positive_int(value: str) -> int:
-    try:
-        n = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
-    if n < 1:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return n
-
-
-def _nonneg_int(value: str) -> int:
-    try:
-        n = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}' is not an integer") from None
-    if n < 0:
-        raise argparse.ArgumentTypeError("must be >= 0")
-    return n
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -105,12 +88,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--preview",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_PREVIEW,
         help=f"Truncate each match's text to the first N chars (default {DEFAULT_PREVIEW}).",
     )
-    p.add_argument("--offset", type=_nonneg_int, default=0)
-    p.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
+    p.add_argument("--offset", type=nonneg_int, default=0)
+    p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
@@ -131,40 +114,12 @@ def _build_fts_query(query: str, match_mode: str) -> str:
     return " ".join(pieces)
 
 
-def _apply_preview(text: str, preview: int) -> str:
-    if len(text) <= preview:
-        return text
-    return text[:preview] + "…"
-
-
-def _intersect_tag_filter(
-    conn, in_documents: list[int] | None, tag_names: list[str] | None,
-) -> tuple[list[int] | None, list[str] | None]:
-    """Fold ``--tag`` into ``in_documents`` as an intersection.
-
-    Mirrors ``search.py``'s helper of the same name. Without tags,
-    ``in_documents`` passes through unchanged. With tags, the result is the
-    intersection of the explicit document set (if any) and the documents
-    carrying any of the named tags. An empty intersection yields ``[]`` — the
-    caller short-circuits to zero matches.
-    """
-    if not tag_names:
-        return in_documents, None
-    from bartleby.skill_scripts._tags import (
-        documents_with_any_tag, resolve_tag_names,
-    )
-    tagged = documents_with_any_tag(conn, resolve_tag_names(conn, tag_names))
-    if in_documents is None:
-        return tagged, tag_names
-    return sorted(set(in_documents) & set(tagged)), tag_names
-
-
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     match_mode = "terms" if args.match_terms else "phrase"
-    in_documents, tag_names = _intersect_tag_filter(conn, args.in_documents, args.tags)
+    in_documents, tag_names = intersect_tag_filter(conn, args.in_documents, args.tags)
 
     def _response(matches: list, total: int) -> dict:
         return {
@@ -221,7 +176,7 @@ def work(*, conn, args, session_id) -> dict:
             "page_number": page_number,
             "section_heading": section_heading,
             "content_type": content_type,
-            "text": _apply_preview(text, args.preview),
+            "text": apply_preview(text, args.preview),
             "text_length": len(text),
         }
         for (chunk_id, source_id, chunk_index, section_heading,

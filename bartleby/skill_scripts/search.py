@@ -50,8 +50,9 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    chunk_locations, comma_int_list, source_names,
+    chunk_locations, comma_int_list, positive_int, source_names,
 )
+from bartleby.skill_scripts._tags import intersect_tag_filter
 
 
 RRF_K = 60
@@ -68,13 +69,6 @@ def _context_value(s: str) -> int:
         raise argparse.ArgumentTypeError(
             f"add-context must be in 0..{MAX_CONTEXT}"
         )
-    return v
-
-
-def _positive_int(s: str) -> int:
-    v = int(s)
-    if v <= 0:
-        raise argparse.ArgumentTypeError("must be a positive integer")
     return v
 
 
@@ -117,7 +111,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "Each step roughly multiplies output size by (1 + 2N) — use sparingly."
         ),
     )
-    p.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT)
+    p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
@@ -337,32 +331,13 @@ def _fetch_context(
     return before, after
 
 
-def _intersect_tag_filter(
-    conn, in_documents: list[int] | None, tag_names: list[str] | None,
-) -> tuple[list[int] | None, list[str] | None]:
-    """If ``--tag`` is set, fold tagged documents into ``in_documents`` as an
-    intersection. Empty intersection returns ``[]`` (the scope dict yields
-    no SQL predicates, so the search returns no hits — the correct behavior).
-    """
-    if not tag_names:
-        return in_documents, None
-    from bartleby.skill_scripts._tags import (
-        documents_with_any_tag, resolve_tag_names,
-    )
-    tag_ids = resolve_tag_names(conn, tag_names)
-    tagged_docs = documents_with_any_tag(conn, tag_ids)
-    if in_documents is None:
-        return tagged_docs, tag_names
-    return sorted(set(in_documents) & set(tagged_docs)), tag_names
-
-
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
-    in_documents, tag_names = _intersect_tag_filter(
+    in_documents, tag_names = intersect_tag_filter(
         conn, args.in_documents, args.tags,
     )
 

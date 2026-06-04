@@ -34,12 +34,12 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    finding_chunk_and_citation_ids,
     load_finding_body,
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
-    validate_chunk_ids_exist,
     validated_replacement,
 )
 
@@ -52,23 +52,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--body-file", type=str, default=None, dest="body_file")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
-
-
-def _current_chunk_and_citation_ids(cur, finding_id: int) -> tuple[list[int], list[int]]:
-    chunk_ids = [
-        r[0] for r in cur.execute(
-            "SELECT chunk_id FROM chunks WHERE source_kind = 'finding' "
-            "AND source_id = ? ORDER BY chunk_index",
-            (finding_id,),
-        )
-    ]
-    citation_ids = [
-        r[0] for r in cur.execute(
-            "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
-            (finding_id,),
-        )
-    ]
-    return chunk_ids, citation_ids
 
 
 def work(*, conn, args, session_id) -> dict:
@@ -115,7 +98,7 @@ def work(*, conn, args, session_id) -> dict:
         replace_finding_citations(conn, args.finding_id, new_citations)
         citation_ids = new_citations
     else:
-        chunk_ids, citation_ids = _current_chunk_and_citation_ids(cur, args.finding_id)
+        chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 
     return {
         "finding_id": args.finding_id,

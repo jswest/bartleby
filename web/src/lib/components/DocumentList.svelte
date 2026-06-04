@@ -1,5 +1,5 @@
 <script>
-  import { stripExt } from "$lib/format.js";
+  import { pluralize, stripExt } from "$lib/format.js";
   // Shared document listing — used by /documents and /tags/[id]. Each document
   // carries a `tags` array (possibly empty); untagged docs render no chips.
   export let documents;
@@ -14,7 +14,7 @@
         </a>
       </h2>
       <p class="meta">
-        {d.file_name}{d.page_count ? ` · ${d.page_count} page${d.page_count === 1 ? "" : "s"}` : ""}
+        {d.file_name}{d.page_count ? ` · ${pluralize(d.page_count, "page")}` : ""}
         {#if !d.title} · <em>no summary</em>{/if}
       </p>
       {#if d.tags.length}

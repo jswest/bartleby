@@ -38,6 +38,7 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    finding_chunk_and_citation_ids,
     require_memory_enabled,
     resolve_citations,
     session_provenance,
@@ -66,19 +67,7 @@ def work(*, conn, args, session_id) -> dict:
         )
     owning_session_id, title, description, body, created_at = row
 
-    chunk_ids = [
-        r[0] for r in cur.execute(
-            "SELECT chunk_id FROM chunks WHERE source_kind = 'finding' "
-            "AND source_id = ? ORDER BY chunk_index",
-            (args.finding_id,),
-        )
-    ]
-    citation_ids = [
-        r[0] for r in cur.execute(
-            "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
-            (args.finding_id,),
-        )
-    ]
+    chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 
     return {
         "finding_id": args.finding_id,
