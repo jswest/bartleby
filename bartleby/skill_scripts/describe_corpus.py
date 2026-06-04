@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import run
+from bartleby.skill_runner import build_arg_parser, run
 
 
 def _positive_int(value: str) -> int:
@@ -56,7 +56,7 @@ def _positive_int(value: str) -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="describe_corpus")
+    p = build_arg_parser("describe_corpus", __doc__)
     p.add_argument("--project", type=str, default=None)
     p.add_argument(
         "--top-n", type=_positive_int, default=5, dest="top_n",
