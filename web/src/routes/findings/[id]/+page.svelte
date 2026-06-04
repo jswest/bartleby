@@ -81,7 +81,7 @@
   <article class="report" bind:this={container}>
     <h1>{data.finding.title}</h1>
     <p class="meta">
-      {data.finding.session_name} · {data.finding.created_at}
+      <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name} · {data.finding.created_at}
     </p>
     <p class="desc">{data.finding.description}</p>
 
