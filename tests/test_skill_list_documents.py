@@ -90,3 +90,109 @@ def test_list_documents_limit_and_offset(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert len(out["documents"]) == 1
     assert out["total"] == 2
+
+
+def _set_authored_date(project, document_id, value):
+    from bartleby.db.connection import open_db
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET authored_date = ? WHERE document_id = ?",
+            (value, document_id),
+        )
+    finally:
+        conn.close()
+
+
+def test_list_documents_date_bound_excludes_null_dated(seeded_project, capsys):
+    # alpha is dated; beta has no summary at all (undated).
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"], "--authored-after", "2024-01-01",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
+    assert out["total"] == 1
+    # beta is dropped purely for being undated — that must be reported.
+    assert out["excluded_null_dated"] == 1
+
+
+def test_list_documents_authored_before(seeded_project, capsys):
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"], "--authored-before", "2023-12-31",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["documents"] == []
+    assert out["total"] == 0
+    assert out["excluded_null_dated"] == 1
+
+
+def test_list_documents_date_range_both_bounds(seeded_project, capsys):
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--authored-after", "2024-01-01", "--authored-before", "2024-12-31",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
+    assert out["excluded_null_dated"] == 1
+
+
+def test_list_documents_include_nulls_keeps_undated(seeded_project, capsys):
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--authored-after", "2024-01-01", "--include-nulls",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    by_name = {d["file_name"] for d in out["documents"]}
+    assert by_name == {"alpha.pdf", "beta.txt"}
+    assert out["total"] == 2
+    # Nothing was excluded: the undated doc rode along.
+    assert out["excluded_null_dated"] == 0
+
+
+def test_list_documents_no_date_bound_reports_zero_excluded(seeded_project, capsys):
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    assert out["excluded_null_dated"] == 0
+
+
+def test_list_documents_invalid_date_raises(seeded_project, capsys):
+    code, captured = _run(capsys, [
+        "--project", seeded_project["project"], "--authored-after", "2024",
+    ])
+    assert code == 1
+    err = json.loads(captured.out)
+    assert err["code"] == "INVALID_DATE"
+
+
+def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):
+    from bartleby.db.connection import open_db
+    project = seeded_project["project"]
+    _set_authored_date(project, seeded_project["doc_a"], "2024-03-15")
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES (?, ?)",
+                    ("ch", "chapter docs"))
+        tag_id = conn.last_insert_rowid()
+        # Tag the *undated* doc only, so a date bound + this tag yields nothing.
+        cur.execute("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                    (seeded_project["doc_b"], tag_id))
+    finally:
+        conn.close()
+
+    list_documents.main([
+        "--project", project, "--tag", "ch", "--authored-after", "2024-01-01",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    # beta carries the tag but is undated → excluded by the bound, counted once.
+    assert out["documents"] == []
+    assert out["total"] == 0
+    assert out["excluded_null_dated"] == 1
