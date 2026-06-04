@@ -56,6 +56,15 @@ p.meta {
   color: var(--color-off);
 }
 
+/* The finding_id, surfaced so users can match what the agent says in chat
+   ("finding 42") to a row or page here. The display font + a weight bump (the
+   parent .meta is 200) reads it as an identifier without breaking out of the
+   muted .meta line. */
+.finding-id {
+  font-family: var(--font-display);
+  font-weight: 400;
+}
+
 /* Shared markdown-body styles — used by both /findings/[id] and /documents/[id].
    Targets descendants of .markdown-body so we don't accidentally restyle the
    page chrome (titles, meta, etc.) that lives outside the rendered markdown. */
