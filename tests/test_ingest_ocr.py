@@ -65,3 +65,32 @@ def test_run_on_blank_returns_no_text(_check_tesseract):
     assert result.text == ""
     # No words → sentinel confidence.
     assert result.avg_confidence == -1.0
+
+
+def test_run_surfaces_legible_error_on_decode_crash(monkeypatch):
+    """When tesseract emits non-UTF-8 stderr (e.g. it can't read its temp file),
+    pytesseract raises a bare UnicodeDecodeError. `run` must convert it into a
+    legible RuntimeError that names the likely TMPDIR cause (issue #43)."""
+    def _boom(*a, **k):
+        raise UnicodeDecodeError("utf-8", b"\x89PNG", 0, 1, "invalid start byte")
+    monkeypatch.setattr(ocr.pytesseract, "image_to_data", _boom)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ocr.run(_blank_image())
+    msg = str(excinfo.value)
+    assert "Tesseract OCR failed" in msg
+    assert "TMPDIR" in msg
+    # The original cause is preserved for debugging.
+    assert isinstance(excinfo.value.__cause__, UnicodeDecodeError)
+
+
+def test_run_surfaces_legible_error_on_tesseract_error(monkeypatch):
+    """A normal TesseractError is likewise wrapped into the legible RuntimeError."""
+    def _boom(*a, **k):
+        raise ocr.pytesseract.TesseractError(1, "tesseract exploded")
+    monkeypatch.setattr(ocr.pytesseract, "image_to_data", _boom)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ocr.run(_blank_image())
+    assert "Tesseract OCR failed" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ocr.pytesseract.TesseractError)
