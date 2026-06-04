@@ -16,3 +16,4 @@ Thumbs.db
 .vscode
 wheels/
 
+.claude/scratch/
