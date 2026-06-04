@@ -25,6 +25,7 @@
   <nav class="bar">
     <a class="brand display" href="/" class:active={isActive("/")}>Bartleby</a>
     <div class="links">
+      <a href="/search" class:active={isActive("/search")}>Search</a>
       <a href="/findings" class:active={isActive("/findings")}>Findings</a>
       <a href="/documents" class:active={isActive("/documents")}>Documents</a>
     </div>

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Any, Callable
@@ -25,7 +26,7 @@ from typing import Any, Callable
 from bartleby.db.audit import log_call
 from bartleby.db.connection import open_db
 from bartleby.project import get_active_project
-from bartleby.session import ensure_active_session
+from bartleby.session import ensure_active_session, ensure_named_session
 
 
 class SkillError(Exception):
@@ -105,7 +106,16 @@ def run(
             )
 
         conn = open_db(project)
-        session_id = ensure_active_session(project)
+        # A non-agent caller (the web UI) sets BARTLEBY_SESSION_NAME to pin its
+        # own durable, memory-enabled session by name. This deliberately bypasses
+        # the .active_session pointer so the web never hijacks — or is hijacked
+        # by — whichever session an agent has active. Agents leave it unset and
+        # get the normal active-session behavior.
+        session_name = os.environ.get("BARTLEBY_SESSION_NAME")
+        if session_name:
+            session_id = ensure_named_session(project, session_name)
+        else:
+            session_id = ensure_active_session(project)
         result = work(conn=conn, args=args, session_id=session_id)
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}

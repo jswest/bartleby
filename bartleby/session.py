@@ -176,6 +176,41 @@ def end_active_session(project_name: str) -> SessionInfo | None:
     return info
 
 
+def ensure_named_session(project_name: str, name: str) -> int:
+    """Return the id of a durable, memory-enabled session with this exact
+    ``name``, creating it if absent.
+
+    Unlike :func:`ensure_active_session`, this never reads or writes the
+    ``.active_session`` pointer. It exists for non-agent callers — chiefly the
+    web UI — that need a stable session of their own without hijacking (or
+    being hijacked by) whichever session an agent has active. The reserved
+    name acts as the lookup key; reusing it across requests keeps every web
+    invocation attributed to one recognizable, memory-enabled session.
+    """
+    conn = open_db(project_name)
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT session_id FROM sessions WHERE name = ?", (name,)
+        ).fetchone()
+        if row:
+            return row[0]
+        try:
+            cur.execute(
+                "INSERT INTO sessions (name, memory_enabled) VALUES (?, 1)",
+                (name,),
+            )
+            return conn.last_insert_rowid()
+        except apsw.ConstraintError:
+            # Concurrent caller won the insert race; re-read its row.
+            row = cur.execute(
+                "SELECT session_id FROM sessions WHERE name = ?", (name,)
+            ).fetchone()
+            return row[0]
+    finally:
+        conn.close()
+
+
 def ensure_active_session(project_name: str) -> int:
     """Return the active session_id, creating one with defaults if missing.
 
