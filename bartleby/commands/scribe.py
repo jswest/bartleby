@@ -576,6 +576,7 @@ def _ingest_pdf_pdfplumber(
     on_page_progress: Callable[[int, int], None] | None = None,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_page_count: Callable[[int | None], None] | None = None,
 ) -> tuple[int, str]:
     if on_stage is not None:
         on_stage("extracting")
@@ -585,6 +586,8 @@ def _ingest_pdf_pdfplumber(
         ocr_min_confidence=ocr_min_confidence,
         on_progress=on_page_progress,
     )
+    if on_page_count is not None:
+        on_page_count(result.page_count)
     document_id = _insert_document(
         conn,
         file_hash=file_hash,
@@ -661,12 +664,15 @@ def _ingest_pdf_docling(
     vision_min_dimension: int,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_page_count: Callable[[int | None], None] | None = None,
 ) -> tuple[int, str]:
     from bartleby.ingest import docling as docling_pipeline
 
     if on_stage is not None:
         on_stage("extracting")
     docling_result = docling_pipeline.convert(archived)
+    if on_page_count is not None:
+        on_page_count(docling_result.page_count)
     document_id = _insert_document(
         conn,
         file_hash=file_hash,
@@ -828,6 +834,7 @@ def _process_one(
     on_page_progress: Callable[[int, int], None] | None = None,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_page_count: Callable[[int | None], None] | None = None,
 ) -> bool:
     """Returns True if a new document was ingested, False if the file was
     already ingested and skipped. Caller handles the user-facing message."""
@@ -872,6 +879,7 @@ def _process_one(
                 vision_min_dimension=vision_min_dimension,
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
+                on_page_count=on_page_count,
             )
         else:
             document_id, full_text = _ingest_pdf_pdfplumber(
@@ -886,6 +894,7 @@ def _process_one(
                 on_page_progress=on_page_progress,
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
+                on_page_count=on_page_count,
             )
     elif edgar_pipeline.detect(archived):
         # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
@@ -1063,10 +1072,33 @@ def main(
             skipped_count = 0
 
             for src, src_ext in sources:
-                def _set_stage(stage: str, _src=src) -> None:
-                    bar.update(task, label=f"Ingesting {_src.name} · {stage}")
+                # Render the main row from the active stage + page count. The
+                # filename is truncated so a long name can't squeeze the bar
+                # (issue #85); the page count is appended once extraction knows
+                # it, for whichever converter ran.
+                state = {"stage": "starting", "pages": None}
 
-                _set_stage("starting")
+                def _render(_src=src, _state=state) -> None:
+                    name = console.truncate_filename(_src.name)
+                    pages = _state["pages"]
+                    page_str = (
+                        f" · {pages} page{'' if pages == 1 else 's'}"
+                        if pages else ""
+                    )
+                    bar.update(
+                        task,
+                        label=f"Ingesting {name}{page_str} · {_state['stage']}",
+                    )
+
+                def _set_stage(stage: str, _state=state, _render=_render) -> None:
+                    _state["stage"] = stage
+                    _render()
+
+                def _set_page_count(count: int | None, _state=state, _render=_render) -> None:
+                    _state["pages"] = count
+                    _render()
+
+                _render()
                 try:
                     was_ingested = _process_one(
                         conn, src, src_ext, archive_root,
@@ -1081,9 +1113,10 @@ def main(
                         max_summarize_tokens=max_summarize_tokens,
                         vision_provider=vision_provider,
                         vision_model=vision_model,
-                        on_page_progress=_phase_callback(f"  pages ({src.name})"),
-                        on_image_progress=_phase_callback(f"  images ({src.name})"),
+                        on_page_progress=_phase_callback("  pages"),
+                        on_image_progress=_phase_callback("  images"),
                         on_stage=_set_stage,
+                        on_page_count=_set_page_count,
                     )
                     if not was_ingested:
                         skipped_count += 1
