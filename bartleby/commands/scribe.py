@@ -48,10 +48,10 @@ from bartleby.ingest import sec2md as sec2md_pipeline
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
     PDF_EXTENSIONS,
-    SUPPORTED_EXTENSIONS,
     ChunkRow,
     chunk_markdown_string,
     convert_and_chunk,
+    resolve_extension,
 )
 from bartleby.ingest.embed import embed_texts
 from bartleby.ingest.summarize import SummaryResult, count_tokens, summarize
@@ -80,8 +80,7 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _archive(src: Path, archive_root: Path, file_hash: str) -> Path:
-    ext = src.suffix.lower()
+def _archive(src: Path, archive_root: Path, file_hash: str, ext: str) -> Path:
     dest_dir = archive_root / file_hash
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{file_hash}{ext}"
@@ -90,16 +89,32 @@ def _archive(src: Path, archive_root: Path, file_hash: str) -> Path:
     return dest
 
 
-def _collect_files(path: Path) -> list[Path]:
+def _collect_files(path: Path) -> tuple[list[tuple[Path, str]], list[Path]]:
+    """Resolve ``path`` to ingestible ``(file, extension)`` pairs.
+
+    The resolved extension is what the file should be *treated as* — the
+    filename extension when it is supported, otherwise a content-sniffed one
+    (see :func:`resolve_extension`). Returns ``(sources, unidentified)`` where
+    ``unidentified`` lists directory entries that could not be resolved to a
+    supported type; the caller surfaces them so they are not dropped silently.
+    """
     if path.is_file():
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported file type: {path.suffix}")
-        return [path]
+        ext = resolve_extension(path)
+        if ext is None:
+            raise ValueError(f"Unsupported file type: {path.name}")
+        return [(path, ext)], []
     if path.is_dir():
-        return sorted(
-            p for p in path.rglob("*")
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
-        )
+        sources: list[tuple[Path, str]] = []
+        unidentified: list[Path] = []
+        for p in sorted(path.rglob("*")):
+            if not p.is_file():
+                continue
+            ext = resolve_extension(p)
+            if ext is None:
+                unidentified.append(p)
+            else:
+                sources.append((p, ext))
+        return sources, unidentified
     raise ValueError(f"Path not found: {path}")
 
 
@@ -758,6 +773,7 @@ HTML_EXTENSIONS = {".html", ".htm"}
 def _process_one(
     conn,
     path: Path,
+    ext: str,
     archive_root: Path,
     *,
     pdf_converter: str,
@@ -790,9 +806,8 @@ def _process_one(
     if stranded is not None:
         _cleanup_partial_document(conn, stranded[0])
 
-    archived = _archive(path, archive_root, file_hash)
+    archived = _archive(path, archive_root, file_hash, ext)
 
-    ext = path.suffix.lower()
     if ext in IMAGE_EXTENSIONS:
         if vision_provider is None:
             console.warn(
@@ -940,7 +955,19 @@ def main(
             f"expected 'docling' or 'sec2md'."
         )
 
-    sources = _collect_files(Path(files))
+    sources, unidentified = _collect_files(Path(files))
+    if unidentified:
+        UNIDENTIFIED_DISPLAY_LIMIT = 10
+        console.warn(
+            f"Skipping {len(unidentified)} file(s) whose type could not be "
+            f"identified (no usable extension and content sniffing failed):"
+        )
+        for p in unidentified[:UNIDENTIFIED_DISPLAY_LIMIT]:
+            console.warn(f"  - {p.name}")
+        if len(unidentified) > UNIDENTIFIED_DISPLAY_LIMIT:
+            console.warn(
+                f"  … and {len(unidentified) - UNIDENTIFIED_DISPLAY_LIMIT} more"
+            )
     if not sources:
         console.warn("No supported files found.")
         return
@@ -998,14 +1025,14 @@ def main(
             SKIP_DISPLAY_LIMIT = 3
             skipped_count = 0
 
-            for src in sources:
+            for src, src_ext in sources:
                 def _set_stage(stage: str, _src=src) -> None:
                     bar.update(task, label=f"Ingesting {_src.name} · {stage}")
 
                 _set_stage("starting")
                 try:
                     was_ingested = _process_one(
-                        conn, src, archive_root,
+                        conn, src, src_ext, archive_root,
                         pdf_converter=pdf_converter_name,
                         html_converter=html_converter_name,
                         sparse_text_threshold=sparse_text_threshold,
