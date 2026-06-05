@@ -181,6 +181,7 @@ def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "openai",              # Vision provider (same as LLM → no fresh api key)
         "gpt-5-mini",          # Vision model
         "1024",                # vision_max_dimension
+        "32",                  # vision_min_dimension
         "30",                  # ocr_min_confidence
         "50000",               # max_read_tokens
     ])
@@ -189,6 +190,7 @@ def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
     assert cfg["vision_provider"] == "openai"
     assert cfg["vision_model"] == "gpt-5-mini"
     assert cfg["vision_max_dimension"] == 1024
+    assert cfg["vision_min_dimension"] == 32
     assert cfg["ocr_min_confidence"] == 30
     # openai_api_key already set from the LLM block; no double prompt.
     assert cfg["openai_api_key"] == "sk-openai"
@@ -213,6 +215,7 @@ def test_ready_vision_with_different_provider_prompts_for_fresh_key(
         "claude-haiku-4-5",
         "sk-anthro",
         "1024",
+        "32",
         "30",
         "50000",
     ])

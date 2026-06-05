@@ -89,6 +89,19 @@ def prepare_image(image_bytes: bytes, *, max_dimension: int) -> PreparedImage:
     )
 
 
+def is_below_vlm_minimum(prepared: PreparedImage, *, min_dimension: int) -> bool:
+    """True when either edge is under ``min_dimension``.
+
+    VLM image processors (e.g. qwen3-vl) tile images into patches and crash
+    when an edge is smaller than the patch factor. Such images — thin rules,
+    banners, sliver crops — carry no describable scene, so the scribe skips
+    them entirely rather than sending them to the model. The check is on the
+    *post-scale* dimensions, since downscaling a tall-thin image can itself
+    push an edge below the minimum.
+    """
+    return min(prepared.width, prepared.height) < min_dimension
+
+
 def archive_image(prepared: PreparedImage, archive_root: Path) -> Path:
     """Write the prepared JPEG to ``<archive_root>/images/<hash>.jpg``.
 
