@@ -232,7 +232,17 @@ def _write_summary(conn, document_id: int, summary: SummaryResult) -> int:
 
 
 def _build_summary_input(conn, document_id: int, fallback_text: str) -> str:
-    """Interleave document and image chunks in source order for the summarizer."""
+    """Interleave document and image chunks in source order for the summarizer.
+
+    Either set may be empty: a text-only doc has no image chunks, an image-only
+    doc (a standalone image, or an image-only PDF whose pages all rendered to
+    the VLM) has no document chunks. We build from whatever chunks exist so the
+    summarizer always sees real, indexed content — never the raw ``full_text``,
+    which for image-only docs is trace garbage (page labels, form-feed
+    separators) and makes the model confabulate (issue #80). ``fallback_text``
+    is returned only when there are no chunks of either kind, which the
+    chunk-count guard in ``_maybe_summarize`` already excludes.
+    """
     cur = conn.cursor()
     img_rows = cur.execute(
         "SELECT di.page_number, c.chunk_index, c.text "
@@ -241,14 +251,12 @@ def _build_summary_input(conn, document_id: int, fallback_text: str) -> str:
         "WHERE c.source_kind = 'image' AND di.document_id = ?",
         (document_id,),
     ).fetchall()
-    if not img_rows:
-        return fallback_text
     doc_rows = cur.execute(
         "SELECT page_number, chunk_index, text FROM chunks "
         "WHERE source_kind = 'document' AND source_id = ?",
         (document_id,),
     ).fetchall()
-    if not doc_rows:
+    if not img_rows and not doc_rows:
         return fallback_text
 
     KIND_DOC, KIND_IMG = 0, 1
@@ -271,6 +279,28 @@ def _build_summary_input(conn, document_id: int, fallback_text: str) -> str:
     return "\n\n".join(parts)
 
 
+def _document_chunk_count(conn, document_id: int) -> int:
+    """Count indexed chunks attributable to a document: its own document chunks
+    plus any image chunks joined through ``document_images``.
+
+    Summary chunks are excluded — at summarize time the summary doesn't exist
+    yet, and it would never be an *input* to the summarizer anyway. This is the
+    "is there anything real to summarize?" test (issue #80): a document with
+    zero chunks has no extractable content, so the only text left to feed the
+    model is the trace ``full_text``, which makes it confabulate.
+    """
+    row = conn.cursor().execute(
+        "SELECT "
+        "  (SELECT COUNT(*) FROM chunks "
+        "   WHERE source_kind = 'document' AND source_id = ?) "
+        "+ (SELECT COUNT(*) FROM chunks c "
+        "     JOIN document_images di ON di.image_id = c.source_id "
+        "   WHERE c.source_kind = 'image' AND di.document_id = ?)",
+        (document_id, document_id),
+    ).fetchone()
+    return row[0]
+
+
 def _maybe_summarize(
     conn,
     document_id: int,
@@ -282,7 +312,22 @@ def _maybe_summarize(
     max_summarize_tokens: int,
     on_stage: Callable[[str], None] | None = None,
 ) -> None:
-    if provider is None or not model or not full_text or not full_text.strip():
+    if provider is None or not model:
+        return
+    if _document_chunk_count(conn, document_id) == 0:
+        # No indexed chunks → nothing real to summarize. Handing the model the
+        # trace `full_text` (page labels, form-feed separators from an
+        # image-only / sub-threshold doc) makes it confabulate a plausible but
+        # entirely fabricated summary (issue #80). Skip, and surface it so the
+        # user can spot an ingestion failure (e.g. an image-only PDF needing OCR).
+        file_name = conn.cursor().execute(
+            "SELECT file_name FROM documents WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()[0]
+        console.warn(
+            f"{file_name}: no summary — no extractable content (0 chunks). "
+            f"The document may be image-only and need OCR/re-ingest."
+        )
         return
     if on_stage is not None:
         on_stage("summarizing")
@@ -710,18 +755,10 @@ def _ingest_image_file(
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
     )
-    # For summarization purposes, hand the LLM the concatenated chunk text.
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT c.text FROM chunks c "
-        "JOIN images i ON i.image_id = c.source_id "
-        "JOIN document_images di ON di.image_id = i.image_id "
-        "WHERE c.source_kind = 'image' AND di.document_id = ? "
-        "ORDER BY c.chunk_index",
-        (document_id,),
-    )
-    full_text = "\n\n".join(r[0] for r in rows)
-    return document_id, full_text
+    # No full_text to return: a standalone image has no document chunks, so the
+    # summarizer builds its input from the image chunks directly
+    # (_build_summary_input). The fallback_text is never reached here.
+    return document_id, ""
 
 
 def _run_image_routes(
