@@ -538,6 +538,48 @@ def test_scribe_stage_callback_progresses_through_phases(
     assert stages[-1] == "summarizing"
 
 
+def test_scribe_page_count_callback_fires_for_pdf(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """on_page_count receives the converter's page count (issue #85)."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    monkeypatch.setattr(
+        scribe_module, "load_config",
+        lambda: {
+            "summary_depth": "none",
+            "pdf_converter": "pdfplumber",
+            "html_converter": "docling",
+            "sparse_text_threshold": 100,
+        },
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _text_pdf(pdf)
+
+    counts: list[int | None] = []
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        scribe_module._process_one(
+            conn, pdf, ".pdf", archive_root,
+            pdf_converter="pdfplumber",
+            html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_max_dimension=1024, vision_min_dimension=32,
+            llm_provider=None, llm_model=None,
+            temperature=0.0, max_summarize_tokens=1000,
+            vision_provider=None, vision_model=None,
+            on_page_count=counts.append,
+        )
+    finally:
+        conn.close()
+
+    assert counts == [1]
+
+
 def test_scribe_image_progress_callback_fires_per_image(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
