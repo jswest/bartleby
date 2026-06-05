@@ -16,6 +16,7 @@ import bartleby.project
 from bartleby.commands import scribe
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.ingest.chunk import resolve_extension
 from bartleby.providers.base import DocumentSummary, VlmDescription
 
 
@@ -113,6 +114,19 @@ def _pdf_with_image(path, image_bytes, *, text="Plenty of text on this page so i
     c.drawImage(ImageReader(io.BytesIO(image_bytes)), 100, 400, width=200, height=100)
     c.showPage()
     c.save()
+
+
+def _text_pdf(path, text="Plenty of text on this page so it is not sparse. " * 5):
+    """A real, image-free PDF — ingests via pdfplumber without a vision provider."""
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 12)
+    t = c.beginText(72, 720)
+    for line in (text.splitlines() or [text]):
+        t.textLine(line)
+    c.drawText(t)
+    c.showPage()
+    c.save()
+    return path
 
 
 def _write_txt(path, content):
@@ -460,7 +474,7 @@ def test_scribe_stage_callback_progresses_through_phases(
     conn = open_db("test_proj")
     try:
         scribe_module._process_one(
-            conn, pdf, archive_root,
+            conn, pdf, ".pdf", archive_root,
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -514,7 +528,7 @@ def test_scribe_image_progress_callback_fires_per_image(
     conn = open_db("test_proj")
     try:
         scribe_module._process_one(
-            conn, pdf, archive_root,
+            conn, pdf, ".pdf", archive_root,
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -961,5 +975,87 @@ def test_scribe_unwraps_edgar_full_submission(
         )
         assert "<SEC-DOCUMENT>" not in texts
         assert "<DOCUMENT>" not in texts
+    finally:
+        conn.close()
+
+
+# -------------------- content-sniffed file-type resolution --------------------
+
+
+def test_resolve_extension_trusts_supported_extension(tmp_path):
+    p = _write_txt(tmp_path / "doc.txt", "hi")
+    assert resolve_extension(p) == ".txt"
+
+
+def test_resolve_extension_sniffs_when_extension_missing(tmp_path):
+    # The NTSB docket scraper truncates long names, dropping the .PDF entirely.
+    pdf = _text_pdf(tmp_path / "ATTACHMENT 7 - LOADING FORMS")
+    assert resolve_extension(pdf) == ".pdf"
+
+
+def test_resolve_extension_sniffs_when_extension_unrecognized(tmp_path):
+    # The last dot lands inside "5800.1", so suffix is a junk ".1_ january".
+    pdf = _text_pdf(tmp_path / "PHMSA FORMS 5800.1_ JANUARY")
+    assert resolve_extension(pdf) == ".pdf"
+
+
+def test_resolve_extension_does_not_override_recognized_extension(tmp_path):
+    # A .txt whose bytes are actually a PDF stays text: no content fallback when
+    # the extension is already supported.
+    p = _text_pdf(tmp_path / "actually_a_pdf.txt")
+    assert resolve_extension(p) == ".txt"
+
+
+def test_resolve_extension_returns_none_for_unidentifiable(tmp_path):
+    p = tmp_path / "mystery"
+    p.write_bytes(b"\x00\x01\x02\x03not a known magic signature")
+    assert resolve_extension(p) is None
+
+
+def test_collect_files_single_extensionless_pdf(tmp_path):
+    pdf = _text_pdf(tmp_path / "docket_no_ext")
+    sources, unidentified = scribe._collect_files(pdf)
+    assert sources == [(pdf, ".pdf")]
+    assert unidentified == []
+
+
+def test_collect_files_single_unsupported_raises(tmp_path):
+    p = tmp_path / "mystery"
+    p.write_bytes(b"\x00\x01\x02\x03")
+    with pytest.raises(ValueError):
+        scribe._collect_files(p)
+
+
+def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
+    d = tmp_path / "docket"
+    d.mkdir()
+    pdf = _text_pdf(d / "ATTACHMENT 7 - LOADING FORMS")     # extensionless PDF
+    named = _text_pdf(d / "report.pdf")                     # already has .pdf
+    junk = d / "notes"                                      # unidentifiable
+    junk.write_bytes(b"\x00\x01\x02\x03")
+
+    sources, unidentified = scribe._collect_files(d)
+
+    assert (pdf, ".pdf") in sources
+    assert (named, ".pdf") in sources
+    assert unidentified == [junk]
+
+
+def test_scribe_ingests_extensionless_pdf_by_sniffing(
+    isolated_project, tmp_path, mock_embed
+):
+    # End to end: a PDF whose filename lost its extension still ingests as a PDF.
+    src = _text_pdf(tmp_path / "ATTACHMENT 7 - LOADING FORMS")
+    scribe.main(project="test_proj", files=str(src), verbose=False)
+
+    conn = open_db("test_proj")
+    try:
+        docs = conn.cursor().execute(
+            "SELECT file_name, page_count FROM documents"
+        ).fetchall()
+        assert len(docs) == 1
+        assert docs[0][0] == "ATTACHMENT 7 - LOADING FORMS"
+        # A page count (txt would be NULL) proves it took the PDF route.
+        assert docs[0][1] == 1
     finally:
         conn.close()

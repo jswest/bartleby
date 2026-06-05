@@ -59,19 +59,19 @@ To opt into the Docling converter (slower text extraction, but layout-aware; req
 uv tool install '.[docling]'
 ```
 
-To opt into the wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal):
-
-```
-uv tool install '.[wsjpt]'
-```
-
 To opt into [sec2md](https://github.com/alphanome-ai/sec2md) for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.). sec2md preserves SEC table structure and section headings that Docling tends to flatten. It only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head); everything else on the HTML branch still falls through to Docling.
 
 ```
 uv tool install '.[sec2md]'
 ```
 
-You can combine extras: `uv tool install '.[docling,sec2md,wsjpt]'`.
+You can combine extras: `uv tool install '.[docling,sec2md]'`.
+
+The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** part of the locked dependency set — its git source is unreachable outside WSJ, which would otherwise break `uv lock`/`uv sync` for everyone. Install it out-of-band when you need it:
+
+```
+uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'
+```
 
 For development:
 
@@ -136,7 +136,7 @@ This creates a project directory (`foo` in this case) and marks it active. Subse
 bartleby scribe --files /path/to/your/docs
 ```
 
-Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image files (`.jpg`, `.png`, `.webp`, `.bmp`, `.tiff`). Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. With a vision provider configured, embedded images inside PDFs and standalone image files are also analyzed (OCR transcription + scene description) and chunked into the same searchable index. Everything goes into the project's SQLite database.
+Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image files (`.jpg`, `.png`, `.webp`, `.bmp`, `.tiff`). A file whose extension is missing or unrecognized is content-sniffed (magic bytes) and ingested if it turns out to be a supported type — so a PDF that lost its `.pdf` (e.g. a docket scraper that truncates long filenames) is still picked up; in a directory ingest, anything that can't be identified is skipped with a note rather than silently dropped. Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. With a vision provider configured, embedded images inside PDFs and standalone image files are also analyzed (OCR transcription + scene description) and chunked into the same searchable index. Everything goes into the project's SQLite database.
 
 ### 4. Start an agent session
 
@@ -260,7 +260,7 @@ bartleby scribe --files <path> [options]
 | `--html-converter <name>` | Override HTML converter (`docling` or `sec2md`) |
 | `--verbose` | Show debug output |
 
-**Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`).
+**Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`). The type is taken from the extension when it is one of these; a missing or unrecognized extension is resolved by sniffing the file's magic bytes instead. A recognized extension is always trusted as-is — content never overrides it — so a `.txt` that happens to hold PDF bytes stays text.
 
 Ingestion runs sequentially. The embedding model is heavy, and small corpora don't benefit enough from parallelism to justify the warmup cost and complexity.
 
@@ -345,7 +345,7 @@ Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
 | Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative — see the Ollama-defaults note above. |
-| wsjpt | `fast` | `fast` | Optional extra (`bartleby[wsjpt]`). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install. Set `GEMINI_API_KEY` (or `wsjpt_api_key` in config); without one, wsjpt falls back to Vertex AI via ADC. |
+| wsjpt | `fast` | `fast` | Out-of-band install (`uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'`; not in the locked deps — WSJ-internal git source). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install. Set `GEMINI_API_KEY` (or `wsjpt_api_key` in config); without one, wsjpt falls back to Vertex AI via ADC. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
 

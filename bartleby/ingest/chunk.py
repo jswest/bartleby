@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import filetype
+
 from bartleby.ingest import docling as docling_pipeline
 from bartleby.ingest import text as text_pipeline
 
@@ -22,6 +24,30 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 SUPPORTED_EXTENSIONS = (
     PDF_EXTENSIONS | DOCLING_ONLY_EXTENSIONS | TEXT_EXTENSIONS | IMAGE_EXTENSIONS
 )
+
+
+def resolve_extension(path: Path) -> str | None:
+    """Return the supported extension to treat ``path`` as, or ``None``.
+
+    The filename extension wins whenever it is one we support: a recognized
+    extension is trusted as-is and we never second-guess it from content (so a
+    ``.txt`` that happens to start with PDF bytes stays text). Sniffing kicks in
+    *only* when the extension gives us nothing usable — missing, or not one we
+    recognize — in which case we read the file's magic bytes via ``filetype``.
+
+    Returns a leading-dot, lowercased extension drawn from
+    ``SUPPORTED_EXTENSIONS``, or ``None`` when the file is an unsupported type or
+    its type cannot be determined at all.
+    """
+    ext = path.suffix.lower()
+    if ext in SUPPORTED_EXTENSIONS:
+        return ext
+    kind = filetype.guess(str(path))
+    if kind is None:
+        return None
+    sniffed = f".{kind.extension.lower()}"
+    return sniffed if sniffed in SUPPORTED_EXTENSIONS else None
+
 
 # Soft cap for agent-authored markdown chunks. Picked to stay well under the
 # embedder's 512-token max sequence; characters are a rough proxy.

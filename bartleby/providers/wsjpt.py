@@ -31,8 +31,10 @@ class WsjptProvider:
             from wsjpt import Jpt, ModelConfig
         except ImportError as e:
             raise RuntimeError(
-                "The wsjpt provider requires the 'wsjpt' optional extra. "
-                "Install with: uv tool install 'bartleby[wsjpt]' (or pip equivalent)."
+                "The wsjpt provider requires the 'wsjpt' package, which is "
+                "installed out-of-band (it is not part of the locked dependency "
+                "set). Install with: "
+                "uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'"
             ) from e
         self._Jpt = Jpt
         self._ModelConfig = ModelConfig

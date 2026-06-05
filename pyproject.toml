@@ -15,6 +15,7 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
     "apsw>=3.51.0.0",
+    "filetype>=1.2.0",
     "loguru>=0.7.3",
     "numpy>=2.3.4",
     "ollama>=0.4.0",
@@ -33,9 +34,6 @@ dependencies = [
 [project.optional-dependencies]
 docling = [
     "docling>=2.0.0",
-]
-wsjpt = [
-    "wsjpt @ git+ssh://git@github.dowjones.net/data/wsjpt.git",
 ]
 sec2md = [
     "sec2md==0.1.22",
