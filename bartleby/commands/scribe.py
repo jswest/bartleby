@@ -63,6 +63,7 @@ from bartleby.lib.consts import (
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_VISION_MAX_DIMENSION,
+    DEFAULT_VISION_MIN_DIMENSION,
 )
 from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
@@ -304,6 +305,7 @@ def _process_image(
     vision_provider: Provider,
     vision_model: str,
     vision_max_dimension: int,
+    vision_min_dimension: int,
 ) -> None:
     """Run the §7 image pipeline on one image and persist it.
 
@@ -311,10 +313,23 @@ def _process_image(
     identical image (across any document), reuse the ``images`` row and add a
     new ``document_images`` join. Chunks come along automatically since they
     point at ``image_id``.
+
+    Images with an edge below ``vision_min_dimension`` are skipped entirely —
+    no analysis, no archive, no rows — because VLMs crash on sub-patch-size
+    images and such slivers carry no describable content anyway.
     """
     prepared = image_pipeline.prepare_image(
         route.bytes_, max_dimension=vision_max_dimension,
     )
+    if image_pipeline.is_below_vlm_minimum(
+        prepared, min_dimension=vision_min_dimension
+    ):
+        page_str = f" (page {route.page_number})" if route.page_number else ""
+        console.warn(
+            f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
+            f"is below the {vision_min_dimension}px vision minimum."
+        )
+        return
     cur = conn.cursor()
 
     existing = cur.execute(
@@ -497,6 +512,7 @@ def _ingest_pdf_pdfplumber(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    vision_min_dimension: int,
     on_page_progress: Callable[[int, int], None] | None = None,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
@@ -564,6 +580,7 @@ def _ingest_pdf_pdfplumber(
         vision_provider=vision_provider,
         vision_model=vision_model,
         vision_max_dimension=vision_max_dimension,
+        vision_min_dimension=vision_min_dimension,
         on_progress=on_image_progress,
     )
 
@@ -581,6 +598,7 @@ def _ingest_pdf_docling(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    vision_min_dimension: int,
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
@@ -634,6 +652,7 @@ def _ingest_pdf_docling(
             vision_provider=vision_provider,
             vision_model=vision_model,
             vision_max_dimension=vision_max_dimension,
+            vision_min_dimension=vision_min_dimension,
             on_progress=on_image_progress,
         )
 
@@ -650,6 +669,7 @@ def _ingest_image_file(
     vision_provider: Provider,
     vision_model: str,
     vision_max_dimension: int,
+    vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
     if on_stage is not None:
@@ -673,6 +693,7 @@ def _ingest_image_file(
         vision_provider=vision_provider,
         vision_model=vision_model,
         vision_max_dimension=vision_max_dimension,
+        vision_min_dimension=vision_min_dimension,
     )
     # For summarization purposes, hand the LLM the concatenated chunk text.
     cur = conn.cursor()
@@ -697,6 +718,7 @@ def _run_image_routes(
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
+    vision_min_dimension: int,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> None:
     if not routes:
@@ -717,6 +739,7 @@ def _run_image_routes(
                 vision_provider=vision_provider,
                 vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
+                vision_min_dimension=vision_min_dimension,
             )
         except Exception as e:
             page_str = f" (page {route.page_number})" if route.page_number else ""
@@ -742,6 +765,7 @@ def _process_one(
     sparse_text_threshold: int,
     ocr_min_confidence: int,
     vision_max_dimension: int,
+    vision_min_dimension: int,
     llm_provider: Provider | None,
     llm_model: str | None,
     temperature: float,
@@ -781,6 +805,7 @@ def _process_one(
             archive_root=archive_root,
             vision_provider=vision_provider, vision_model=vision_model,
             vision_max_dimension=vision_max_dimension,
+            vision_min_dimension=vision_min_dimension,
             on_stage=on_stage,
         )
     elif ext in PDF_EXTENSIONS:
@@ -792,6 +817,7 @@ def _process_one(
                 sparse_text_threshold=sparse_text_threshold,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
+                vision_min_dimension=vision_min_dimension,
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
             )
@@ -804,6 +830,7 @@ def _process_one(
                 ocr_min_confidence=ocr_min_confidence,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
+                vision_min_dimension=vision_min_dimension,
                 on_page_progress=on_page_progress,
                 on_image_progress=on_image_progress,
                 on_stage=on_stage,
@@ -936,6 +963,9 @@ def main(
         vision_max_dimension = int(
             config.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)
         )
+        vision_min_dimension = int(
+            config.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)
+        )
 
         # Share the console module's Rich Console so messages printed via
         # console.info/error during the bar's lifetime are inserted above
@@ -981,6 +1011,7 @@ def main(
                         sparse_text_threshold=sparse_text_threshold,
                         ocr_min_confidence=ocr_min_confidence,
                         vision_max_dimension=vision_max_dimension,
+                        vision_min_dimension=vision_min_dimension,
                         llm_provider=llm_provider, llm_model=llm_model,
                         temperature=temperature,
                         max_summarize_tokens=max_summarize_tokens,

@@ -11,6 +11,7 @@ from bartleby.lib.consts import (
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_VISION_MAX_DIMENSION,
+    DEFAULT_VISION_MIN_DIMENSION,
 )
 from bartleby.providers import ALLOWED_PROVIDERS
 
@@ -236,13 +237,19 @@ def main():
             "Max image dimension (long edge in pixels before sending to VLM)",
             int(existing.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)),
         )
+        config["vision_min_dimension"] = _prompt_positive_int(
+            "Min image dimension (skip images with an edge smaller than this; "
+            "avoids VLM crashes on thin slivers)",
+            int(existing.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)),
+        )
         config["ocr_min_confidence"] = _prompt_positive_int(
             "Tesseract minimum avg confidence (0-100; fallback to VLM below this)",
             int(existing.get("ocr_min_confidence", DEFAULT_OCR_MIN_CONFIDENCE)),
         )
     else:
         for k in ("vision_provider", "vision_model",
-                 "vision_max_dimension", "ocr_min_confidence"):
+                 "vision_max_dimension", "vision_min_dimension",
+                 "ocr_min_confidence"):
             config.pop(k, None)
 
     console.print("\n[bold]Document reading[/bold]")

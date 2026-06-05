@@ -362,6 +362,48 @@ def test_scribe_ingests_standalone_image_file(
         conn.close()
 
 
+def test_scribe_skips_sub_minimum_image_without_calling_vlm(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A thin sub-32px strip is dropped before the VLM (no row, no crash)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+            "vision_min_dimension": 32,
+        },
+    )
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: vision,
+    )
+
+    img = tmp_path / "rule.png"
+    img.write_bytes(_png_bytes(width=512, height=24))
+
+    scribe.main(project="test_proj", files=str(img))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # The document row exists, but the sub-minimum image is skipped entirely:
+        # no images row, no join, no image chunk.
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # The VLM was never called — no chance to crash the runner.
+    assert vision.calls == 0
+
+
 def test_scribe_skips_image_when_no_vision_provider(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -464,7 +506,7 @@ def test_scribe_stage_callback_progresses_through_phases(
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024,
+            vision_max_dimension=1024, vision_min_dimension=32,
             llm_provider=stub_summary, llm_model="m",
             temperature=0.0, max_summarize_tokens=50_000,
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
@@ -518,7 +560,7 @@ def test_scribe_image_progress_callback_fires_per_image(
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024,
+            vision_max_dimension=1024, vision_min_dimension=32,
             llm_provider=None, llm_model=None,
             temperature=0.0, max_summarize_tokens=1000,
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",

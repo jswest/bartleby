@@ -73,6 +73,26 @@ def test_prepare_image_rejects_zero_max_dimension():
         img_pipeline.prepare_image(_png_bytes(10, 10), max_dimension=0)
 
 
+def test_is_below_vlm_minimum_flags_thin_strips():
+    # A 512x24 strip (the qwen3-vl crash case) is below a 32px minimum.
+    strip = img_pipeline.prepare_image(_png_bytes(512, 24), max_dimension=1024)
+    assert img_pipeline.is_below_vlm_minimum(strip, min_dimension=32)
+    # A square comfortably above the minimum is not flagged.
+    square = img_pipeline.prepare_image(_png_bytes(100, 100), max_dimension=1024)
+    assert not img_pipeline.is_below_vlm_minimum(square, min_dimension=32)
+    # Exactly at the minimum on both edges is allowed (strictly-below check).
+    edge = img_pipeline.prepare_image(_png_bytes(32, 32), max_dimension=1024)
+    assert not img_pipeline.is_below_vlm_minimum(edge, min_dimension=32)
+
+
+def test_is_below_vlm_minimum_uses_post_scale_dimensions():
+    # 5000x100 downscaled to a 1024 long edge becomes 1024x20 — the short edge
+    # drops below 32 only *after* scaling, so the post-scale check must catch it.
+    prepared = img_pipeline.prepare_image(_png_bytes(5000, 100), max_dimension=1024)
+    assert prepared.height < 32
+    assert img_pipeline.is_below_vlm_minimum(prepared, min_dimension=32)
+
+
 def test_archive_image_writes_then_is_idempotent(tmp_path):
     prepared = img_pipeline.prepare_image(_png_bytes(50, 50), max_dimension=1024)
     p1 = img_pipeline.archive_image(prepared, tmp_path)
