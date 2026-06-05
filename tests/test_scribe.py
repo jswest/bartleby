@@ -955,6 +955,134 @@ end
 """
 
 
+def test_maybe_summarize_skips_zero_chunk_document(isolated_project):
+    """A document with no indexed chunks is never handed to the summarizer —
+    its only text is `full_text` trace garbage that makes the model
+    confabulate (issue #80)."""
+    conn = open_db("test_proj")
+    try:
+        conn.cursor().execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("maphash", "annotated-map.pdf", "/tmp/map.pdf", 1, 3),
+        )
+        doc_id = conn.last_insert_rowid()
+
+        stub = _StubProvider()
+        # full_text is the kind of trace string that defeats the old
+        # whitespace-only guard: non-empty after .strip().
+        scribe._maybe_summarize(
+            conn, doc_id, "Map\n\f\nMap",
+            provider=stub, model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+        )
+
+        # Provider never called, nothing persisted.
+        assert stub.calls == 0
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM summaries"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_build_summary_input_uses_image_chunks_without_doc_chunks(
+    isolated_project,
+):
+    """An image-only doc (image chunks, no document chunks) summarizes from
+    its real VLM/OCR descriptions — not the trace `full_text` (issue #80)."""
+    from bartleby.db.chunks import ChunkInput, insert_image_chunks
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("imgonly", "map.pdf", "/tmp/map.pdf", 1, 3),
+        )
+        doc_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
+            ("imgblob", "/tmp/map.png", 800, 600, "{}", "m"),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, 2, 0),
+        )
+        insert_image_chunks(conn, image_id, [ChunkInput(
+            text="An annotated railroad track map of the Bellingham subdivision.",
+            embedding=[0.1] * EMBEDDING_DIM,
+            chunk_index=0,
+            content_type="image_description",
+        )])
+
+        result = scribe._build_summary_input(conn, doc_id, "Map\n\f\nMap")
+
+        # Real image-chunk text is fed, labeled with its page; trace is dropped.
+        assert "annotated railroad track map" in result
+        assert "[Image on page 2]" in result
+        assert "Map\n\f\nMap" not in result
+    finally:
+        conn.close()
+
+
+def test_scribe_summarizes_standalone_image_from_image_chunks(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A standalone image with a summary provider configured is summarized from
+    its image-chunk description (regression: _ingest_image_file no longer
+    reconstructs full_text — _build_summary_input reads the chunks directly)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot",
+            "provider": "anthropic", "model": "m",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+            "vision_provider": "stub", "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    summary_stub = _StubProvider()
+    vision_stub = _StubVisionProvider(VlmDescription(
+        description="A photo of a red barn in a field.", notes="",
+    ))
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    img = tmp_path / "barn.png"
+    img.write_bytes(_png_bytes())
+    scribe.main(project="test_proj", files=str(img))
+
+    # Summary was produced, and from the image description (not empty input).
+    assert summary_stub.calls == 1
+    captured = summary_stub.last_document_text
+    assert captured is not None
+    assert "red barn" in captured
+    assert "[Image]" in captured
+
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM summaries"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_unwraps_edgar_full_submission(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
