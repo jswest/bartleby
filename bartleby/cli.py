@@ -42,7 +42,19 @@ def main():
         "scribe",
         help="Ingest PDF, HTML, MD, TXT, and image files into a project",
     )
-    scribe_parser.add_argument("--files", required=True, type=str)
+    scribe_parser.add_argument(
+        "--files", required=True, type=str, nargs="+", metavar="PATH",
+        help="One or more files and/or directories to ingest. Directories are "
+             "walked recursively; a file reachable from more than one path is "
+             "ingested once.",
+    )
+    scribe_parser.add_argument(
+        "--only", type=str, action="append", default=None, metavar="TYPE",
+        help="Restrict ingestion to the given file type(s): pdf, html, md, txt, "
+             "image. Repeatable and/or comma-separated (e.g. --only pdf,html). "
+             "Filters on the resolved type, so content-sniffed files are "
+             "included.",
+    )
     scribe_parser.add_argument("--project", type=str, default=None)
     scribe_parser.add_argument("--model", type=str, default=None)
     scribe_parser.add_argument(
@@ -144,6 +156,7 @@ def _scribe(args):
     scribe_main(
         project=args.project,
         files=args.files,
+        only=args.only,
         model=args.model,
         provider=args.provider,
         pdf_converter=args.pdf_converter,
