@@ -1,8 +1,8 @@
 """Tests for `bartleby serve` — focused on the sync logic, not the dev server.
 
 The actual `npm run dev` exec is out of scope here; we verify that the sync
-symlinks ``src/``, copies top-level files, preserves ``node_modules``, and
-removes stale entries.
+symlinks ``src/`` from a checkout (and copies it from an installed package),
+copies top-level files, preserves ``node_modules``, and removes stale entries.
 """
 
 from __future__ import annotations
@@ -64,6 +64,27 @@ def test_sync_replaces_existing_symlink_idempotently(tmp_path):
     assert (dst / "src" / "a.js").read_text() == "a"
 
 
+def test_sync_copies_src_when_symlink_disabled(tmp_path):
+    """Installed-package path: src/ is copied, not symlinked, because the
+    packaged source is read-only and there's nothing to live-edit."""
+    src = tmp_path / "web"
+    dst = tmp_path / "serve"
+    (src / "src").mkdir(parents=True)
+    (src / "src" / "a.js").write_text("console.log('a');")
+    (src / "package.json").write_text("{}")
+
+    serve._sync_web(src, dst, symlink_src=False)
+
+    # src/ is a real copied directory, not a symlink.
+    assert (dst / "src").is_dir()
+    assert not (dst / "src").is_symlink()
+    assert (dst / "src" / "a.js").read_text() == "console.log('a');"
+
+    # Editing the copy does not touch the (read-only) packaged source.
+    (dst / "src" / "a.js").write_text("// edited")
+    assert (src / "src" / "a.js").read_text() == "console.log('a');"
+
+
 def test_sync_missing_source_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         serve._sync_web(tmp_path / "no-such-dir", tmp_path / "out")
@@ -100,6 +121,24 @@ def test_needs_install_true_when_package_json_newer(tmp_path):
     assert serve._needs_install(tmp_path) is True
 
 
-def test_web_src_points_at_repo_web():
+def test_web_src_is_packaged_under_bartleby():
+    # The UI now ships as package data at bartleby/web — it resolves the same
+    # from a checkout or an installed wheel.
     assert serve.WEB_SRC.name == "web"
+    assert serve.WEB_SRC.parent.name == "bartleby"
     assert (serve.WEB_SRC / "package.json").exists()
+    assert (serve.WEB_SRC / "src").is_dir()
+
+
+def test_is_source_checkout_true_in_repo():
+    # The test suite runs from a checkout, so the repo root has pyproject.toml.
+    assert serve._is_source_checkout() is True
+
+
+def test_is_source_checkout_false_when_no_pyproject(monkeypatch, tmp_path):
+    # Simulate an installed wheel: bartleby/web under site-packages, no
+    # pyproject.toml two levels up.
+    fake_web = tmp_path / "site-packages" / "bartleby" / "web"
+    fake_web.mkdir(parents=True)
+    monkeypatch.setattr(serve, "WEB_SRC", fake_web)
+    assert serve._is_source_checkout() is False
