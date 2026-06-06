@@ -28,6 +28,8 @@ Output:
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
+        # context_before/context_after are present only with --add-context > 0;
+        # omitted entirely at the default --add-context 0.
         "context_before": [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
         "context_after":  [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
         "rank": int,                  # 1-indexed within this query's results
@@ -107,7 +109,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="context",
         help=(
             "Number of neighbor chunks (0..5) to attach to each hit as "
-            "context_before/context_after. Default 0 (empty arrays). "
+            "context_before/context_after. Default 0 (keys omitted entirely). "
             "Each step roughly multiplies output size by (1 + 2N) — use sparingly."
         ),
     )
@@ -309,9 +311,10 @@ def _fetch_context(
 ) -> tuple[list[dict], list[dict]]:
     """Return neighbor chunks as {chunk_id, chunk_index, text} dicts so the
     agent can fetch a neighbor directly via ``read_chunks --chunks <id>``
-    instead of guessing the id from chunk_index ordering."""
-    if context <= 0:
-        return [], []
+    instead of guessing the id from chunk_index ordering.
+
+    Only called when ``context > 0`` — the caller omits the context keys
+    entirely at ``--add-context 0``."""
     lo = hit_index - context
     hi = hit_index + context
     rows = list(conn.cursor().execute(
@@ -403,9 +406,6 @@ def work(*, conn, args, session_id) -> dict:
     results = []
     for rank, (chunk_id, score) in enumerate(scored, start=1):
         _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
-        before, after = _fetch_context(
-            conn, source_kind, source_id, chunk_index, args.context
-        )
         loc = locations.get(chunk_id, {"file_name": None, "page_number": None})
         hit = {
             "chunk_id": chunk_id,
@@ -418,12 +418,18 @@ def work(*, conn, args, session_id) -> dict:
             "section_heading": section_heading,
             "content_type": content_type,
             "text": text,
-            "context_before": before,
-            "context_after": after,
             "rank": rank,
             "score": score,
             "normalized_score": score / top_score,
         }
+        # Neighbor context is opt-in; at --add-context 0 (the triage default) the
+        # keys are omitted entirely rather than shipped as empty arrays.
+        if args.context > 0:
+            before, after = _fetch_context(
+                conn, source_kind, source_id, chunk_index, args.context
+            )
+            hit["context_before"] = before
+            hit["context_after"] = after
         if source_kind == "image":
             hit["image_id"] = source_id
             hit["image_file_path"] = image_paths.get(source_id, "")
