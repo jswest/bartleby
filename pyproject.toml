@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=62.3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -55,3 +55,15 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["bartleby*"]
+
+# The SvelteKit UI ships as package data under bartleby/web so `bartleby serve`
+# works from an installed wheel, not just a checkout. Only the source is bundled;
+# node_modules/.svelte-kit/build are dev/build artifacts regenerated at runtime,
+# and package-lock.json is not tracked (npm regenerates it on first install).
+[tool.setuptools.package-data]
+bartleby = [
+    "web/package.json",
+    "web/svelte.config.js",
+    "web/vite.config.js",
+    "web/src/**/*",
+]

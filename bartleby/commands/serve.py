@@ -1,8 +1,16 @@
 """bartleby serve — sync the SvelteKit UI to ~/.bartleby/serve and run it.
 
-The UI source lives in ``web/`` in the repo. On every invocation we sync that
-tree into ``~/.bartleby/serve/`` — top-level config files are copied; ``src/``
-is symlinked so vite's HMR picks up edits in the repo live without a restart.
+The UI source ships inside the package at ``bartleby/web``. On every invocation
+we sync that tree into ``~/.bartleby/serve/`` — top-level config files are
+copied; ``src/`` is handled one of two ways depending on how Bartleby is
+installed:
+
+- **Source checkout / editable install** — ``src/`` is *symlinked* so vite's HMR
+  picks up edits in the repo live without a restart.
+- **Installed package** (``uv tool install`` / ``pip install``) — the packaged
+  ``src/`` is read-only, so it is *copied* instead. There's nothing to live-edit,
+  and symlinking a site-packages tree would be pointless.
+
 ``node_modules/``, ``.svelte-kit/``, and ``build/`` in the dest are preserved
 between runs so we don't re-install or re-bundle every time.
 
@@ -16,6 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
+from importlib.resources import files
 from pathlib import Path
 
 from bartleby.config import BARTLEBY_DIR
@@ -24,14 +33,27 @@ from bartleby.lib import console
 
 SERVE_DIR = BARTLEBY_DIR / "serve"
 
-# Walk up from this file to the repo root, where ``web/`` lives.
-WEB_SRC = Path(__file__).resolve().parents[2] / "web"
+# The SvelteKit UI is packaged as data inside the ``bartleby`` package, so it
+# resolves the same way from a checkout or an installed wheel. ``files()``
+# returns a Traversable; the ``str()`` round-trip coerces it to a real ``Path``
+# (we need ``.parents`` below and symlink/copy ops, not just Traversable reads).
+WEB_SRC = Path(str(files("bartleby"))) / "web"
 
 # Directories vite/npm write into; we leave them untouched between runs.
 _PRESERVED = {"node_modules", ".svelte-kit", "build"}
-# Things we symlink back into the repo for live HMR. Everything else (config
-# manifests, the html/css shell) is copied.
+# Things we symlink back into the repo for live HMR (checkout only). Everything
+# else (config manifests, the html/css shell) is copied.
 _SYMLINKED = {"src"}
+
+
+def _is_source_checkout() -> bool:
+    """True when ``web/`` is part of a live checkout we can symlink into.
+
+    In a source checkout / editable install the package sits at the repo root
+    next to ``pyproject.toml``; in an installed wheel it lives under
+    ``site-packages`` with no such sibling.
+    """
+    return (WEB_SRC.parents[1] / "pyproject.toml").exists()
 
 
 def _require_node() -> None:
@@ -43,12 +65,9 @@ def _require_node() -> None:
         sys.exit(1)
 
 
-def _sync_web(src: Path, dst: Path) -> None:
+def _sync_web(src: Path, dst: Path, *, symlink_src: bool = True) -> None:
     if not src.exists():
-        raise FileNotFoundError(
-            f"Web source not found at {src}. "
-            "Are you running from a source checkout?"
-        )
+        raise FileNotFoundError(f"Web source not found at {src}.")
     dst.mkdir(parents=True, exist_ok=True)
 
     # Clear stale entries (anything not in _PRESERVED). We rebuild them below.
@@ -64,7 +83,7 @@ def _sync_web(src: Path, dst: Path) -> None:
         if entry.name in _PRESERVED:
             continue
         target = dst / entry.name
-        if entry.name in _SYMLINKED:
+        if entry.name in _SYMLINKED and symlink_src:
             target.symlink_to(entry.resolve())
         elif entry.is_file():
             shutil.copy2(entry, target)
@@ -85,8 +104,9 @@ def _needs_install(dst: Path) -> bool:
 def main() -> None:
     _require_node()
     console.splash()
+    checkout = _is_source_checkout()
     console.info(f"Syncing UI from {WEB_SRC} → {SERVE_DIR}…")
-    _sync_web(WEB_SRC, SERVE_DIR)
+    _sync_web(WEB_SRC, SERVE_DIR, symlink_src=checkout)
 
     if _needs_install(SERVE_DIR):
         console.info("Installing npm dependencies (one-time)…")
