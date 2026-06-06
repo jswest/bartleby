@@ -75,8 +75,11 @@ def run(
     argv: list[str] | None = None,
 ) -> None:
     # Skill scripts emit JSON to stdout; any third-party noise corrupts it.
+    # The only HF model the skill path loads is the embedding model (semantic
+    # search); offline mode is gated on it being cached (issue #88).
+    from bartleby.lib.consts import EMBEDDING_MODEL
     from bartleby.lib.quiet import setup_quiet_third_party
-    setup_quiet_third_party(verbose=False)
+    setup_quiet_third_party(verbose=False, required_models=(EMBEDDING_MODEL,))
 
     # Best-effort: guarantee the skill's scratch dir exists (mode 700) before the
     # agent writes a finding body there. Every realistic flow runs a skill command

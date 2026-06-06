@@ -382,6 +382,12 @@ No prompts, source text, or research notes leave the machine.
 
 If you can't fit either tier, the middle path is **local ingest + cloud research**: keep `provider: ollama` for the deterministic ingest pipeline, but point Goose or Pi (or Claude Code) at a frontier API for the agent layer. Source documents still never leave the machine; only the agent's queries do.
 
+### Model downloads and offline mode
+
+Bartleby pulls a few models from the Hugging Face Hub on demand: the embedding model (always), and — when you ingest with the Docling converter — Docling's layout and table models (the first time a conversion needs them). They cache under `~/.cache/huggingface/hub` and download once.
+
+To avoid a Hub network check on every run, Bartleby switches Hugging Face into offline mode automatically — but only once *every* model the current run needs is already cached. Until then it stays online so the missing model can download. If you ever hit a model fetch that's blocked by offline mode, re-run with `HF_HUB_OFFLINE=0` to force the download; an explicit `HF_HUB_OFFLINE` in your environment always overrides Bartleby's default.
+
 ---
 
 ## What's the `bartleby` skill?
