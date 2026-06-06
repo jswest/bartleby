@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=62.3.0"]
+requires = ["setuptools>=62.3.0", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bartleby"
-version = "0.1.0"
+dynamic = ["version"]
 description = "An AI-powered scrivener who would definitely prefer not to."
 authors = [
     {name = "John West", email = "john@beebe-west.com"}
@@ -49,6 +49,12 @@ dev = [
     "bartleby[docling]",
     "bartleby[sec2md]",
 ]
+
+# The package version is derived from the latest git tag by setuptools-scm, so
+# the tag is the single source of truth. Off a tag, dev builds report e.g.
+# `0.7.0.dev4+g36560ca`. See scripts/release.py for how tags are cut.
+[tool.setuptools_scm]
+fallback_version = "0.0.0+unknown"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

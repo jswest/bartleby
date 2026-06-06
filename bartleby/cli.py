@@ -16,6 +16,10 @@ def main():
         prog="bartleby",
         description="Bartleby, the Scrivener - A document analysis toolkit that might prefer not to."
     )
+    from bartleby import __version__
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     subparsers.add_parser("ready", help="Configure Bartleby settings")

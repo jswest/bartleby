@@ -79,6 +79,18 @@ For development:
 uv tool install --editable .
 ```
 
+### Pinning to a release
+
+The examples above install whatever `HEAD` you have checked out — fine for following along, but a moving target if you'd rather upgrade on your own schedule. Releases are git tags of the form `v0.<schema>.<patch>`, so you can pin to one directly without even cloning:
+
+```
+uv tool install 'git+https://github.com/jswest/bartleby.git@v0.7.0'
+```
+
+Extras and the `--with`/`--force` flags work the same as above. Versions are read straight from the tag, so `bartleby --version` always tells you exactly what you're running.
+
+**Reading the number:** the **minor** *is* the database schema version. A minor bump (`v0.7.x` → `v0.8.0`) means the schema changed and existing corpora must be re-ingested; a patch bump (`v0.7.0` → `v0.7.1`) is always safe to take in place. So you can scan two tags and know instantly whether upgrading will cost you a re-ingest. (Maintainers: see [`scripts/release.py`](./scripts/release.py) for how tags are cut.)
+
 ### Install the skill
 
 The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory — idempotently, so re-running doesn't nest it a level deeper. For Claude Code:
@@ -103,6 +115,7 @@ Restart your harness after copying — skills load at startup. See [`./skill/REA
 
 ```
 which bartleby                          # the CLI is on PATH
+bartleby --version                      # which version (or dev build) is installed
 bartleby project list                   # the CLI actually runs
 ls ~/.claude/skills/bartleby/SKILL.md   # the skill is discoverable
 ```
@@ -111,7 +124,7 @@ WSJ users: once wsjpt is configured, `bartleby ready` loads the provider with no
 
 ### After updating Bartleby
 
-This project moves fast. After every `git pull`, refresh both pieces from the new code:
+This project moves fast. If you'd rather not ride `main`, [pin to a release tag](#pinning-to-a-release) and upgrade deliberately. Otherwise, after every `git pull`, refresh both pieces from the new code:
 
 ```
 # 1. Reinstall the CLI (repeat whatever extras you first used)
