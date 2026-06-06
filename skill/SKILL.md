@@ -150,6 +150,8 @@ Image chunks have empty `context_before` / `context_after` arrays — each image
 
 Tags are a controlled vocabulary the user curates to slice the corpus by category (utility, case, doc-type, jurisdiction). They unlock comparative queries — "what does CH say about uncollectibles vs. NYSEG?" — without enumerating document IDs.
 
+> **Untagged corpus?** If `read_tags` comes back empty, this corpus has no vocabulary yet — the `--tag` filters and everything below are moot until someone adds tags (and tag creation is human-driven, so don't add any unprompted).
+
 - **Always `read_tags` before any tag operation.** You need the existing vocabulary to avoid duplicating tags or missing the right one.
 - **Humans drive tag creation.** Only propose a new tag when the human explicitly asks. The dominant failure mode is over-fragmentation — five sibling tags that should have been one.
 - **Prefer broad tags.** If a tag would apply to fewer than ~5 documents, it probably shouldn't exist as its own tag.
@@ -159,6 +161,8 @@ Tags are a controlled vocabulary the user curates to slice the corpus by categor
 
 ## Memory rules
 
+> **Memory-off sessions — check this first.** If this session was started with `--no-memory`, the findings *read* paths below don't apply: `list_findings` and `read_finding` return a `{"code": "MEMORY_OFF"}` error, and `search --findings` is silently dropped (the response carries `"memory_excluded": true`). Don't plan around surveying or reading prior findings — you can't reach them. **`save_finding` still works**: it returns the resolved `citations` in its own response, so you never need a read-back to verify what landed. The "use prior findings / tend the memory" guidance below applies only when memory is on.
+
 Prior findings live in the database and are reachable three ways: `search --findings` (ranked fragments matching a query), `list_findings` (browse what exists, newest first), and `read_finding --finding-id <id>` (one whole finding). Treat them as **hints**, never as evidence:
 
 - Use them at the start of a topic to see what previous agents concluded and where gaps remain — `list_findings` to survey, `read_finding` to read one in full.
@@ -166,8 +170,6 @@ Prior findings live in the database and are reachable three ways: `search --find
 - **Tend the memory, don't just grow it.** Findings accrete: stale drafts, zero-citation sketches, and several iterations of the same report pile up and make triage slower. When you notice this, curate — `delete_finding` to retract one that's superseded or dead, `merge_findings` to fold a cluster of overlapping versions into a single consolidated finding (you author the merged body; the sources are deleted). Both touch only finding rows; document evidence is never affected. Confirm with the user before deleting or merging findings you didn't author this session.
 
 If the user asks you to "ignore previous memory" or "start fresh" mid-session, stop and tell them to restart with `bartleby session start --no-memory`. The skill cannot honor memory-off requests inside an already-running session — that decision happens out-of-band, before you start.
-
-If `search` returns `"memory_excluded": true`, you are already in a no-memory session. Don't pass `--findings`; it will be silently dropped. In the same session, `list_findings` and `read_finding` don't drop silently — they return a `{"code": "MEMORY_OFF"}` error, because a direct "read my findings" command failing quietly would be more confusing than an honest refusal.
 
 ## Output
 
