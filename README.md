@@ -247,12 +247,13 @@ The default policy is "no backwards compat" — schema bumps mean re-ingest. The
 Ingest HTML, MD, PDF, and TXT documents into the project database.
 
 ```
-bartleby scribe --files <path> [options]
+bartleby scribe --files <path> [<path> ...] [options]
 ```
 
 | Option | Description |
 | --- | --- |
-| `--files <path>` | Path to a file or directory of supported documents (required) |
+| `--files <path> [<path> ...]` | One or more files and/or directories of supported documents (required). Directories are walked recursively; a file reachable from more than one path is ingested once. |
+| `--only <type>` | Restrict ingestion to the given file type(s): `pdf`, `html`, `md`, `txt`, `image`. Repeatable and/or comma-separated (e.g. `--only pdf,html`). Filters on the *resolved* type, so a content-sniffed PDF with no extension is kept by `--only pdf`. |
 | `--project <name>` | Target project (defaults to active) |
 | `--model <name>` | Override LLM model for summarization |
 | `--provider <name>` | Override LLM provider |
