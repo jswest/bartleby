@@ -100,6 +100,24 @@ def test_init_db_refuses_existing(tmp_path, monkeypatch):
         init_db("foo")
 
 
+def test_schema_mismatch_points_at_upgrade_first(tmp_path, monkeypatch):
+    monkeypatch.setattr("bartleby.db.connection.PROJECTS_DIR", tmp_path)
+    init_db("proj")
+    c = open_db("proj")
+    c.cursor().execute(
+        "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+        (str(SCHEMA_VERSION + 1),),
+    )
+    c.close()
+
+    with pytest.raises(RuntimeError) as exc:
+        open_db("proj")
+    msg = str(exc.value)
+    # `project upgrade` is the first remedy, re-ingest the fallback (issue #95).
+    assert "bartleby project upgrade proj" in msg
+    assert msg.index("project upgrade") < msg.index("re-ingest")
+
+
 def test_insert_document_chunks_keeps_fts_and_vec_in_sync(conn):
     cur = conn.cursor()
     doc_id = _insert_doc(conn, "h1")
