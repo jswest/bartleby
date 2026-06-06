@@ -87,17 +87,19 @@ def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
     assert fetched["chunks"][0]["text"] == neighbor["text"]
 
 
-def test_search_default_context_is_empty_arrays(seeded_project, capsys):
-    """Default (no --add-context) returns empty context arrays."""
+def test_search_default_context_omits_keys(seeded_project, capsys):
+    """Default (no --add-context) omits the context keys entirely rather than
+    shipping empty arrays."""
     _run([
         "--project", seeded_project["project"],
         "--full-text", "equity",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["context"] == 0
+    assert out["results"]  # sanity: there are hits to check
     for r in out["results"]:
-        assert r["context_before"] == []
-        assert r["context_after"] == []
+        assert "context_before" not in r
+        assert "context_after" not in r
 
 
 def test_search_context_clamps_at_source_boundary(seeded_project, capsys):

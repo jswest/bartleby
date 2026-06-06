@@ -119,7 +119,7 @@ Each result carries three signals you can use to triage:
 `search` results have three text fields per hit:
 
 - `text` — the chunk that matched. **Cite this chunk's `chunk_id`.**
-- `context_before` — empty by default. Populated when you pass `--add-context N`: the N chunks immediately before the hit, in document order, each as `{chunk_id, chunk_index, text}`. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
+- `context_before` — **absent by default** (the key is omitted, not an empty array). Present only when you pass `--add-context N`: the N chunks immediately before the hit, in document order, each as `{chunk_id, chunk_index, text}`. **Reading aid only.** Do not cite. Do not quote as if it were the hit.
 - `context_after` — same shape, same rule.
 
 Default search returns no context — the hit text alone. Reach for `--add-context` only when chunks are short enough that the hit isn't self-explanatory; each step multiplies output size across *every* hit by roughly (1 + 2N). Once you have a `chunk_id` in hand and want context around just that one, `read_chunks --around-chunk <id> --window N` is far cheaper. If you discover the passage you actually want is in `context_before` or `context_after`, fetch it directly with `read_chunks --chunks <chunk_id>` using the neighbor's `chunk_id`, verify the text, and then cite that `chunk_id`. (Don't re-search and hope for the right hit — the neighbor's id is already in your hand.) Citations must represent chunks you've read and verified, whether they came in as a hit or as a context entry.
@@ -144,7 +144,7 @@ Two `content_type` values distinguish image chunks, and each image produces exac
 - `image_ocr` — text recovered from the image via Tesseract OCR. Used when the image is dominated by text (a slide of bullets, a screenshot of a document, a scanned page). Treat this like primary source text; cite it the same way.
 - `image_description` — the VLM's scene description. Used when the image is dominated by visual content (a chart, a photo, a diagram). **Treat this as model interpretation, not primary source.** When you cite an `image_description` chunk, make the interpretive nature explicit (e.g., "a model reading the chart's caption says X [chunk 1234]"), and lean on `read_chunks --chunks <id>` plus the image at `image_file_path` if the claim is consequential.
 
-Image chunks have empty `context_before` / `context_after` arrays — each image produces a single chunk, so there are no neighbors.
+Even with `--add-context N`, image hits come back with empty `context_before` / `context_after` arrays — each image produces a single chunk, so there are no neighbors. (At the default `--add-context 0`, the keys are omitted like everywhere else.)
 
 ## Tag rules
 
