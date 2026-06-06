@@ -67,10 +67,10 @@ uv tool install '.[sec2md]'
 
 You can combine extras: `uv tool install '.[docling,sec2md]'`.
 
-The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** part of the locked dependency set — its git source is unreachable outside WSJ, which would otherwise break `uv lock`/`uv sync` for everyone. Install it out-of-band when you need it:
+The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** in the locked dependency set — its git source is unreachable outside WSJ, which would break `uv lock`/`uv sync` for everyone. Inject it into the **tool's** environment with `--with` — extras and out-of-band packages have to go there, not a separate `uv pip install` (which lands somewhere the running tool can't see). `--force` re-applies to an already-installed tool:
 
 ```
-uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'
+uv tool install '.[docling,sec2md]' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
 ```
 
 For development:
@@ -81,32 +81,65 @@ uv tool install --editable .
 
 ### Install the skill
 
-The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory. For Claude Code, that's typically:
+The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory — idempotently, so re-running doesn't nest it a level deeper. For Claude Code:
 
 ```
-cp -r skill ~/.claude/skills/bartleby
-```
-
-See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
-
-**Re-copy after every `git pull`.** This codebase is moving fast and the `SKILL.md` contract changes often — new flags, renamed outputs, new modes. Your harness loads `SKILL.md` from the directory you copied it to, *not* from this repo. After every pull, empty that location and re-copy so the agent sees the current contract:
-
-```
+mkdir -p ~/.claude/skills
 rm -rf ~/.claude/skills/bartleby
 cp -r skill ~/.claude/skills/bartleby
 ```
 
-The scripts themselves resolve through the installed `bartleby` package, so a `uv tool install .` (or `--editable .` for dev) keeps those in sync.
+`SKILL.md` must land *directly* under `~/.claude/skills/bartleby/`, not inside a subfolder:
+
+```
+~/.claude/skills/bartleby/
+├── README.md
+└── SKILL.md
+```
+
+Restart your harness after copying — skills load at startup. See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
+
+### Verify your install
+
+```
+which bartleby                          # the CLI is on PATH
+bartleby project list                   # the CLI actually runs
+ls ~/.claude/skills/bartleby/SKILL.md   # the skill is discoverable
+```
+
+WSJ users: once wsjpt is configured, `bartleby ready` loads the provider with no `ModuleNotFoundError: No module named 'wsjpt'`.
+
+### After updating Bartleby
+
+This project moves fast. After every `git pull`, refresh both pieces from the new code:
+
+```
+# 1. Reinstall the CLI (repeat whatever extras you first used)
+uv tool install '.[docling,sec2md]' --force
+
+# 2. Re-copy the skill so your agent sees the current contract
+rm -rf ~/.claude/skills/bartleby
+cp -r skill ~/.claude/skills/bartleby
+```
+
+Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1.)
+
+**If the database schema changed**, existing projects won't open until they're brought up to date — a command will fail with a clear `schema version mismatch` message. Bring a project up to date with:
+
+```
+bartleby project upgrade <name>
+```
+
+Most updates upgrade in place. When a change isn't backward-compatible, `upgrade` tells you to **re-ingest** instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
+
+### Gotchas
+
+- Don't keep the repo (or its `.venv`) in a synced folder like Dropbox, iCloud, or OneDrive — syncing rewrites file paths and quietly breaks the install.
+- `bartleby` isn't on PyPI: run `uv` commands from inside the project directory — don't `uv pip install bartleby` or `uvx bartleby`.
 
 ### A note on first-run latency
 
-The first time you run `bartleby scribe`, it will pause to download:
-
-- the `BAAI/bge-base-en-v1.5` embedding model (~400 MB),
-- the tokenizer assets that ride alongside it,
-- and, if you opted into the `docling` converter, Docling's layout/OCR models on its first invocation.
-
-These are cached under `~/.cache/` and reused on every subsequent run. The first invocation of the skill's `search` script has a similar one-time wait for the embedding model.
+Models download **lazily, the first time each is needed** — the `BAAI/bge-base-en-v1.5` embedding model (~400 MB plus tokenizer assets) on your first `bartleby scribe` (and the skill's first `search`), and Docling's layout/OCR models on the first scanned/image PDF if you opted into `docling`. They're cached and reused; see [Model downloads and offline mode](#model-downloads-and-offline-mode) for caching paths and restricted-network behavior.
 
 ---
 
