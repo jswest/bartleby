@@ -18,7 +18,8 @@ plus ``merged_from``:
 
     {
       "finding_id": int,            # the surviving target
-      "session_id": int, "session_name": str,   # the target's author
+      "session_id": int,            # the target's author
+      "session_name": str, "model": str|null, "harness": str|null,
       "body": str,
       "chunk_ids": [int, ...],
       "citations": [{
@@ -46,6 +47,7 @@ from bartleby.skill_scripts._common import (
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
+    session_provenance,
     validated_replacement,
 )
 
@@ -120,14 +122,10 @@ def work(*, conn, args, session_id) -> dict:
             f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
         )
 
-    session_name = cur.execute(
-        "SELECT name FROM sessions WHERE session_id = ?", (owning_session_id,)
-    ).fetchone()[0]
-
     return {
         "finding_id": target,
         "session_id": owning_session_id,
-        "session_name": session_name,
+        **session_provenance(conn, owning_session_id),
         "body": body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),

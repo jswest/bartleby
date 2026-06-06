@@ -78,7 +78,9 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
     assert out["body"] == merged_body
     assert out["merged_from"] == [src1, src2]
     assert [c["chunk_id"] for c in out["citations"]] == [c0, c1, c2]
+    # Output mirrors save/edit/read: full session provenance, not just the name.
     assert out["session_name"]
+    assert "model" in out and "harness" in out
 
     conn = open_db(project)
     try:
@@ -113,6 +115,36 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
             ).fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_merge_surfaces_session_provenance(seeded_project, tmp_path, capsys):
+    """The merged target reports its authoring session's model + harness,
+    matching save/edit/read (issue #75)."""
+    from bartleby.session import set_session_provenance
+
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    c0, c1 = chunks[0], chunks[1]
+
+    target = _save(project, tmp_path, capsys, name="t", title="Keep", cite=c0)
+    src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
+
+    # Stamp the authoring (active) session so model/harness are non-NULL.
+    set_session_provenance(project, model="qwen3.6:35b-mlx", harness="ollama-cli")
+
+    merged_file = tmp_path / "merged.md"
+    merged_file.write_text(f"# Consolidated\n\nTogether[^{c0}][^{c1}].",
+                           encoding="utf-8")
+    merge_findings.main([
+        "--project", project,
+        "--from", str(src),
+        "--into", str(target),
+        "--body-file", str(merged_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["model"] == "qwen3.6:35b-mlx"
+    assert out["harness"] == "ollama-cli"
 
 
 def test_merge_missing_source_reports_ids(seeded_project, tmp_path, capsys):
