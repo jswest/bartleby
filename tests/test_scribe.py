@@ -1224,9 +1224,30 @@ def test_resolve_extension_returns_none_for_unidentifiable(tmp_path):
     assert resolve_extension(p) is None
 
 
+def test_resolve_format_filter_maps_buckets_and_extensions():
+    from bartleby.ingest.chunk import resolve_format_filter
+
+    assert resolve_format_filter(["pdf"]) == {".pdf"}
+    assert resolve_format_filter(["html"]) == {".html", ".htm"}
+    assert resolve_format_filter(["image"]) == {
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif",
+    }
+    # Aliases, bare extensions, and a leading dot all resolve.
+    assert resolve_format_filter(["text", "MD", "jpg", ".png"]) == {
+        ".txt", ".md", ".jpg", ".png",
+    }
+
+
+def test_resolve_format_filter_rejects_unknown_name():
+    from bartleby.ingest.chunk import resolve_format_filter
+
+    with pytest.raises(ValueError):
+        resolve_format_filter(["spreadsheet"])
+
+
 def test_collect_files_single_extensionless_pdf(tmp_path):
     pdf = _text_pdf(tmp_path / "docket_no_ext")
-    sources, unidentified = scribe._collect_files(pdf)
+    sources, unidentified = scribe._collect_files([pdf])
     assert sources == [(pdf, ".pdf")]
     assert unidentified == []
 
@@ -1235,7 +1256,7 @@ def test_collect_files_single_unsupported_raises(tmp_path):
     p = tmp_path / "mystery"
     p.write_bytes(b"\x00\x01\x02\x03")
     with pytest.raises(ValueError):
-        scribe._collect_files(p)
+        scribe._collect_files([p])
 
 
 def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
@@ -1246,11 +1267,104 @@ def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
     junk = d / "notes"                                      # unidentifiable
     junk.write_bytes(b"\x00\x01\x02\x03")
 
-    sources, unidentified = scribe._collect_files(d)
+    sources, unidentified = scribe._collect_files([d])
 
     assert (pdf, ".pdf") in sources
     assert (named, ".pdf") in sources
     assert unidentified == [junk]
+
+
+def test_collect_files_unions_multiple_directories(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    pdf_a = _text_pdf(a / "a.pdf")
+    pdf_b = _text_pdf(b / "b.pdf")
+
+    sources, unidentified = scribe._collect_files([a, b])
+
+    files = {p for p, _ in sources}
+    assert files == {pdf_a, pdf_b}
+    assert unidentified == []
+
+
+def test_collect_files_dedupes_overlapping_roots(tmp_path):
+    d = tmp_path / "docket"
+    d.mkdir()
+    pdf = _text_pdf(d / "report.pdf")
+
+    # The same file reachable both as an explicit file and under its directory.
+    sources, _ = scribe._collect_files([pdf, d])
+    assert sources.count((pdf, ".pdf")) == 1
+    assert len(sources) == 1
+
+
+def test_collect_files_only_filter_restricts_by_resolved_type(tmp_path):
+    d = tmp_path / "mixed"
+    d.mkdir()
+    pdf = _text_pdf(d / "report.pdf")
+    txt = _write_txt(d / "notes.txt", "plain text")
+    png = d / "image.png"
+    png.write_bytes(_png_bytes())
+
+    sources, unidentified = scribe._collect_files([d], only={".pdf"})
+
+    assert sources == [(pdf, ".pdf")]
+    # txt and png are intentional exclusions — not lumped into unidentified.
+    assert unidentified == []
+    assert txt not in {p for p, _ in sources}
+    assert png not in {p for p, _ in sources}
+
+
+def test_collect_files_only_filter_matches_sniffed_type(tmp_path):
+    d = tmp_path / "docket"
+    d.mkdir()
+    sniffed = _text_pdf(d / "ATTACHMENT 7 - LOADING FORMS")  # extensionless PDF
+    _write_txt(d / "notes.txt", "plain text")
+
+    sources, _ = scribe._collect_files([d], only={".pdf"})
+
+    # The content-sniffed PDF is kept by `--only pdf` just like a named one.
+    assert sources == [(sniffed, ".pdf")]
+
+
+def test_scribe_only_filter_end_to_end(isolated_project, tmp_path, mock_embed):
+    d = tmp_path / "mixed"
+    d.mkdir()
+    _text_pdf(d / "report.pdf")
+    _write_txt(d / "notes.txt", "Plain text that should be skipped.")
+
+    scribe.main(project="test_proj", files=[str(d)], only=["pdf"])
+
+    conn = open_db("test_proj")
+    try:
+        names = [
+            r[0] for r in conn.cursor().execute("SELECT file_name FROM documents")
+        ]
+        assert names == ["report.pdf"]
+    finally:
+        conn.close()
+
+
+def test_scribe_multiple_paths_end_to_end(isolated_project, tmp_path, mock_embed):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    _write_txt(a / "one.txt", "First document.")
+    _write_txt(b / "two.txt", "Second document.")
+
+    scribe.main(project="test_proj", files=[str(a), str(b)])
+
+    conn = open_db("test_proj")
+    try:
+        names = {
+            r[0] for r in conn.cursor().execute("SELECT file_name FROM documents")
+        }
+        assert names == {"one.txt", "two.txt"}
+    finally:
+        conn.close()
 
 
 def test_scribe_ingests_extensionless_pdf_by_sniffing(

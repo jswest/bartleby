@@ -52,6 +52,7 @@ from bartleby.ingest.chunk import (
     chunk_markdown_string,
     convert_and_chunk,
     resolve_extension,
+    resolve_format_filter,
 )
 from bartleby.ingest.embed import embed_texts
 from bartleby.ingest.summarize import SummaryResult, count_tokens, summarize
@@ -89,33 +90,59 @@ def _archive(src: Path, archive_root: Path, file_hash: str, ext: str) -> Path:
     return dest
 
 
-def _collect_files(path: Path) -> tuple[list[tuple[Path, str]], list[Path]]:
-    """Resolve ``path`` to ingestible ``(file, extension)`` pairs.
+def _collect_files(
+    paths: list[Path], only: set[str] | None = None,
+) -> tuple[list[tuple[Path, str]], list[Path]]:
+    """Resolve ``paths`` to ingestible ``(file, extension)`` pairs.
+
+    Each path is a single file or a directory walked recursively; the results
+    are concatenated and de-duplicated by real path, so a file reachable from
+    two supplied roots (or named twice) is collected once (issue #89).
 
     The resolved extension is what the file should be *treated as* — the
     filename extension when it is supported, otherwise a content-sniffed one
-    (see :func:`resolve_extension`). Returns ``(sources, unidentified)`` where
-    ``unidentified`` lists directory entries that could not be resolved to a
-    supported type; the caller surfaces them so they are not dropped silently.
+    (see :func:`resolve_extension`). When ``only`` is given (a set of supported,
+    leading-dot extensions), files whose resolved type is not in it are dropped
+    from collection — silently, since the exclusion is intentional and not the
+    same as a file we couldn't identify.
+
+    Returns ``(sources, unidentified)`` where ``unidentified`` lists directory
+    entries that could not be resolved to a supported type at all; the caller
+    surfaces them so they are not dropped silently.
     """
-    if path.is_file():
-        ext = resolve_extension(path)
-        if ext is None:
-            raise ValueError(f"Unsupported file type: {path.name}")
-        return [(path, ext)], []
-    if path.is_dir():
-        sources: list[tuple[Path, str]] = []
-        unidentified: list[Path] = []
-        for p in sorted(path.rglob("*")):
-            if not p.is_file():
+    sources: list[tuple[Path, str]] = []
+    unidentified: list[Path] = []
+    seen: set[Path] = set()
+
+    def _first_seen(p: Path) -> bool:
+        key = p.resolve()
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
+    for path in paths:
+        if path.is_file():
+            if not _first_seen(path):
                 continue
-            ext = resolve_extension(p)
+            ext = resolve_extension(path)
             if ext is None:
-                unidentified.append(p)
-            else:
-                sources.append((p, ext))
-        return sources, unidentified
-    raise ValueError(f"Path not found: {path}")
+                raise ValueError(f"Unsupported file type: {path.name}")
+            if only is None or ext in only:
+                sources.append((path, ext))
+        elif path.is_dir():
+            for p in sorted(path.rglob("*")):
+                if not p.is_file() or not _first_seen(p):
+                    continue
+                ext = resolve_extension(p)
+                if ext is None:
+                    unidentified.append(p)
+                elif only is None or ext in only:
+                    sources.append((p, ext))
+        else:
+            raise ValueError(f"Path not found: {path}")
+
+    return sources, unidentified
 
 
 def _document_already_ingested(conn, file_hash: str) -> int | None:
@@ -964,7 +991,8 @@ def _resolve_vision_provider(
 def main(
     *,
     project: str | None,
-    files: str | Path,
+    files: str | Path | list[str | Path],
+    only: list[str] | None = None,
     model: str | None = None,
     provider: str | None = None,
     pdf_converter: str | None = None,
@@ -1001,7 +1029,19 @@ def main(
             f"expected 'docling' or 'sec2md'."
         )
 
-    sources, unidentified = _collect_files(Path(files))
+    # `files` is one path or many (CLI passes a list via nargs="+"); normalize
+    # so collection always walks a list. `--only` names are comma-splittable and
+    # repeatable, resolved to the set of extensions to keep.
+    file_args = [files] if isinstance(files, (str, Path)) else files
+    only_filter: set[str] | None = None
+    if only:
+        names = [n for group in only for n in group.split(",") if n.strip()]
+        if names:
+            only_filter = resolve_format_filter(names)
+
+    sources, unidentified = _collect_files(
+        [Path(f) for f in file_args], only_filter,
+    )
     if unidentified:
         UNIDENTIFIED_DISPLAY_LIMIT = 10
         console.warn(

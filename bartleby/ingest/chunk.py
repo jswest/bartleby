@@ -49,6 +49,48 @@ def resolve_extension(path: Path) -> str | None:
     return sniffed if sniffed in SUPPORTED_EXTENSIONS else None
 
 
+# User-facing format names for the `scribe --only` filter, each mapped to the
+# set of *resolved* extensions it selects. Keyed off the same format buckets
+# scribe already thinks in (PDF / HTML / Markdown / text / image) so the filter
+# composes with content sniffing: a sniffed-as-PDF file with no extension is
+# selected by `--only pdf` just like a `.pdf` one (issue #89).
+FORMAT_ALIASES = {
+    "pdf": PDF_EXTENSIONS,
+    "html": {".html", ".htm"},
+    "htm": {".html", ".htm"},
+    "md": {".md"},
+    "markdown": {".md"},
+    "txt": TEXT_EXTENSIONS,
+    "text": TEXT_EXTENSIONS,
+    "image": IMAGE_EXTENSIONS,
+    "images": IMAGE_EXTENSIONS,
+}
+
+
+def resolve_format_filter(names: list[str]) -> set[str]:
+    """Map user-facing format names to the set of supported extensions to keep.
+
+    Each name is a format bucket (``pdf``, ``html``, ``md``, ``txt``, ``image``)
+    or a bare supported extension (``jpg``, ``.png``). Returns the union of the
+    extensions they select. Raises ``ValueError`` on an unrecognized name so a
+    typo'd filter fails loudly rather than silently matching nothing.
+    """
+    allowed: set[str] = set()
+    for name in names:
+        key = name.strip().lower()
+        dotted = key if key.startswith(".") else f".{key}"
+        if key in FORMAT_ALIASES:
+            allowed |= FORMAT_ALIASES[key]
+        elif dotted in SUPPORTED_EXTENSIONS:
+            allowed.add(dotted)
+        else:
+            raise ValueError(
+                f"Unknown file type filter {name!r}; expected one of "
+                f"{', '.join(sorted(FORMAT_ALIASES))} or a supported extension."
+            )
+    return allowed
+
+
 # Soft cap for agent-authored markdown chunks. Picked to stay well under the
 # embedder's 512-token max sequence; characters are a rough proxy.
 _MD_CHUNK_CHARS = 1600
