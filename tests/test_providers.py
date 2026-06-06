@@ -8,9 +8,11 @@ response_format vs. format=) and the validation behavior.
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from bartleby.providers.base import DocumentSummary, VlmDescription
 
@@ -236,3 +238,58 @@ def test_ollama_malformed_json_raises(monkeypatch):
     p = OllamaProvider(base_url="http://test:11434")
     with pytest.raises(RuntimeError, match="failed .* validation"):
         p.analyze_image(b"\x00", model="m")
+
+
+# ---------- wsjpt ----------
+#
+# wsjpt is a firewall-only optional install, absent from CI, so we inject a fake
+# `wsjpt` module (Jpt + ModelConfig) and exercise the provider against it.
+
+
+def _install_wsjpt(monkeypatch, parse_return):
+    """Inject a fake `wsjpt` module; return the dict the fake Jpt records into."""
+    calls: dict = {}
+
+    class _FakeJpt:
+        def __init__(self, schema, *, model_config, custom_instructions=None):
+            calls["schema"] = schema
+            calls["model_config"] = model_config
+            calls["custom_instructions"] = custom_instructions
+
+        def parse(self, *, input_text=None, binary_files=None):
+            calls["input_text"] = input_text
+            calls["binary_files"] = binary_files
+            return parse_return
+
+    fake_module = SimpleNamespace(
+        Jpt=_FakeJpt,
+        ModelConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setitem(sys.modules, "wsjpt", fake_module)
+    return calls
+
+
+def test_wsjpt_classify_routes_schema_and_prompt(monkeypatch):
+    class _TagsAssignment(BaseModel):
+        tag_ids: list[int]
+
+    expected = _TagsAssignment(tag_ids=[1, 2])
+    calls = _install_wsjpt(monkeypatch, expected)
+
+    from bartleby.providers.wsjpt import WsjptProvider
+    p = WsjptProvider()
+    result = p.classify(
+        "the self-contained prompt",
+        model="fast",
+        schema=_TagsAssignment,
+        temperature=0.7,
+    )
+
+    # classify returns wsjpt's already-validated instance unchanged.
+    assert result is expected
+    # The caller's schema and prompt drive the parse; the prompt is
+    # self-contained, so no custom_instructions are attached.
+    assert calls["schema"] is _TagsAssignment
+    assert calls["input_text"] == "the self-contained prompt"
+    assert calls["custom_instructions"] is None
+    assert calls["model_config"].model == "fast"

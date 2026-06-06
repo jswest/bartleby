@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import os
 
+from pydantic import BaseModel
+
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
     IMAGE_DESCRIPTION_INSTRUCTIONS,
@@ -55,6 +57,19 @@ class WsjptProvider:
             custom_instructions=SUMMARY_INSTRUCTIONS,
         )
         return jpt.parse(input_text=f"DOCUMENT:\n{document_text}")
+
+    def classify(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        schema: type[BaseModel],
+        temperature: float = 0.0,
+    ) -> BaseModel:
+        # temperature ignored (see summarize) — wsjpt owns model settings.
+        # The prompt is self-contained, so no custom_instructions.
+        jpt = self._Jpt(schema, model_config=self._model_config(model))
+        return jpt.parse(input_text=prompt)
 
     def analyze_image(
         self,
