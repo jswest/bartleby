@@ -81,7 +81,8 @@ def open_db(project_name: str | None = None) -> apsw.Connection:
         raise RuntimeError(
             f"Schema version mismatch for project '{name}': "
             f"database has version {db_version}, code expects {SCHEMA_VERSION}. "
-            "Re-ingest the project to upgrade."
+            f"Run `bartleby project upgrade {name}` to upgrade in place; if that "
+            "reports a non-additive bump, re-ingest the project instead."
         )
 
     return conn
