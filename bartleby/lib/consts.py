@@ -9,6 +9,19 @@ CHUNK_OVERLAP = 100
 
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
 
+# Hugging Face repos Docling lazily fetches for its default PDF/HTML pipeline:
+# the layout model (analysed on every page) and the TableFormer model (pages
+# with tables). Both download on demand, the layout model not until the first
+# docling conversion. Docling's OCR is configured "auto", which resolves to a
+# non-HF engine (Apple Vision / bundled RapidOCR), so it adds nothing here.
+# These gate offline mode (see lib/quiet.py): until both are cached, ingest
+# stays online so they can download. Version-coupled to Docling — if a docling
+# bump changes its model repos, update this list.
+DOCLING_HF_REPOS = (
+    "docling-project/docling-layout-heron",
+    "docling-project/docling-models",
+)
+
 # Ingest conversion / vision defaults, shared by the `ready` wizard (which
 # writes them into config) and `scribe` (which falls back to them when a knob
 # is absent from config). Keep the two in lockstep by sourcing both from here.

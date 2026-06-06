@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import warnings
+from collections.abc import Iterable
 
 
 _NOISY_LOGGERS = (
@@ -27,40 +28,67 @@ _NOISY_LOGGERS = (
 )
 
 
-def _hf_cache_is_populated() -> bool:
-    """True if the HF Hub cache already contains at least one downloaded model.
+# Shown when a model fetch is blocked by the offline default (issue #88).
+OFFLINE_HINT = (
+    "A required model is missing from the Hugging Face cache and Bartleby ran "
+    "with offline mode on, so it could not be downloaded. Re-run with "
+    "HF_HUB_OFFLINE=0 to fetch the missing model(s)."
+)
 
-    We use this as the trigger for offline mode: if anything is cached we
-    assume the user has done at least one successful run, so we can safely
-    skip the per-process update check that prints the unauthenticated-request
-    warning. A fresh install has an empty cache and stays online so the first
-    download succeeds.
-    """
-    cache_root = (
+
+def _hf_cache_root() -> str:
+    return (
         os.environ.get("HF_HUB_CACHE")
         or os.environ.get("HUGGINGFACE_HUB_CACHE")
         or os.path.expanduser("~/.cache/huggingface/hub")
     )
-    if not os.path.isdir(cache_root):
-        return False
+
+
+def _model_cached(repo_id: str) -> bool:
+    """True if ``repo_id`` has a non-empty snapshot in the HF Hub cache.
+
+    The Hub stores ``org/name`` under ``models--org--name/snapshots/<rev>/``.
+    """
+    folder = "models--" + repo_id.replace("/", "--")
+    snapshots = os.path.join(_hf_cache_root(), folder, "snapshots")
     try:
-        entries = os.listdir(cache_root)
+        return os.path.isdir(snapshots) and bool(os.listdir(snapshots))
     except OSError:
         return False
-    for entry in entries:
-        if not entry.startswith("models--"):
-            continue
-        snapshots = os.path.join(cache_root, entry, "snapshots")
-        if os.path.isdir(snapshots) and os.listdir(snapshots):
-            return True
-    return False
 
 
-def setup_quiet_third_party(verbose: bool = False) -> None:
-    # Offline mode is about behavior (no Hub HEAD requests on every process
-    # start), not noise — set it regardless of --verbose. An explicit
-    # HF_HUB_OFFLINE in the environment always wins.
-    if _hf_cache_is_populated():
+def offline_blocked(exc: BaseException) -> bool:
+    """True if ``exc`` looks like an HF fetch blocked by our offline default.
+
+    Lets callers append :data:`OFFLINE_HINT` to the surfaced error so a user
+    who hits the surprise (a required model genuinely missing while offline is
+    on) gets the ``HF_HUB_OFFLINE=0`` remedy instead of a bare HF traceback.
+    """
+    if os.environ.get("HF_HUB_OFFLINE") != "1":
+        return False
+    msg = str(exc)
+    return (
+        "outgoing traffic has been disabled" in msg
+        or "Cannot find an appropriate cached snapshot" in msg
+    )
+
+
+def setup_quiet_third_party(
+    verbose: bool = False,
+    required_models: Iterable[str] = (),
+) -> None:
+    # Offline mode (no Hub HEAD request on every process start) is about
+    # behavior, not noise — set it regardless of --verbose. But it is safe only
+    # once EVERY model this run needs is already cached: enabling it while a
+    # required model is still missing turns its lazy on-demand download into a
+    # hard failure (issue #88 — docling's layout/table models download only on
+    # the first conversion, often the Nth file in a batch). If anything required
+    # is absent we stay online so it can fetch; offline kicks in on the next run
+    # once all are cached. An explicit HF_HUB_OFFLINE in the environment always
+    # wins. With no required_models declared we stay online — never guess that
+    # the cache is complete.
+    required = list(required_models)
+    if required and all(_model_cached(m) for m in required):
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 

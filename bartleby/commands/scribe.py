@@ -65,6 +65,8 @@ from bartleby.lib.consts import (
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
+    DOCLING_HF_REPOS,
+    EMBEDDING_MODEL,
 )
 from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
@@ -988,6 +990,19 @@ def _resolve_vision_provider(
     return get_provider(name, ollama_base_url=config.get("ollama_base_url")), model
 
 
+def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, ...]:
+    """HF repos this ingest run will load, used to gate offline mode (#88).
+
+    The embedding model is always needed; docling's layout/table models only
+    when a docling converter is active for PDFs or HTML. The gate stays online
+    until every model here is cached, so lazy downloads succeed.
+    """
+    models = [EMBEDDING_MODEL]
+    if "docling" in (pdf_converter, html_converter):
+        models.extend(DOCLING_HF_REPOS)
+    return tuple(models)
+
+
 def main(
     *,
     project: str | None,
@@ -999,19 +1014,11 @@ def main(
     html_converter: str | None = None,
     verbose: bool = False,
 ) -> None:
-    from bartleby.lib.quiet import setup_quiet_third_party
-    setup_quiet_third_party(verbose=verbose)
-
-    logger.remove()
-    logger.add(sys.stderr, level="DEBUG" if verbose else "WARNING")
-
-    project_name = resolve_project_name(project)
-
+    # Resolve converters before quietening third parties: which models the run
+    # needs (and thus whether offline mode is safe) depends on them. Reading
+    # config and arg strings imports no ML libs, so env vars still land before
+    # the libraries do.
     config = load_config()
-    llm_provider, llm_model = _resolve_llm_provider(
-        config, provider_override=provider, model_override=model,
-    )
-    vision_provider, vision_model = _resolve_vision_provider(config)
     pdf_converter_name = (
         pdf_converter or config.get("pdf_converter", DEFAULT_PDF_CONVERTER)
     ).lower()
@@ -1028,6 +1035,22 @@ def main(
             f"Unknown html_converter {html_converter_name!r}; "
             f"expected 'docling' or 'sec2md'."
         )
+
+    from bartleby.lib.quiet import setup_quiet_third_party
+    setup_quiet_third_party(
+        verbose=verbose,
+        required_models=_required_hf_models(pdf_converter_name, html_converter_name),
+    )
+
+    logger.remove()
+    logger.add(sys.stderr, level="DEBUG" if verbose else "WARNING")
+
+    project_name = resolve_project_name(project)
+
+    llm_provider, llm_model = _resolve_llm_provider(
+        config, provider_override=provider, model_override=model,
+    )
+    vision_provider, vision_model = _resolve_vision_provider(config)
 
     # `files` is one path or many (CLI passes a list via nargs="+"); normalize
     # so collection always walks a list. `--only` names are comma-splittable and
@@ -1165,7 +1188,11 @@ def main(
                                 f"Skipping {src.name} (already ingested)"
                             )
                 except Exception as e:
-                    console.error(f"Failed: {src.name}: {e}")
+                    from bartleby.lib.quiet import OFFLINE_HINT, offline_blocked
+                    message = f"Failed: {src.name}: {e}"
+                    if offline_blocked(e):
+                        message += f"\n  {OFFLINE_HINT}"
+                    console.error(message)
                     if verbose:
                         logger.exception(e)
                 finally:
