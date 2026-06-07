@@ -32,10 +32,10 @@
   .pager {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    margin: 1rem 0;
+    gap: var(--space-lg);
+    margin: var(--space-lg) 0;
     font-family: var(--font-sans);
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
   .pager a {
     color: var(--color-token-dark);

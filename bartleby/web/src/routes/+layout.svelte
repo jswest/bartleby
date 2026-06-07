@@ -55,24 +55,24 @@
   .bar {
     display: flex;
     align-items: baseline;
-    gap: 1.5rem;
-    padding: 0.75rem 1.25rem;
+    gap: var(--space-xl);
+    padding: var(--space-md) var(--space-lg);
   }
   .brand {
-    font-size: 1.25rem;
+    font-size: var(--text-xl);
     font-weight: 900;
     color: var(--color-token);
     text-decoration: none;
   }
   .links {
     display: flex;
-    gap: 1.25rem;
+    gap: var(--space-lg);
   }
   .links a {
     color: var(--color-off-light);
     text-decoration: none;
     font-family: var(--font-sans);
-    font-size: 1rem;
+    font-size: var(--text-base);
     padding-bottom: 2px;
     border-bottom: 2px solid transparent;
   }
@@ -86,10 +86,11 @@
   .project {
     margin-left: auto;
     color: var(--color-off-light);
-    font-size: 1rem;
+    font-size: var(--text-base);
   }
   main {
-    /* Offset the fixed header so content doesn't slide under it. */
-    padding: 4rem 1.25rem 2rem;
+    /* Offset the fixed header (a fixed structural height) so content doesn't
+       slide under it; the horizontal value is the shared page gutter. */
+    padding: 4rem var(--space-lg) var(--space-2xl);
   }
 </style>

@@ -1,8 +1,8 @@
 <script>
   import { navigating, page } from "$app/stores";
   import SearchForm from "$lib/components/SearchForm.svelte";
-  import SearchResult from "$lib/components/SearchResult.svelte";
-  import ScanMatch from "$lib/components/ScanMatch.svelte";
+  import ResultCard from "$lib/components/ResultCard.svelte";
+  import StatusBanner from "$lib/components/StatusBanner.svelte";
   import Pagination from "$lib/components/Pagination.svelte";
   import { pluralize } from "$lib/format.js";
 
@@ -26,17 +26,17 @@
 <SearchForm {params} availableTags={available.tags} />
 
 {#if busy}
-  <div class="status busy" aria-live="polite">
+  <StatusBanner variant="busy">
     Searching… <span class="hint">semantic queries load the embedding model and can take a few seconds.</span>
-  </div>
+  </StatusBanner>
 {/if}
 
 <div class="results" class:dim={busy}>
   {#if error}
-    <div class="status error">
+    <StatusBanner variant="error">
       <strong>Search failed.</strong> {error.message}
       {#if error.code}<span class="code">({error.code})</span>{/if}
-    </div>
+    </StatusBanner>
   {:else if !params.q}
     <p class="empty">Enter a query to search the corpus.</p>
   {:else if params.mode === "scan"}
@@ -55,7 +55,7 @@
       />
       <ul class="list">
         {#each result.matches as m (m.chunk_id)}
-          <ScanMatch match={m} />
+          <ResultCard item={m} variant="scan" />
         {/each}
       </ul>
       <Pagination
@@ -72,11 +72,11 @@
       <p class="summary">
         {pluralize(result.results.length, "result")}
         for “{result.query}” across {result.source_kinds.join(", ")}.
-        {#if result.memory_excluded}<span class="note">Findings excluded (memory off).</span>{/if}
+        {#if result.memory_excluded}<span class="note-inline">Findings excluded (memory off).</span>{/if}
       </p>
       <ul class="list">
         {#each result.results as h (h.chunk_id)}
-          <SearchResult hit={h} />
+          <ResultCard item={h} variant="search" />
         {/each}
       </ul>
     {/if}
@@ -85,7 +85,7 @@
 
 <style>
   .results {
-    max-width: 48rem;
+    max-width: var(--width-content);
     transition: opacity 0.15s;
   }
   .results.dim {
@@ -95,41 +95,15 @@
     padding: 0;
     margin: 0;
   }
-  .summary {
-    font-family: var(--font-sans);
-    font-size: 0.85rem;
-    color: var(--color-off);
-    margin-bottom: 1rem;
-  }
-  .note,
-  .code {
+  /* Inline token-dark accent inside the result summary. */
+  .note-inline {
     color: var(--color-token-dark);
   }
-  .status {
-    font-family: var(--font-sans);
-    font-size: 0.9rem;
-    padding: 0.6rem 0.85rem;
-    border-radius: 4px;
-    margin-bottom: 1rem;
-    max-width: 48rem;
-  }
-  .status.busy {
-    background: var(--color-token);
-    border: 1px solid var(--color-token-dark);
-    color: var(--color-off);
-  }
-  .status.busy .hint {
+  /* The secondary line inside the busy banner (slot content is styled here,
+     by the caller's scope, not inside StatusBanner). */
+  .hint {
     color: var(--color-off);
     opacity: 0.75;
-    font-size: 0.8rem;
-  }
-  .status.error {
-    background: #fdecea;
-    border: 1px solid #e0a9a3;
-    color: #8a2b22;
-  }
-  .empty {
-    color: var(--color-off);
-    font-style: italic;
+    font-size: var(--text-xs);
   }
 </style>

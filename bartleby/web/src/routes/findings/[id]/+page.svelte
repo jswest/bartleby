@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { marked } from "marked";
+  import Button from "$lib/components/Button.svelte";
   export let data;
 
   $: byId = new Map(data.finding.citations.map((c) => [c.chunk_id, c]));
@@ -78,7 +79,7 @@
 </script>
 
 <div class="split">
-  <article class="report" bind:this={container}>
+  <article class="report surface" bind:this={container}>
     <h1>{data.finding.title}</h1>
     <p class="meta">
       <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name} · {data.finding.created_at}
@@ -86,10 +87,10 @@
     <p class="desc">{data.finding.description}</p>
 
     <div class="toolbar">
-      <button type="button" on:click={copyMarkdown}>
+      <Button size="sm" type="button" on:click={copyMarkdown}>
         {copied ? "Copied" : "Copy as Markdown"}
-      </button>
-      <button type="button" on:click={downloadMarkdown}>Download .md</button>
+      </Button>
+      <Button size="sm" type="button" on:click={downloadMarkdown}>Download .md</Button>
     </div>
 
     <div class="body markdown-body">
@@ -103,7 +104,7 @@
         <iframe title="Source document" src={activeUrl}></iframe>
       {/key}
     {:else}
-      <p class="placeholder">
+      <p class="empty">
         Click an inline citation to view the source PDF here.
       </p>
     {/if}
@@ -111,36 +112,14 @@
 </div>
 
 <style>
-  article.report {
-    background-color: var(--color-off-light);
-    border: 1px solid var(--color-off);
-    box-sizing: border-box;
-    padding: 1rem;
-  }
   .toolbar {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
+    gap: var(--space-sm);
+    margin-top: var(--space-md);
   }
-  .toolbar button {
-    font-family: var(--font-sans);
-    font-size: 0.8rem;
-    padding: 0.3rem 0.7rem;
-    background: var(--color-token);
-    border: 1px solid var(--color-token-dark);
-    border-radius: 3px;
-    color: var(--color-off);
-    cursor: pointer;
-  }
-  .toolbar button:hover {
-    background: var(--color-off);
-    color: #fff;
-    border-color: var(--color-off);
-  }
-  .placeholder {
-    color: var(--color-off);
-    font-style: italic;
-  }
+  /* Inline citation chips are emitted as raw HTML strings inside {@html}
+     (see renderChip), so they sit outside Svelte's scoping and must be styled
+     :global. Padding/size use em so the chip tracks the surrounding prose. */
   :global(.cite-chip) {
     display: inline-block;
     vertical-align: baseline;
@@ -149,7 +128,7 @@
     margin: 0 0.15em;
     background: var(--color-token);
     border: 1px solid var(--color-token-dark);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font-family: var(--font-sans);
     font-size: 0.8em;
     line-height: 1.4;
@@ -162,7 +141,7 @@
   :global(.cite-chip:hover),
   :global(.cite-chip.active) {
     background: var(--color-off);
-    color: #fff;
+    color: var(--color-surface);
     border-color: var(--color-off);
   }
 </style>

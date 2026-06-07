@@ -7,7 +7,7 @@
 
 <ul class="entity-list">
   {#each documents as d}
-    <li class="entity">
+    <li class="entity surface">
       <h2>
         <a href="/documents/{d.document_id}">
           {d.title ?? stripExt(d.file_name)}

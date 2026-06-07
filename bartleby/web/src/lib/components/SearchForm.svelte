@@ -1,5 +1,6 @@
 <script>
   import { ALL_KINDS, DEFAULT_KINDS } from "$lib/constants.js";
+  import Button from "$lib/components/Button.svelte";
 
   export let params;
   export let availableTags = [];
@@ -37,7 +38,7 @@
       autocomplete="off"
       autofocus
     />
-    <button type="submit">{mode === "scan" ? "Scan" : "Search"}</button>
+    <Button type="submit">{mode === "scan" ? "Scan" : "Search"}</Button>
   </div>
 
   <div class="filters">
@@ -105,23 +106,26 @@
 </form>
 
 <style>
+  /* The query box, mode toggle, and field widths are search-form-specific;
+     the fieldset/legend/checks/inputs chrome lives in app.css (shared with the
+     /documents filter form). */
   .search-form {
-    margin-bottom: 1.5rem;
+    margin-bottom: var(--space-xl);
     font-family: var(--font-sans);
   }
   .mode {
     display: inline-flex;
     border: 1px solid var(--color-off);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     overflow: hidden;
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--space-md);
   }
   .mode label {
-    padding: 0.35rem 0.9rem;
+    padding: var(--space-xs) var(--space-md);
     cursor: pointer;
     color: var(--color-off);
-    background: #fff;
-    font-size: 0.9rem;
+    background: var(--color-surface);
+    font-size: var(--text-sm);
   }
   .mode label.active {
     background: var(--color-off);
@@ -134,87 +138,22 @@
   }
   .mode-hint {
     opacity: 0.6;
-    font-size: 0.75rem;
+    font-size: var(--text-2xs);
   }
   .query-row {
     display: flex;
-    gap: 0.5rem;
-    max-width: 44rem;
+    gap: var(--space-sm);
+    max-width: var(--width-content);
   }
   .query {
     flex: 1;
-    padding: 0.55rem 0.75rem;
-    font-size: 1rem;
+    padding: var(--space-sm) var(--space-md);
+    font-size: var(--text-base);
     font-family: var(--font-serif);
     border: 1px solid var(--color-off);
-    border-radius: 4px;
-  }
-  button[type="submit"] {
-    padding: 0.55rem 1.2rem;
-    background: var(--color-token);
-    border: 1px solid var(--color-token-dark);
-    border-radius: 4px;
-    color: var(--color-off);
-    font-family: var(--font-sans);
-    font-weight: 600;
-    cursor: pointer;
-  }
-  button[type="submit"]:hover {
-    background: var(--color-off);
-    color: #fff;
-    border-color: var(--color-off);
-  }
-  .filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    margin-top: 0.85rem;
-    max-width: 44rem;
-  }
-  fieldset {
-    border: 1px solid var(--color-rule);
-    border-radius: 4px;
-    padding: 0.5rem 0.75rem;
-  }
-  legend {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-off);
-    padding: 0 0.35rem;
-  }
-  .checks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem 0.9rem;
-  }
-  .check,
-  .inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.85rem;
-    color: #333;
-  }
-  .inline + .inline {
-    margin-left: 0.9rem;
-  }
-  .tag-count {
-    color: var(--color-off);
-    font-size: 0.75rem;
-  }
-  input[type="number"] {
-    width: 3.5rem;
-    padding: 0.2rem 0.3rem;
-    border: 1px solid var(--color-rule);
-    border-radius: 3px;
-    font-family: var(--font-sans);
+    border-radius: var(--radius-md);
   }
   .docs {
     width: 12rem;
-    padding: 0.2rem 0.4rem;
-    border: 1px solid var(--color-rule);
-    border-radius: 3px;
-    font-family: var(--font-sans);
   }
 </style>

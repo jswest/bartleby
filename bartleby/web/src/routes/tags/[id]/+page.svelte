@@ -20,17 +20,16 @@
 <style>
   .back {
     font-family: var(--font-sans);
-    font-size: 0.85rem;
-    margin-bottom: 0.5rem;
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-sm);
   }
   .back a {
     color: var(--color-off);
     text-decoration: none;
   }
   .tag-desc {
-    max-width: 44rem;
+    max-width: var(--width-content);
     font-style: italic;
-    color: #444;
-    margin-bottom: 1.5rem;
+    margin-bottom: var(--space-xl);
   }
 </style>
