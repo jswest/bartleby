@@ -327,3 +327,72 @@ def test_scan_invalid_date_raises(scan_corpus, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "INVALID_DATE"
+
+
+# ---------- --sort {document,date} ----------
+
+
+def _set_date(corpus, doc_key, value):
+    """Stamp an authored_date onto a doc's summary, creating one if absent."""
+    conn = open_db(corpus["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO summaries (document_id, title, description, text, model, "
+            "authored_date) VALUES (?, '', '', '', 'test', ?) "
+            "ON CONFLICT(document_id) DO UPDATE SET authored_date = excluded.authored_date",
+            (corpus[doc_key], value),
+        )
+    finally:
+        conn.close()
+
+
+def test_scan_sort_document_matches_default(scan_corpus, capsys):
+    """--sort document is the explicit name for the default (document_id, chunk_index)."""
+    _run(scan_corpus, [MARKER, "--sort", "document"])
+    out = json.loads(capsys.readouterr().out)
+    got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
+    assert got == [(scan_corpus["d1"], 1), (scan_corpus["d1"], 3), (scan_corpus["d2"], 0)]
+
+
+def test_scan_sort_date_reorders_doc_groups_oldest_first(scan_corpus, capsys):
+    # d2 is authored earlier than d1, so its group leads despite the higher id.
+    _set_date(scan_corpus, "d1", "2024-03-01")
+    _set_date(scan_corpus, "d2", "2020-01-01")
+    _run(scan_corpus, [MARKER, "--sort", "date"])
+    out = json.loads(capsys.readouterr().out)
+    got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
+    # d2's group first (oldest), then d1's chunks in positional order.
+    assert got == [(scan_corpus["d2"], 0), (scan_corpus["d1"], 1), (scan_corpus["d1"], 3)]
+
+
+def test_scan_sort_date_puts_undated_last(scan_corpus, capsys):
+    # Only d2 (the higher id) is dated; undated d1 must sort after it.
+    _set_date(scan_corpus, "d2", "2020-01-01")
+    _run(scan_corpus, [MARKER, "--sort", "date"])
+    out = json.loads(capsys.readouterr().out)
+    got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
+    assert got == [(scan_corpus["d2"], 0), (scan_corpus["d1"], 1), (scan_corpus["d1"], 3)]
+
+
+def test_scan_sort_date_paginates_stably(scan_corpus, capsys):
+    _set_date(scan_corpus, "d1", "2024-03-01")
+    _set_date(scan_corpus, "d2", "2020-01-01")
+    _run(scan_corpus, [MARKER, "--sort", "date", "--limit", "1", "--offset", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 3
+    # Page 2 of the chronological order: d1's first marker chunk.
+    assert [(m["document_id"], m["chunk_index"]) for m in out["matches"]] == [
+        (scan_corpus["d1"], 1),
+    ]
+
+
+def test_scan_count_by_sort_date_orders_histogram_chronologically(scan_corpus, capsys):
+    _set_date(scan_corpus, "d1", "2024-03-01")
+    _set_date(scan_corpus, "d2", "2020-01-01")
+    _run(scan_corpus, [MARKER, "--count-by", "document", "--sort", "date"])
+    out = json.loads(capsys.readouterr().out)
+    # Default would be hit-count order (d1=2, d2=1); --sort date flips to oldest-first.
+    assert [d["document_id"] for d in out["documents"]] == [
+        scan_corpus["d2"], scan_corpus["d1"],
+    ]

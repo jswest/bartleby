@@ -20,6 +20,20 @@ Matching:
     AND of the individual tokens (each must appear somewhere in the chunk, in
     any order).
 
+Ordering (``--sort {document,date}``):
+    ``document`` (default) keeps the original ``(document_id, chunk_index)``
+    order — document grouping with positional within-doc order, which is what
+    makes the ``total``-based termination honest. ``date`` is a document-level
+    reorder: walk the matches **oldest-first** by ``authored_date`` (the
+    chronological survey of a templated corpus), keeping chunks positional
+    within each document. ``authored_date`` is summarizer-inferred and often
+    NULL; undated documents sort **last** with ``(document_id, chunk_index)`` as
+    the deterministic tiebreaker so pagination stays stable. (Note this is the
+    inverse of ``list_documents --sort date``, which is newest-first — scan's
+    job is to walk forward in time.) ``--sort`` applies to ``--count-by
+    document`` too: ``date`` orders the histogram chronologically instead of by
+    hit count.
+
 Output (compact by default):
     Each match carries a snippet truncated to ``--preview`` chars (default
     240; ``…`` appended when trimmed) plus ``text_length`` (pre-truncation).
@@ -68,7 +82,8 @@ Count-by aggregate (``--count-by document``):
       "total_chunk_count": int,         # the old `total`
       "documents": [
         {"document_id": int, "file_name": str, "chunk_count": int}, ...
-      ]                                  # ORDER BY chunk_count DESC, document_id
+      ]              # default --sort document: chunk_count DESC, document_id;
+                     # --sort date: authored_date oldest-first, undated last
     }
 
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
@@ -139,6 +154,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Locators only (document_id, file_name, chunk_id, page_number); "
              "drops the text snippet and text_length. Ignores --preview.",
     )
+    p.add_argument(
+        "--sort",
+        choices=["document", "date"], default="document",
+        help="Result order. document (default) = (document_id, chunk_index); "
+             "date = oldest-first by authored_date (document-level reorder, "
+             "undated last). Applies to --count-by document too.",
+    )
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
@@ -150,6 +172,22 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "so it cannot be combined with --preview or --brief."
         )
     return args
+
+
+# --sort → ORDER BY body. `date` is a document-level reorder (oldest-first,
+# undated last) that keeps chunks positional within each doc; both options end on
+# (source_id, chunk_index) so the order is total and pagination is stable. Static
+# (no user input reaches the SQL), so safe to interpolate.
+_CHUNK_ORDER_BY = {
+    "document": "c.source_id, c.chunk_index",
+    "date": "(s.authored_date IS NULL), s.authored_date, c.source_id, c.chunk_index",
+}
+# count-by histogram order. `document` keeps the hit-count ranking; `date`
+# reorders the per-document rollup chronologically (undated last).
+_DOC_ORDER_BY = {
+    "document": "n DESC, c.source_id",
+    "date": "(s.authored_date IS NULL), s.authored_date, c.source_id",
+}
 
 
 def _build_fts_query(query: str, match_mode: str) -> str:
@@ -219,9 +257,10 @@ def work(*, conn, args, session_id) -> dict:
                     f"FROM chunks_fts "
                     f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
                     f"JOIN documents d ON d.document_id = c.source_id "
+                    f"LEFT JOIN summaries s ON s.document_id = c.source_id "
                     f"WHERE {where} "
                     f"GROUP BY c.source_id "
-                    f"ORDER BY n DESC, c.source_id "
+                    f"ORDER BY {_DOC_ORDER_BY[args.sort]} "
                     f"LIMIT ? OFFSET ?",
                     [*params, args.limit, args.offset],
                 )
@@ -256,8 +295,9 @@ def work(*, conn, args, session_id) -> dict:
         f"FROM chunks_fts "
         f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
         f"JOIN documents d ON d.document_id = c.source_id "
+        f"LEFT JOIN summaries s ON s.document_id = c.source_id "
         f"WHERE {where} "
-        f"ORDER BY c.source_id, c.chunk_index "
+        f"ORDER BY {_CHUNK_ORDER_BY[args.sort]} "
         f"LIMIT ? OFFSET ?",
         [*params, args.limit, args.offset],
     )
