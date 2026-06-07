@@ -1,7 +1,6 @@
 benchmarks/
 build
 *.cast
-.claude
 dist
 .DS_Store
 *.egg-info
@@ -16,4 +15,10 @@ Thumbs.db
 .vscode
 wheels/
 
-.claude/scratch/
+# .claude/ holds both shared tooling (tracked below) and personal/transient
+# state (ignored). Ignore everything, then re-include the shared artifacts.
+.claude/*
+!.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
+!.claude/skills/
