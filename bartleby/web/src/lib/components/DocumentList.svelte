@@ -13,10 +13,13 @@
           {d.title ?? stripExt(d.file_name)}
         </a>
       </h2>
-      <p class="meta">
-        {d.file_name}{d.page_count ? ` · ${pluralize(d.page_count, "page")}` : ""}
-        {#if !d.title} · <em>no summary</em>{/if}
-      </p>
+      <p class="ident">{d.file_name}</p>
+      {#if d.page_count || !d.title}
+        <p class="meta">
+          {#if d.page_count}{pluralize(d.page_count, "page")}{/if}
+          {#if !d.title}{#if d.page_count} · {/if}<em>no summary</em>{/if}
+        </p>
+      {/if}
       {#if d.tags.length}
         <div class="tags">
           {#each d.tags as t}
