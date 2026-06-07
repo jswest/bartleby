@@ -49,6 +49,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
         "50000",               # Max summarize tokens
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",                 # Sparse text threshold
         "n",                   # Configure vision?
         "50000",               # Max read tokens
@@ -64,6 +65,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
     assert cfg["max_read_tokens"] == 50000
     assert cfg["pdf_converter"] == "pdfplumber"
     assert cfg["html_converter"] == "docling"
+    assert cfg["docling_device"] == "cpu"
     assert cfg["sparse_text_threshold"] == 100
     # Vision opted out.
     assert "vision_provider" not in cfg
@@ -86,6 +88,7 @@ def test_config_with_summary_depth_none_omits_summarize_settings(
         # No temperature/max_summarize_tokens prompted.
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",                 # Sparse text threshold
         "n",                   # Configure vision?
         "60000",               # Max read tokens
@@ -109,6 +112,7 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "50000",
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",                 # Sparse text threshold
         "n",                   # Configure vision?
         "50000",
@@ -127,6 +131,7 @@ def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypat
         "n",                   # No LLM
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",                 # Sparse text threshold
         "n",                   # Configure vision?
         "50000",               # Max read tokens
@@ -138,6 +143,22 @@ def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypat
     assert cfg["max_read_tokens"] == 50000
     assert cfg["pdf_converter"] == "pdfplumber"
     assert cfg["html_converter"] == "docling"
+
+
+def test_config_skips_docling_device_when_docling_unused(isolated_config, monkeypatch):
+    """No docling anywhere (pdfplumber + sec2md) → device is never prompted and
+    the key is omitted. Note the absence of a 'cpu' answer in the script."""
+    _scripted_inputs(monkeypatch, [
+        "n",                   # No LLM
+        "pdfplumber",          # PDF converter
+        "sec2md",              # HTML converter — no docling in play
+        "100",                 # Sparse text threshold
+        "n",                   # Configure vision?
+        "50000",               # Max read tokens
+    ])
+    config.main()
+    cfg = _read_yaml(isolated_config)
+    assert "docling_device" not in cfg
 
 
 def test_config_strips_legacy_keys_from_existing_config(isolated_config, monkeypatch):
@@ -153,6 +174,7 @@ def test_config_strips_legacy_keys_from_existing_config(isolated_config, monkeyp
         "n",                   # No LLM
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",                 # Sparse text threshold
         "n",                   # Configure vision?
         "50000",               # Max read tokens
@@ -176,6 +198,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "50000",
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",
         "y",                   # Configure vision?
         "openai",              # Vision provider (same as LLM → no fresh api key)
@@ -209,6 +232,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "50000",
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
+        "cpu",                 # Docling device (docling is in play)
         "100",
         "y",                   # Configure vision?
         "anthropic",           # Different provider → prompt for key

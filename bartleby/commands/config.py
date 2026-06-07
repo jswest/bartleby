@@ -6,6 +6,8 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
 from bartleby.lib.consts import (
+    ALLOWED_DOCLING_DEVICES,
+    DEFAULT_DOCLING_DEVICE,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
@@ -96,47 +98,32 @@ def _prompt_api_key(provider: str, existing: dict, *, help_text: str | None = No
     return entered or None
 
 
-def _prompt_pdf_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("pdf_converter", DEFAULT_PDF_CONVERTER)
-    if default not in ALLOWED_PDF_CONVERTERS:
-        default = DEFAULT_PDF_CONVERTER
-    choices = " / ".join(ALLOWED_PDF_CONVERTERS)
+def _prompt_choice(
+    existing: dict,
+    *,
+    key: str,
+    default: str,
+    allowed,
+    label: str,
+    noun: str,
+    help_text: str,
+) -> str:
+    """Prompt for one of a fixed set of string choices, re-asking on a miss.
+
+    A stored value that's no longer valid falls back to ``default`` before
+    prompting. ``label`` is the prompt text, ``noun`` names the thing in the
+    error line ("converter", "device", "summary depth").
+    """
+    current = existing.get(key, default)
+    if current not in allowed:
+        current = default
+    choices = " / ".join(allowed)
     _help(help_text)
     while True:
-        b = Prompt.ask(
-            f"PDF converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_PDF_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_html_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("html_converter", DEFAULT_HTML_CONVERTER)
-    if default not in ALLOWED_HTML_CONVERTERS:
-        default = DEFAULT_HTML_CONVERTER
-    choices = " / ".join(ALLOWED_HTML_CONVERTERS)
-    _help(help_text)
-    while True:
-        b = Prompt.ask(
-            f"HTML converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_HTML_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_summary_depth(existing: dict, *, help_text: str) -> str:
-    default = existing.get("summary_depth", DEFAULT_SUMMARY_DEPTH)
-    choices = " / ".join(ALLOWED_SUMMARY_DEPTHS)
-    _help(help_text)
-    while True:
-        depth = Prompt.ask(
-            f"Summary depth ({choices})", default=default
-        ).lower()
-        if depth in ALLOWED_SUMMARY_DEPTHS:
-            return depth
-        console.print(f"[red]Invalid summary depth. Choose from: {choices}[/red]")
+        value = Prompt.ask(f"{label} ({choices})", default=current).lower()
+        if value in allowed:
+            return value
+        console.print(f"[red]Invalid {noun}. Choose from: {choices}[/red]")
 
 
 def _prompt_temperature(existing: dict, *, help_text: str) -> float:
@@ -212,8 +199,13 @@ def main():
             config["ollama_base_url"] = _prompt_ollama_url(existing)
 
         console.print("\n[bold]Summarization[/bold]")
-        depth = _prompt_summary_depth(
+        depth = _prompt_choice(
             existing,
+            key="summary_depth",
+            default=DEFAULT_SUMMARY_DEPTH,
+            allowed=ALLOWED_SUMMARY_DEPTHS,
+            label="Summary depth",
+            noun="summary depth",
             help_text="none = skip summaries; one-shot = one summary per "
             "document.\nSummaries are indexed for search/scan and shown in listings.",
         )
@@ -242,17 +234,41 @@ def main():
         config["summary_depth"] = "none"
 
     console.print("\n[bold]Converters[/bold]")
-    config["pdf_converter"] = _prompt_pdf_converter(
+    config["pdf_converter"] = _prompt_choice(
         existing,
+        key="pdf_converter",
+        default=DEFAULT_PDF_CONVERTER,
+        allowed=ALLOWED_PDF_CONVERTERS,
+        label="PDF converter",
+        noun="converter",
         help_text="pdfplumber = fast text extraction; docling = slower but "
         "layout-aware (tables, columns, reading order).",
     )
-    config["html_converter"] = _prompt_html_converter(
+    config["html_converter"] = _prompt_choice(
         existing,
+        key="html_converter",
+        default=DEFAULT_HTML_CONVERTER,
+        allowed=ALLOWED_HTML_CONVERTERS,
+        label="HTML converter",
+        noun="converter",
         help_text="docling handles general HTML/Markdown; sec2md is specialized "
         "for iXBRL EDGAR filings (preserves SEC tables/headings, others stay on "
         "docling).",
     )
+    # Only worth asking when docling actually runs — it's the only converter with
+    # an accelerator. Default user (pdfplumber + sec2md, or no GPU) never sees it.
+    if "docling" in (config["pdf_converter"], config["html_converter"]):
+        config["docling_device"] = _prompt_choice(
+            existing,
+            key="docling_device",
+            default=DEFAULT_DOCLING_DEVICE,
+            allowed=ALLOWED_DOCLING_DEVICES,
+            label="Docling device",
+            noun="device",
+            help_text="cpu = works everywhere (required on Apple Silicon); cuda "
+            "= moves docling's layout/OCR/table models onto an NVIDIA GPU. Only "
+            "set cuda on a Linux/CUDA box.",
+        )
     config["sparse_text_threshold"] = _prompt_positive_int(
         "Sparse-text threshold",
         int(existing.get("sparse_text_threshold", DEFAULT_SPARSE_TEXT_THRESHOLD)),

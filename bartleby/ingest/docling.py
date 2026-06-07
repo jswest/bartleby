@@ -14,7 +14,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
-from bartleby.lib.consts import EMBEDDING_MODEL
+from bartleby.lib.consts import (
+    ALLOWED_DOCLING_DEVICES,
+    DEFAULT_DOCLING_DEVICE,
+    EMBEDDING_MODEL,
+)
 from bartleby.lib.quiet import is_verbose
 
 
@@ -63,8 +67,27 @@ def _require_docling():
         ) from e
 
 
-@lru_cache(maxsize=2)
-def _converter(with_picture_images: bool = False):
+def _normalize_device(name: str | None) -> str:
+    """Validate a ``docling_device`` config value, falling back to the default.
+
+    Pure (no docling import) so it's unit-testable without the optional dep. An
+    empty/absent value means "use the default"; an unrecognised value is a
+    config typo worth surfacing loudly rather than silently running on CPU when
+    the user asked for the GPU.
+    """
+    if not name:
+        return DEFAULT_DOCLING_DEVICE
+    device = name.strip().lower()
+    if device not in ALLOWED_DOCLING_DEVICES:
+        raise ValueError(
+            f"Unknown docling_device {name!r}; "
+            f"choose from {', '.join(ALLOWED_DOCLING_DEVICES)}."
+        )
+    return device
+
+
+@lru_cache(maxsize=4)
+def _converter(with_picture_images: bool = False, device: str = DEFAULT_DOCLING_DEVICE):
     _require_docling()
     from docling.datamodel.accelerator_options import (
         AcceleratorDevice,
@@ -74,12 +97,16 @@ def _converter(with_picture_images: bool = False):
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    # Force CPU: Docling's vision models hit float64 ops that MPS rejects on
-    # Apple Silicon, failing entire PDFs. CPU is slower but reliable.
+    # CPU is the safe default (Apple Silicon's MPS crashes docling's vision
+    # models on float64 ops); `cuda` opts a Linux/GPU box into accelerated
+    # layout/OCR/TableFormer. `device` is part of the lru_cache key so a switch
+    # never reuses a stale converter pinned to the other backend.
+    accelerator = {
+        "cpu": AcceleratorDevice.CPU,
+        "cuda": AcceleratorDevice.CUDA,
+    }[device]
     pipeline_options = PdfPipelineOptions()
-    pipeline_options.accelerator_options = AcceleratorOptions(
-        device=AcceleratorDevice.CPU
-    )
+    pipeline_options.accelerator_options = AcceleratorOptions(device=accelerator)
     # Only populate per-picture raster crops when a caller wants images — it's
     # extra work per page, pointless on text-only ingests.
     if with_picture_images:
@@ -214,9 +241,15 @@ def convert(path: Path, *, extract_images: bool = False) -> DoclingResult:
     ``None`` for source types without pages), and chunks ready for embedding.
     When ``extract_images`` is set, embedded pictures are rasterized in the same
     pass and returned as ``images`` — no second parse of the source file.
+
+    The accelerator device comes from the ``docling_device`` config knob (``cpu``
+    default, ``cuda`` to opt a GPU box in); callers don't pass it.
     """
+    from bartleby.config import load_config
+
+    device = _normalize_device(load_config().get("docling_device"))
     with _quiet_io():
-        result = _converter(extract_images).convert(str(path))
+        result = _converter(extract_images, device).convert(str(path))
         doc = result.document
         chunks = list(_iter_chunks(_chunker(), doc))
         full_text = doc.export_to_markdown()

@@ -10,7 +10,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bartleby.ingest.docling import _first_page, _iter_picture_images
+import pytest
+
+from bartleby.ingest.docling import (
+    _first_page,
+    _iter_picture_images,
+    _normalize_device,
+)
+from bartleby.lib.consts import DEFAULT_DOCLING_DEVICE
 
 
 def _chunk(*page_lists: list[int]) -> SimpleNamespace:
@@ -82,3 +89,26 @@ def test_iter_picture_images_page_none_when_no_provenance():
     a = object()
     doc = _doc(_pic(None, a))
     assert list(_iter_picture_images(doc)) == [(a, None, 1)]
+
+
+# --- docling_device knob -----------------------------------------------------
+
+def test_normalize_device_empty_falls_back_to_default():
+    """Absent/empty config means "use the default", not an error."""
+    assert _normalize_device(None) == DEFAULT_DOCLING_DEVICE
+    assert _normalize_device("") == DEFAULT_DOCLING_DEVICE
+
+
+def test_normalize_device_accepts_cpu_and_cuda():
+    assert _normalize_device("cpu") == "cpu"
+    assert _normalize_device("cuda") == "cuda"
+
+
+def test_normalize_device_is_case_and_whitespace_insensitive():
+    assert _normalize_device("  CUDA ") == "cuda"
+
+
+def test_normalize_device_rejects_unknown():
+    """A typo'd device fails loudly rather than silently running on CPU."""
+    with pytest.raises(ValueError, match="auto"):
+        _normalize_device("auto")

@@ -27,6 +27,14 @@ DOCLING_HF_REPOS = (
 # is absent from config). Keep the two in lockstep by sourcing both from here.
 DEFAULT_PDF_CONVERTER = "pdfplumber"
 DEFAULT_HTML_CONVERTER = "docling"
+# Docling's accelerator device. CPU is the default because docling's vision
+# models hit float64 ops that Apple Silicon's MPS backend rejects, failing whole
+# PDFs — CPU is slower but reliable everywhere. On a Linux/CUDA box that failure
+# mode doesn't exist, so `cuda` is the opt-in that moves layout/OCR/TableFormer
+# onto the GPU. `auto` is deliberately *not* offered: on Apple Silicon it
+# resolves to MPS and reintroduces the exact crash CPU exists to dodge.
+DEFAULT_DOCLING_DEVICE = "cpu"
+ALLOWED_DOCLING_DEVICES = ("cpu", "cuda")
 DEFAULT_SPARSE_TEXT_THRESHOLD = 100
 DEFAULT_OCR_MIN_CONFIDENCE = 30
 DEFAULT_VISION_MAX_DIMENSION = 1024
