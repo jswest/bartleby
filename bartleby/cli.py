@@ -98,6 +98,13 @@ def main():
         ),
     )
     scribe_parser.add_argument("--verbose", action="store_true")
+    scribe_parser.add_argument(
+        "--timings", action="store_true",
+        help="Benchmark mode: time each document's parse/embed/caption/summarize "
+             "stages, print per-doc wall-clock to stderr and an aggregate "
+             "(docs/sec, pages/sec, per-stage breakdown) as JSON to stdout. "
+             "Skips already-ingested files, so run against a fresh project.",
+    )
 
     session_parser = subparsers.add_parser("session", help="Manage agent sessions")
     session_sub = session_parser.add_subparsers(dest="session_command")
@@ -195,6 +202,7 @@ def _scribe(args):
         pdf_converter=args.pdf_converter,
         html_converter=args.html_converter,
         verbose=args.verbose,
+        timings=args.timings,
     )
 
 

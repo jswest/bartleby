@@ -16,8 +16,10 @@ documents are unwrapped and routed individually.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -58,6 +60,7 @@ from bartleby.ingest.embed import embed_texts
 from bartleby.ingest.summarize import SummaryResult, count_tokens, summarize
 from bartleby.ingest.text import chunk_text
 from bartleby.lib import console
+from bartleby.lib import timing
 from bartleby.lib.consts import (
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
@@ -1007,6 +1010,7 @@ def main(
     pdf_converter: str | None = None,
     html_converter: str | None = None,
     verbose: bool = False,
+    timings: bool = False,
 ) -> None:
     # Resolve converters before quietening third parties: which models the run
     # needs (and thus whether offline mode is safe) depends on them. Reading
@@ -1128,12 +1132,20 @@ def main(
             SKIP_DISPLAY_LIMIT = 3
             skipped_count = 0
 
+            # --timings: collect per-doc per-stage wall-clock and aggregate it
+            # after the loop. Off by default — `timer` stays None and the loop
+            # runs unchanged. `run_start` brackets the whole loop so docs/sec
+            # and pages/sec count inter-doc overhead, not just stage time.
+            timing_records: list[timing.DocTiming] = []
+            run_start = time.perf_counter() if timings else None
+
             for src, src_ext in sources:
                 # Render the main row from the active stage + page count. The
                 # filename is truncated so a long name can't squeeze the bar
                 # (issue #85); the page count is appended once extraction knows
                 # it, for whichever converter ran.
                 state = {"stage": "starting", "pages": None}
+                timer = timing.StageTimer() if timings else None
 
                 def _render(_src=src, _state=state) -> None:
                     name = console.truncate_filename(_src.name)
@@ -1147,9 +1159,13 @@ def main(
                         label=f"Ingesting {name}{page_str} · {_state['stage']}",
                     )
 
-                def _set_stage(stage: str, _state=state, _render=_render) -> None:
+                def _set_stage(
+                    stage: str, _state=state, _render=_render, _timer=timer,
+                ) -> None:
                     _state["stage"] = stage
                     _render()
+                    if _timer is not None:
+                        _timer.mark(stage)
 
                 def _set_page_count(count: int | None, _state=state, _render=_render) -> None:
                     _state["pages"] = count
@@ -1181,6 +1197,15 @@ def main(
                             console.info(
                                 f"Skipping {src.name} (already ingested)"
                             )
+                    elif timer is not None:
+                        timer.finish()
+                        timing_records.append(timing.DocTiming(
+                            page_count=state["pages"],
+                            stages=dict(timer.totals),
+                        ))
+                        console.info(timing.render_doc_line(
+                            src.name, timer.total, timer.totals,
+                        ))
                 except Exception as e:
                     from bartleby.lib.quiet import OFFLINE_HINT, offline_blocked
                     message = f"Failed: {src.name}: {e}"
@@ -1200,5 +1225,15 @@ def main(
                 )
     finally:
         conn.close()
+
+    if timings:
+        # Human breakdown to stderr; machine summary to stdout so a benchmark
+        # run is captured with `bartleby scribe --files <sample> --timings >
+        # bench.json` while the bar and status text stay on stderr.
+        agg = timing.aggregate(timing_records, time.perf_counter() - run_start)
+        console.big("Timing summary")
+        for line in timing.render_summary(agg):
+            console.info(line)
+        print(json.dumps(agg), flush=True)
 
     console.complete("Done.")
