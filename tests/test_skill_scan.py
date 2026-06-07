@@ -133,6 +133,24 @@ def test_scan_preview_override_returns_full_text(scan_corpus, capsys):
     assert len(long_match["text"]) == long_match["text_length"]
 
 
+def test_scan_brief_keeps_only_locators(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--brief"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["matches"]
+    assert out["total"] == 3  # envelope/total unchanged
+    for m in out["matches"]:
+        assert set(m) == {"document_id", "file_name", "chunk_id", "page_number"}
+
+
+def test_scan_brief_ignores_preview(scan_corpus, capsys):
+    """--brief drops text entirely, so --preview has nothing to truncate."""
+    _run(scan_corpus, [MARKER, "--brief", "--preview", "10"])
+    out = json.loads(capsys.readouterr().out)
+    for m in out["matches"]:
+        assert "text" not in m
+        assert "text_length" not in m
+
+
 def test_scan_match_terms_is_superset_of_phrase(scan_corpus, capsys):
     _run(scan_corpus, ["divest my interests"])
     phrase_ids = {m["chunk_id"] for m in json.loads(capsys.readouterr().out)["matches"]}

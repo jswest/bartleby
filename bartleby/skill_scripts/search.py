@@ -39,6 +39,13 @@ Output:
         "image_id": int, "image_file_path": str,
       }, ...]
     }
+
+With ``--brief`` each hit is trimmed to a triage projection — ``chunk_id``,
+``source_kind``, ``source_name``, ``page_number``, ``rank``,
+``normalized_score``, and a truncated ``text`` preview — dropping ``source_id``,
+``chunk_index``, ``section_heading``, ``content_type``, ``score``, the full
+``text``, the context arrays, and the image locators. The envelope is unchanged;
+``--add-context`` is ignored under ``--brief``.
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    chunk_locations, comma_int_list, positive_int, source_names,
+    apply_preview, chunk_locations, comma_int_list, positive_int, source_names,
 )
 from bartleby.skill_scripts._tags import intersect_tag_filter
 
@@ -63,6 +70,7 @@ DEFAULT_LIMIT = 20
 MAX_CONTEXT = 5
 OVERFETCH_MULTIPLIER = 5
 OVERFETCH_FLOOR = 50
+BRIEF_PREVIEW_CHARS = 240
 
 
 def _context_value(s: str) -> int:
@@ -114,6 +122,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
+    p.add_argument(
+        "--brief",
+        action="store_true",
+        help=(
+            "Skinny per-hit projection for triage: chunk_id, source_kind, "
+            "source_name, page_number, rank, normalized_score, and a truncated "
+            f"text preview ({BRIEF_PREVIEW_CHARS} chars). Drops source_id, "
+            "chunk_index, section_heading, content_type, full text, the context "
+            "arrays, and image locators. --add-context is ignored under --brief."
+        ),
+    )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
@@ -407,6 +426,17 @@ def work(*, conn, args, session_id) -> dict:
     for rank, (chunk_id, score) in enumerate(scored, start=1):
         _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
         loc = locations.get(chunk_id, {"file_name": None, "page_number": None})
+        if args.brief:
+            results.append({
+                "chunk_id": chunk_id,
+                "source_kind": source_kind,
+                "source_name": names[(source_kind, source_id)],
+                "page_number": loc["page_number"],
+                "rank": rank,
+                "normalized_score": score / top_score,
+                "text": apply_preview(text, BRIEF_PREVIEW_CHARS),
+            })
+            continue
         hit = {
             "chunk_id": chunk_id,
             "source_kind": source_kind,

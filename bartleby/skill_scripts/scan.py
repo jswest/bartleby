@@ -46,6 +46,12 @@ Output (compact by default):
       }, ...]
     }
 
+With ``--brief`` each match keeps only locators — ``document_id``,
+``file_name``, ``chunk_id``, ``page_number`` — dropping ``chunk_index``,
+``section_heading``, ``content_type``, ``text``, and ``text_length`` (so
+``--preview`` has no effect). Pairs with the always-present ``total`` for pure
+"where does this phrase occur" enumeration. The envelope is unchanged.
+
 ``--in-documents`` and ``--tag`` (repeatable, OR semantics) scope the match
 the same way they do in ``search``; combined they intersect.
 """
@@ -91,6 +97,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=positive_int,
         default=DEFAULT_PREVIEW,
         help=f"Truncate each match's text to the first N chars (default {DEFAULT_PREVIEW}).",
+    )
+    p.add_argument(
+        "--brief",
+        action="store_true",
+        help="Locators only (document_id, file_name, chunk_id, page_number); "
+             "drops the text snippet and text_length. Ignores --preview.",
     )
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
@@ -167,21 +179,33 @@ def work(*, conn, args, session_id) -> dict:
         [*params, args.limit, args.offset],
     )
 
-    matches = [
-        {
-            "document_id": source_id,
-            "file_name": file_name,
-            "chunk_id": chunk_id,
-            "chunk_index": chunk_index,
-            "page_number": page_number,
-            "section_heading": section_heading,
-            "content_type": content_type,
-            "text": apply_preview(text, args.preview),
-            "text_length": len(text),
-        }
-        for (chunk_id, source_id, chunk_index, section_heading,
-             page_number, content_type, text, file_name) in rows
-    ]
+    if args.brief:
+        matches = [
+            {
+                "document_id": source_id,
+                "file_name": file_name,
+                "chunk_id": chunk_id,
+                "page_number": page_number,
+            }
+            for (chunk_id, source_id, chunk_index, section_heading,
+                 page_number, content_type, text, file_name) in rows
+        ]
+    else:
+        matches = [
+            {
+                "document_id": source_id,
+                "file_name": file_name,
+                "chunk_id": chunk_id,
+                "chunk_index": chunk_index,
+                "page_number": page_number,
+                "section_heading": section_heading,
+                "content_type": content_type,
+                "text": apply_preview(text, args.preview),
+                "text_length": len(text),
+            }
+            for (chunk_id, source_id, chunk_index, section_heading,
+                 page_number, content_type, text, file_name) in rows
+        ]
     return _response(matches, total)
 
 

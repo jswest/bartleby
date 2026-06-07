@@ -90,6 +90,32 @@ def test_list_findings_happy_path(seeded_project, capsys):
     assert first["created_at"] is not None
 
 
+def test_list_findings_brief_projects_three_fields(seeded_project, capsys):
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+
+    conn = open_db(project)
+    try:
+        doc_chunk = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id=? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+        _seed_finding(conn, session_id=session_id, title="Cited",
+                      description="hook", cited_chunk_ids=[doc_chunk])
+    finally:
+        conn.close()
+
+    list_findings.main(["--project", project, "--brief"])
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["findings"]
+    for f in out["findings"]:
+        assert set(f) == {"finding_id", "title", "citation_count"}
+    assert out["findings"][0]["citation_count"] == 1
+    assert out["total"] == 1  # envelope unchanged
+
+
 def test_list_findings_pagination_hint(seeded_project, capsys):
     project = seeded_project["project"]
     session_id = _active_session_id(project)
