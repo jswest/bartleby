@@ -11,7 +11,7 @@
 {:else}
   <ul class="entity-list">
     {#each data.findings as f}
-      <li class="entity surface">
+      <li class="entity surface surface--finding surface--interactive">
         <h2><a href="/findings/{f.finding_id}">{f.title}</a></h2>
         <p class="meta">
           <span class="finding-id">#{f.finding_id}</span> · {f.session_name} · {pluralize(f.citation_count, "citation")} · {f.created_at}

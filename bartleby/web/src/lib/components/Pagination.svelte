@@ -38,7 +38,7 @@
     font-size: var(--text-sm);
   }
   .pager a {
-    color: var(--color-token-dark);
+    color: var(--color-link);
     font-weight: 600;
     text-decoration: none;
   }

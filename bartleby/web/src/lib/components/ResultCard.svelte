@@ -17,7 +17,7 @@
   $: truncated = variant === "scan" && item.text_length > item.text.length;
 </script>
 
-<li class="result surface">
+<li class="result surface surface--interactive">
   <div class="head">
     <h3 class="title">
       {#if item.href}
@@ -83,7 +83,7 @@
     font-family: var(--font-sans);
     font-size: var(--text-2xs);
     font-weight: 600;
-    color: var(--color-token-dark);
+    color: var(--color-token-text);
     white-space: nowrap;
   }
   .score {
