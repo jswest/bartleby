@@ -5,8 +5,10 @@ export function stripExt(name) {
   return name ? name.replace(/\.[^.]+$/, '') : name;
 }
 
-// Render `<count> <noun>` with naive English pluralization. Pass `plural` when
-// the noun isn't just `singular + 's'` (e.g. pluralize(n, 'match', 'matches')).
+// Render `<count> <noun>` with naive English pluralization and a comma-grouped
+// count (1234 → "1,234"). Pass `plural` when the noun isn't just `singular + 's'`
+// (e.g. pluralize(n, 'match', 'matches')).
 export function pluralize(count, singular, plural = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : plural}`;
+  const shown = typeof count === 'number' ? count.toLocaleString('en-US') : count;
+  return `${shown} ${count === 1 ? singular : plural}`;
 }
