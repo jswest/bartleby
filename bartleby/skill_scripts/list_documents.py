@@ -22,6 +22,13 @@ summary row and are null until one is written (either at ingest time or via
 (``source_kind='document'``); image chunks live under ``source_kind='image'``
 and are surfaced via ``image_count``.
 
+Ordering: ``--sort`` picks the order, applied before pagination. ``id``
+(default) is ingest order — stable and cheap, the right default for an agent
+paging the whole corpus. ``title`` sorts alphabetically by title (falling back
+to file_name for unsummarized docs), case-insensitive — the natural order for a
+human browsing the list. ``date`` sorts newest-first by ``authored_date`` with
+undated documents last. All three break ties on ``document_id`` for determinism.
+
 Date filtering: ``--authored-after`` / ``--authored-before`` bound
 ``authored_date`` (inclusive, composable with ``--tag``). ``authored_date`` is
 summarizer-inferred and stored NULL on anything that isn't a clean
@@ -65,7 +72,26 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     add_date_filter_args(p)
+    p.add_argument(
+        "--sort",
+        choices=["id", "title", "date"], default="id",
+        help=(
+            "Result order, applied before pagination. id (default) = ingest "
+            "order; title = alphabetical by title/file_name; date = "
+            "newest-first by authored_date, undated last."
+        ),
+    )
     return p.parse_args(argv)
+
+
+# Maps --sort to an ORDER BY body. Every option ends on document_id so the order
+# is total and pagination is stable across pages. Static (no user input reaches
+# the SQL), so safe to interpolate.
+_ORDER_BY = {
+    "id": "d.document_id",
+    "title": "COALESCE(s.title, d.file_name) COLLATE NOCASE, d.document_id",
+    "date": "(s.authored_date IS NULL), s.authored_date DESC, d.document_id",
+}
 
 
 def work(*, conn, args, session_id) -> dict:
@@ -106,7 +132,7 @@ def work(*, conn, args, session_id) -> dict:
         "           FROM document_images GROUP BY document_id) ic "
         "  ON ic.document_id = d.document_id "
         f"{where_clause}"
-        "ORDER BY d.document_id LIMIT ? OFFSET ?",
+        f"ORDER BY {_ORDER_BY[args.sort]} LIMIT ? OFFSET ?",
         [*where_params, args.limit, args.offset],
     )
 

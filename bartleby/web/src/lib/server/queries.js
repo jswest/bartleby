@@ -184,18 +184,29 @@ export function getDocumentFilePath(documentId) {
   return row ? row.file_path : null;
 }
 
-// Documents list — LEFT JOIN summaries so unsummarized docs still show up
-// (rendered with the file name as a fallback title).
-export function listDocuments() {
+// Tags for a set of documents, as a Map<document_id, tags[]>. The /documents
+// list delegates enumeration + filtering to the list_documents skill (one
+// source of truth for the date/null semantics), but the skill is agent-shaped
+// and returns no tags — so we re-attach them here in one batched query, the
+// same pattern titleMeta() uses to enrich search hits. Documents with no tags
+// are simply absent from the map (callers default to []).
+export function tagsByDocument(documentIds) {
   const { db } = getDb();
+  const uniq = [...new Set(documentIds.filter((id) => id != null))];
+  const out = new Map();
+  if (uniq.length === 0) return out;
+  const ph = uniq.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT d.document_id, d.file_name, d.page_count, d.created_at,
-           s.title, s.description, ${TAGS_JSON_SUBQUERY}
-    FROM documents d
-    LEFT JOIN summaries s USING (document_id)
-    ORDER BY COALESCE(s.title, d.file_name) COLLATE NOCASE
-  `).all();
-  return rows.map(withTags);
+    SELECT dt.document_id, t.tag_id, t.name, t.description
+    FROM document_tags dt JOIN tags t USING (tag_id)
+    WHERE dt.document_id IN (${ph})
+    ORDER BY t.name COLLATE NOCASE
+  `).all(...uniq);
+  for (const r of rows) {
+    if (!out.has(r.document_id)) out.set(r.document_id, []);
+    out.get(r.document_id).push({ tag_id: r.tag_id, name: r.name, description: r.description });
+  }
+  return out;
 }
 
 export function getDocument(documentId) {
@@ -245,8 +256,9 @@ export function listAllTags() {
   `).all();
 }
 
-// A single tag plus the documents carrying it (same shape as listDocuments,
-// tags included). Returns null when the tag id is unknown.
+// A single tag plus the documents carrying it, each in the shape DocumentList
+// expects (document_id, file_name, page_count, title, description, tags).
+// Returns null when the tag id is unknown.
 export function getTag(tagId) {
   const { db } = getDb();
   const tag = db.prepare(

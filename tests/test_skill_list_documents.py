@@ -190,6 +190,85 @@ def test_list_documents_invalid_date_raises(seeded_project, capsys):
     assert err["code"] == "INVALID_DATE"
 
 
+def _set_title(project, document_id, title):
+    from bartleby.db.connection import open_db
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET title = ? WHERE document_id = ?",
+            (title, document_id),
+        )
+    finally:
+        conn.close()
+
+
+def _add_summary(project, document_id, *, title, authored_date=None):
+    from bartleby.db.connection import open_db
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO summaries "
+            "(document_id, title, description, text, model, authored_date) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (document_id, title, "desc", "body", "test", authored_date),
+        )
+    finally:
+        conn.close()
+
+
+def test_list_documents_default_sort_is_id(seeded_project, capsys):
+    # Re-title alpha so it sorts *after* beta alphabetically; the default (id)
+    # order must ignore that and stay in ingest order.
+    _set_title(seeded_project["project"], seeded_project["doc_a"], "Zzz")
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["id"] for d in out["documents"]] == [
+        seeded_project["doc_a"], seeded_project["doc_b"],
+    ]
+
+
+def test_list_documents_sort_title_is_alphabetical(seeded_project, capsys):
+    # alpha re-titled "Zzz"; beta is unsummarized so it falls back to file_name
+    # "beta.txt". Alphabetical → beta before alpha, the reverse of id order.
+    _set_title(seeded_project["project"], seeded_project["doc_a"], "Zzz")
+    list_documents.main([
+        "--project", seeded_project["project"], "--sort", "title",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["beta.txt", "alpha.pdf"]
+
+
+def test_list_documents_sort_date_newest_first(seeded_project, capsys):
+    # Two dated docs in opposite id/date order: alpha (lower id) is older.
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    _add_summary(seeded_project["project"], seeded_project["doc_b"],
+                 title="Beta", authored_date="2025-01-01")
+    list_documents.main([
+        "--project", seeded_project["project"], "--sort", "date",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["beta.txt", "alpha.pdf"]
+
+
+def test_list_documents_sort_date_puts_undated_last(seeded_project, capsys):
+    # alpha dated, beta undated (no summary at all) → undated sorts last.
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"], "--sort", "date",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf", "beta.txt"]
+
+
+def test_list_documents_sort_rejects_unknown_value(seeded_project, capsys):
+    code, _ = _run(capsys, [
+        "--project", seeded_project["project"], "--sort", "bogus",
+    ])
+    assert code == 2  # argparse choices error
+
+
 def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):
     from bartleby.db.connection import open_db
     project = seeded_project["project"]

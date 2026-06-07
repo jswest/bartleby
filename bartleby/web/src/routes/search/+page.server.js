@@ -1,16 +1,11 @@
-import { runSkill, SkillError } from '$lib/server/skill.js';
+import { runSkill, toSkillError } from '$lib/server/skill.js';
 import { listTags, enrichHits, enrichScanMatches } from '$lib/server/queries.js';
+import { clampInt } from '$lib/server/params.js';
 import { ALL_KINDS, DEFAULT_KINDS } from '$lib/constants.js';
 
 // The web defaults to everything a human typically wants — documents, their own
 // findings, and images — but summaries stay opt-in (derived, noisier as search
 // targets). ALL_KINDS is the full set the `search` script understands.
-
-function clampInt(raw, lo, hi, fallback) {
-  const n = parseInt(raw ?? '', 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.min(hi, Math.max(lo, n));
-}
 
 export async function load({ url }) {
   const sp = url.searchParams;
@@ -53,9 +48,6 @@ export async function load({ url }) {
     }
     return { params, available, result, error: null };
   } catch (e) {
-    const error = e instanceof SkillError
-      ? { message: e.message, code: e.code }
-      : { message: String(e?.message ?? e), code: 'ERROR' };
-    return { params, available, result: null, error };
+    return { params, available, result: null, error: toSkillError(e) };
   }
 }
