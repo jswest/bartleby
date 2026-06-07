@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
+    "isomorphic-dompurify": "^3.16.0",
     "js-yaml": "^4.1.0",
     "marked": "^14.1.0"
   }
