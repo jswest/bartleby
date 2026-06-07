@@ -15,6 +15,12 @@ Thumbs.db
 .vscode
 wheels/
 
+# Playwright / `with-playwright` verification artifacts (see CONTRIBUTING.md): the
+# MCP writes console logs under .playwright-mcp/ and route screenshots land in the
+# repo root. Anchored /*.png so tracked images under docs/ etc. are unaffected.
+.playwright-mcp/
+/*.png
+
 # .claude/ holds both shared tooling (tracked below) and personal/transient
 # state (ignored). Ignore everything, then re-include the shared artifacts.
 .claude/*
