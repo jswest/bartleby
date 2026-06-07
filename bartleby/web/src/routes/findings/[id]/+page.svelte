@@ -40,6 +40,9 @@
 
   let active = null;
   $: activeUrl = active ? citationUrl(active) : null;
+  // Sandbox the viewer for non-PDF sources so an ingested HTML document can't run
+  // its scripts; PDFs keep the native viewer + #page= jumps. Unknown → sandboxed.
+  $: activeIsPdf = /\.pdf$/i.test(active?.file_name ?? "");
 
   function citationUrl(c) {
     if (c.document_id == null) return null;
@@ -100,7 +103,7 @@
   <aside class="viewer">
     {#if activeUrl}
       {#key activeUrl}
-        <iframe title="Source document" src={activeUrl}></iframe>
+        <iframe title="Source document" src={activeUrl} sandbox={activeIsPdf ? undefined : ""}></iframe>
       {/key}
     {:else}
       <p class="placeholder">
