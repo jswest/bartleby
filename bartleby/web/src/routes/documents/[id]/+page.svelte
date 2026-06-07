@@ -22,7 +22,7 @@
 </script>
 
 <div class="split">
-  <article class="report">
+  <article class="report surface">
     <h1>{doc.title ?? stripExt(doc.file_name)}</h1>
     <p class="meta">
       {doc.file_name}{doc.page_count ? ` · ${pluralize(doc.page_count, "page")}` : ""}

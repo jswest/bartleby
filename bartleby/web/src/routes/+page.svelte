@@ -20,16 +20,19 @@
     The agent's notebook for <span class="project">{project}</span>.
   </p>
 
+  <!-- The two cards teach the app's colour signal up front: the mint card is
+       agent output (findings), the warm card is source material (documents) —
+       the same split that holds across every list and detail page. -->
   <ul class="cards">
     <li>
-      <a href="/findings">
+      <a class="surface surface--finding surface--interactive" href="/findings">
         <h2>Findings</h2>
         <p class="count">{fmt(counts.findings)}</p>
         <p class="hint">Saved research notes with inline citations.</p>
       </a>
     </li>
     <li>
-      <a href="/documents">
+      <a class="surface surface--interactive" href="/documents">
         <h2>Documents</h2>
         <p class="count">{fmt(counts.documents)}</p>
         <p class="hint">Ingested source material with summaries.</p>
@@ -155,19 +158,12 @@
     grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
     gap: var(--space-lg);
   }
+  /* The card box (border, fill, radius, shadow, hover) is the shared .surface
+     primitive; only the link reset and inner type live here. */
   ul.cards a {
     display: block;
-    padding: var(--space-lg);
-    border: 1px solid var(--color-rule);
-    border-radius: var(--radius-lg);
     text-decoration: none;
     color: inherit;
-    background: var(--color-surface-card);
-    transition: border-color 0.1s, background 0.1s;
-  }
-  ul.cards a:hover {
-    border-color: var(--color-off);
-    background: var(--color-surface);
   }
   ul.cards h2 {
     font-size: var(--text-base);
@@ -230,7 +226,7 @@
     padding: var(--space-2xs) 0;
   }
   .rows a {
-    color: var(--color-token-dark);
+    color: var(--color-link);
     text-decoration: none;
   }
   .rows a:hover {

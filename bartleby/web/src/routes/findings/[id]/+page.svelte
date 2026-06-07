@@ -82,7 +82,7 @@
 </script>
 
 <div class="split">
-  <article class="report surface" bind:this={container}>
+  <article class="report surface surface--finding" bind:this={container}>
     <h1>{data.finding.title}</h1>
     <p class="meta">
       <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name} · {data.finding.created_at}
