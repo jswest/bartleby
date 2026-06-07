@@ -80,6 +80,17 @@ what looks wrong. It's **off by default** because browser automation is slow and
 burns image tokens, so you opt in per run when a change is actually worth eyeballing.
 Backend-only issues ignore the token even if you pass it.
 
+### `skip-tests` (docs-only changes)
+
+For a docs-only change — README wording, an `ARCHITECTURE.md` note, a `SKILL.md`
+tweak — you can append a `skip-tests` token (`/ship #<N> skip-tests`) to omit the
+`uv run pytest` runs that otherwise gate every commit. It's a convenience for diffs
+that can't affect tests, **not** a way to land untested code: Claude honors it only
+when the branch diff touches no `*.py`, `pyproject.toml`, or `bartleby/web/` file —
+otherwise it runs the tests anyway and tells you why. When tests are genuinely
+skipped, the PR and final report say so. Combine it with `with-playwright` in either
+order.
+
 ### The helper agents
 
 Two subagents do focused jobs so the main thread stays on the problem:
