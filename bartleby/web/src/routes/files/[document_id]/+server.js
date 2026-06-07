@@ -33,11 +33,18 @@ export function GET({ params }) {
 
   const stat = fs.statSync(filePath);
   const stream = fs.createReadStream(filePath);
-  return new Response(stream, {
-    headers: {
-      'Content-Type': contentType,
-      'Content-Length': String(stat.size),
-      'Content-Disposition': 'inline'
-    }
-  });
+  const headers = {
+    'Content-Type': contentType,
+    'Content-Length': String(stat.size),
+    'Content-Disposition': 'inline',
+    // Don't let the browser MIME-sniff a text or octet-stream file into runnable HTML.
+    'X-Content-Type-Options': 'nosniff'
+  };
+  // Source documents are evidence to read, never to run. Sandbox HTML so its
+  // scripts can't execute — whether embedded in our iframe or opened directly.
+  // PDFs/images/text don't script, so they're left untouched.
+  if (ext === '.html' || ext === '.htm') {
+    headers['Content-Security-Policy'] = 'sandbox';
+  }
+  return new Response(stream, { headers });
 }

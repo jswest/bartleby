@@ -14,6 +14,11 @@
     return Number.isInteger(n) && n > 0 ? n : null;
   })();
   $: viewerSrc = `/files/${doc.document_id}${pageNum ? `#page=${pageNum}` : ""}`;
+
+  // Sandbox the source viewer for everything except PDFs so an ingested HTML
+  // document can't run its scripts. PDFs need the browser's native viewer (and
+  // #page= jumps), which a sandbox would hobble; unknown/missing → sandboxed.
+  $: isPdf = /\.pdf$/i.test(doc.file_name ?? "");
 </script>
 
 <div class="split">
@@ -46,7 +51,7 @@
 
   <aside class="viewer">
     {#key viewerSrc}
-      <iframe title="Source document" src={viewerSrc}></iframe>
+      <iframe title="Source document" src={viewerSrc} sandbox={isPdf ? undefined : ""}></iframe>
     {/key}
   </aside>
 </div>
