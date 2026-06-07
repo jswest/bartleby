@@ -282,6 +282,74 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
         conn.close()
 
 
+def test_scribe_ingests_pdf_via_docling_without_second_parse(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Docling-backend images come from the docling pass, not a pdfplumber re-parse."""
+    from bartleby.ingest.docling import DoclingChunk, DoclingImage, DoclingResult
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "none",
+            "pdf_converter": "docling",
+            "html_converter": "docling",
+            "vision_provider": "stub",
+            "vision_model": "stub-vl:1",
+            "vision_max_dimension": 1024,
+        },
+    )
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider",
+        lambda name, **kwargs: vision,
+    )
+
+    # Stub the docling pass: one text chunk + one embedded picture. Capturing
+    # the call lets us assert the image side-pass was requested in the same pass.
+    calls = {}
+
+    def fake_convert(path, *, extract_images=False):
+        calls["extract_images"] = extract_images
+        return DoclingResult(
+            full_text="Body text from docling.",
+            page_count=1,
+            chunks=[DoclingChunk(
+                text="Body text from docling.",
+                section_heading=None, content_type="text", page_number=1,
+            )],
+            images=[DoclingImage(
+                png_bytes=_png_bytes(), page_number=1, image_index_on_page=1,
+            )] if extract_images else [],
+        )
+
+    monkeypatch.setattr("bartleby.ingest.docling.convert", fake_convert)
+    # The whole point of #2: the docling path must not re-parse via pdfplumber.
+    def _boom(*a, **k):
+        raise AssertionError("docling path must not call pdfplumber")
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.pdfplumber_pipeline.convert", _boom
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    scribe.main(project="test_proj", files=str(pdf))
+
+    assert calls["extract_images"] is True
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_images"
+        ).fetchone()[0] == 1
+        assert vision.calls >= 1
+    finally:
+        conn.close()
+
+
 def test_scribe_dedupes_identical_images_across_documents(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):

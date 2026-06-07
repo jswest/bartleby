@@ -1,15 +1,16 @@
-"""Unit tests for the Docling adapter's page-number extraction.
+"""Unit tests for the Docling adapter's page-number and picture extraction.
 
-These tests don't load Docling itself — they exercise the meta-shape parser
-against namespace objects shaped like Docling's chunk metadata. Real
-Docling integration is covered by `bartleby scribe` runs against PDFs.
+These tests don't load Docling itself — they exercise the meta-shape parsers
+against namespace objects shaped like Docling's chunk metadata and picture
+items. Real Docling integration is covered by `bartleby scribe` runs against
+PDFs.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bartleby.ingest.docling import _first_page
+from bartleby.ingest.docling import _first_page, _iter_picture_images
 
 
 def _chunk(*page_lists: list[int]) -> SimpleNamespace:
@@ -48,3 +49,36 @@ def test_first_page_none_when_doc_items_have_empty_prov():
 def test_first_page_none_when_meta_missing():
     chunk = SimpleNamespace()
     assert _first_page(chunk) is None
+
+
+def _pic(page_no: int | None, image: object) -> SimpleNamespace:
+    """A fake PictureItem: prov carries the page, get_image returns the raster."""
+    prov = [SimpleNamespace(page_no=page_no)] if page_no is not None else []
+    return SimpleNamespace(prov=prov, get_image=lambda doc: image)
+
+
+def _doc(*pics: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(pictures=list(pics))
+
+
+def test_iter_picture_images_indexes_restart_per_page():
+    """Two pictures on page 1, one on page 2 → indices 1, 2, 1."""
+    a, b, c = object(), object(), object()
+    doc = _doc(_pic(1, a), _pic(1, b), _pic(2, c))
+    assert list(_iter_picture_images(doc)) == [
+        (a, 1, 1), (b, 1, 2), (c, 2, 1),
+    ]
+
+
+def test_iter_picture_images_skips_unrasterizable():
+    """A picture whose get_image returns None is dropped and burns no index."""
+    a, c = object(), object()
+    doc = _doc(_pic(1, a), _pic(1, None), _pic(1, c))
+    assert list(_iter_picture_images(doc)) == [(a, 1, 1), (c, 1, 2)]
+
+
+def test_iter_picture_images_page_none_when_no_provenance():
+    """A picture without provenance still rasterizes, with page_number None."""
+    a = object()
+    doc = _doc(_pic(None, a))
+    assert list(_iter_picture_images(doc)) == [(a, None, 1)]
