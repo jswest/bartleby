@@ -9,10 +9,11 @@ description: >-
 
 # ship — issue → tested PR
 
-Argument is one GitHub issue number (`#118`, `118`), optionally followed by the
-`with-playwright` token (e.g. `/ship #134 with-playwright`) — see below. Run the
-steps in order. Two hard stops are marked **PAUSE**: do not pass them without the
-user's OK.
+Argument is one GitHub issue number (`#118`, `118`), optionally followed by one
+or both opt-in tokens — `with-playwright` and `skip-tests` (e.g. `/ship #134
+with-playwright`, `/ship #142 skip-tests`, or both in either order) — see below.
+Run the steps in order. Two hard stops are marked **PAUSE**: do not pass them
+without the user's OK.
 
 Repo specifics: tests are `uv run pytest`; the main checkout is
 `/Users/johnwest/Code/spot/bartleby`; worktrees are **siblings** of it. A
@@ -33,6 +34,19 @@ backend-only change, ignore it and ship normally. When it's active:
   silently skip the loop.
 
 Don't edit the built-in `verify`/`run` skills; this flag lives entirely here.
+
+**Optional `skip-tests`.** The argument may carry a `skip-tests` token (only that
+exact token). It omits the `uv run pytest` runs in steps 8, 9, and 10 — a
+convenience for docs-only work, **not** a way to land untested code. It is
+honored **only if this issue's diff touches no test-affecting source**: if
+`git diff --name-only origin/main...HEAD` shows any `*.py`, `pyproject.toml`, or
+a file under `bartleby/web/`, **ignore the token and run the tests anyway**, and
+say why ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py`
+— running tests anyway"). Re-check this at **each** gate, not just once: a docs
+PR that grows a code change mid-stream must start running tests from that point.
+When tests are genuinely skipped, **say so** in the step-11 PR summary and the
+final report ("Tests skipped — docs-only diff") so a skipped suite never reads as
+a green one. The simplify-refactor pass (step 8) still runs regardless.
 
 ## 1. Preconditions
 - `git -C <main-checkout> status --porcelain` must be empty. If main has
@@ -73,21 +87,26 @@ skip this — say so and proceed.
 Work in logical units. If `with-playwright` is active, bracket each web-touching
 unit with before/after screenshots (see the flag note above). For **every**
 code-producing commit, in this exact order:
-1. `uv run pytest` — must pass.
+1. `uv run pytest` — must pass. (Skipped when `skip-tests` is active *and* its
+   guard holds — see the flag note above; re-check the guard here.)
 2. Run the `simplify-refactor` agent against the just-touched files.
 3. Apply the suggestions you agree with; push back on the rest.
-4. Re-run `uv run pytest` — must still pass.
+4. Re-run `uv run pytest` — must still pass. (Same `skip-tests` condition as 1.)
 5. Commit (in the worktree; the hook enforces you're off `main`).
 
 ## 9. Docs sweep
 Check README / ARCHITECTURE.md / skill `SKILL.md` for updates the change
 requires (new flags, changed behavior, a decision-log entry). If you change docs,
-re-run the step-8 gates before continuing.
+re-run the step-8 gates before continuing (the `skip-tests` condition from step 8
+applies to the pytest run here too).
 
 ## 10. Reconcile before the PR
 Bring the branch up to date so conflicts surface here, not in the PR:
 `git fetch origin && git merge origin/main` (or rebase). Resolve any conflicts,
-then run the **full** suite (`uv run pytest`) again.
+then run the **full** suite (`uv run pytest`) again — unless `skip-tests` is
+active and its guard still holds. Re-run the same `origin/main...HEAD` check from
+the flag note; because it's three-dot (the diff since the merge-base), merging
+`origin/main` in doesn't change what it sees.
 
 ## 11. PAUSE — PR
 Show the user the **PR body draft + a final diff summary** (`git diff --stat
