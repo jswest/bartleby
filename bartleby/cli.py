@@ -22,7 +22,7 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    subparsers.add_parser("ready", help="Configure Bartleby settings")
+    subparsers.add_parser("config", help="Configure Bartleby settings")
 
     project_parser = subparsers.add_parser("project", help="Manage projects")
     project_sub = project_parser.add_subparsers(dest="project_command")
@@ -133,7 +133,7 @@ def main():
         sys.exit(1)
 
     dispatchers = {
-        "ready": lambda: _ready(),
+        "config": lambda: _config(),
         "project": lambda: _project(args, project_parser),
         "scribe": lambda: _scribe(args),
         "session": lambda: _session(args, session_parser),
@@ -144,12 +144,12 @@ def main():
     dispatchers[args.command]()
 
 
-def _ready():
-    from bartleby.commands.ready import main as ready_main
+def _config():
+    from bartleby.commands.config import main as config_main
     from bartleby.lib import console
 
     console.splash()
-    ready_main()
+    config_main()
 
 
 def _scribe(args):

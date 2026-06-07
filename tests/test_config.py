@@ -1,4 +1,4 @@
-"""Tests for the `bartleby ready` interactive wizard."""
+"""Tests for the `bartleby config` interactive wizard."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import yaml
 import pytest
 
 import bartleby.config
-import bartleby.commands.ready as ready
+import bartleby.commands.config as config
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def isolated_config(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
     monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(ready, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(config, "CONFIG_PATH", config_path)
     yield config_path
 
 
@@ -38,7 +38,7 @@ def _read_yaml(path):
         return yaml.safe_load(f) or {}
 
 
-def test_ready_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypatch):
+def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypatch):
     _scripted_inputs(monkeypatch, [
         "y",                   # Confirm: configure LLM?
         "anthropic",           # Provider
@@ -53,7 +53,7 @@ def test_ready_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypat
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg["provider"] == "anthropic"
     assert cfg["model"] == "claude-haiku-4-5"
@@ -74,7 +74,7 @@ def test_ready_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypat
     assert "pages_to_summarize" not in cfg
 
 
-def test_ready_with_summary_depth_none_omits_summarize_settings(
+def test_config_with_summary_depth_none_omits_summarize_settings(
     isolated_config, monkeypatch
 ):
     _scripted_inputs(monkeypatch, [
@@ -90,7 +90,7 @@ def test_ready_with_summary_depth_none_omits_summarize_settings(
         "n",                   # Configure vision?
         "60000",               # Max read tokens
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg["summary_depth"] == "none"
     assert "temperature" not in cfg
@@ -98,7 +98,7 @@ def test_ready_with_summary_depth_none_omits_summarize_settings(
     assert cfg["max_read_tokens"] == 60000
 
 
-def test_ready_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypatch):
+def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypatch):
     _scripted_inputs(monkeypatch, [
         "y",
         "ollama",
@@ -113,7 +113,7 @@ def test_ready_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypa
         "n",                   # Configure vision?
         "50000",
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg["provider"] == "ollama"
     assert cfg["model"] == "gpt-oss:20b"
@@ -122,7 +122,7 @@ def test_ready_with_ollama_writes_base_url_not_api_key(isolated_config, monkeypa
     assert "openai_api_key" not in cfg
 
 
-def test_ready_without_llm_writes_summary_depth_none(isolated_config, monkeypatch):
+def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypatch):
     _scripted_inputs(monkeypatch, [
         "n",                   # No LLM
         "pdfplumber",          # PDF converter
@@ -131,7 +131,7 @@ def test_ready_without_llm_writes_summary_depth_none(isolated_config, monkeypatc
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg.get("provider") is None
     assert cfg["summary_depth"] == "none"
@@ -140,7 +140,7 @@ def test_ready_without_llm_writes_summary_depth_none(isolated_config, monkeypatc
     assert cfg["html_converter"] == "docling"
 
 
-def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypatch):
+def test_config_strips_legacy_keys_from_existing_config(isolated_config, monkeypatch):
     # Pre-populate config with v0 keys.
     with isolated_config.open("w") as f:
         yaml.safe_dump({
@@ -157,7 +157,7 @@ def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypa
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert "max_workers" not in cfg
     assert "pdf_pages_to_summarize" not in cfg
@@ -165,7 +165,7 @@ def test_ready_strips_legacy_keys_from_existing_config(isolated_config, monkeypa
     assert cfg["active_project"] == "alpha"
 
 
-def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
+def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
     _scripted_inputs(monkeypatch, [
         "y",                   # Configure LLM?
         "openai",
@@ -185,7 +185,7 @@ def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "30",                  # ocr_min_confidence
         "50000",               # max_read_tokens
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg["vision_provider"] == "openai"
     assert cfg["vision_model"] == "gpt-5-mini"
@@ -196,7 +196,7 @@ def test_ready_with_vision_writes_vision_keys(isolated_config, monkeypatch):
     assert cfg["openai_api_key"] == "sk-openai"
 
 
-def test_ready_vision_with_different_provider_prompts_for_fresh_key(
+def test_config_vision_with_different_provider_prompts_for_fresh_key(
     isolated_config, monkeypatch
 ):
     _scripted_inputs(monkeypatch, [
@@ -219,7 +219,7 @@ def test_ready_vision_with_different_provider_prompts_for_fresh_key(
         "30",
         "50000",
     ])
-    ready.main()
+    config.main()
     cfg = _read_yaml(isolated_config)
     assert cfg["vision_provider"] == "anthropic"
     assert cfg["openai_api_key"] == "sk-openai"
