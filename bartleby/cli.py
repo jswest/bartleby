@@ -22,7 +22,26 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    subparsers.add_parser("ready", help="Configure Bartleby settings")
+    subparsers.add_parser("config", help="Configure Bartleby settings")
+
+    ready_parser = subparsers.add_parser(
+        "ready",
+        help="Install or refresh the Bartleby skill into your agent harness",
+    )
+    ready_parser.add_argument(
+        "--check", action="store_true",
+        help="Report whether the installed skill is up to date and exit "
+             "non-zero if it's missing or stale; write nothing.",
+    )
+    ready_parser.add_argument(
+        "--force", action="store_true",
+        help="Reinstall even if the installed skill is already up to date.",
+    )
+    ready_parser.add_argument(
+        "--dest", type=str, default=None,
+        help="Skill directory to (re)create "
+             "(default: ~/.claude/skills/bartleby).",
+    )
 
     project_parser = subparsers.add_parser("project", help="Manage projects")
     project_sub = project_parser.add_subparsers(dest="project_command")
@@ -133,7 +152,8 @@ def main():
         sys.exit(1)
 
     dispatchers = {
-        "ready": lambda: _ready(),
+        "config": lambda: _config(),
+        "ready": lambda: _ready(args),
         "project": lambda: _project(args, project_parser),
         "scribe": lambda: _scribe(args),
         "session": lambda: _session(args, session_parser),
@@ -144,12 +164,21 @@ def main():
     dispatchers[args.command]()
 
 
-def _ready():
-    from bartleby.commands.ready import main as ready_main
+def _config():
+    from bartleby.commands.config import main as config_main
     from bartleby.lib import console
 
     console.splash()
-    ready_main()
+    config_main()
+
+
+def _ready(args):
+    from pathlib import Path
+
+    from bartleby.commands.ready import main as ready_main
+
+    dest = Path(args.dest).expanduser() if args.dest else None
+    ready_main(dest=dest, check=args.check, force=args.force)
 
 
 def _scribe(args):
