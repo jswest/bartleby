@@ -48,7 +48,9 @@ export async function load({ url }) {
       availableTags,
       documents,
       total: result.total,
-      excludedNullDated: result.excluded_null_dated,
+      // excluded_null_dated now rides inside the nested `filters` echo, present
+      // only when a scope filter (tag/date bound) is active; 0 otherwise.
+      excludedNullDated: result.filters?.excluded_null_dated ?? 0,
       error: null
     };
   } catch (e) {
