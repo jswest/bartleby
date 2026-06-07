@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """list_documents — enumerate documents in the corpus.
 
-Default output is *brief*: id, file_name, title, description, authored_date,
-created_at, has_summary, image_count. Pass ``--verbose`` for the full row
-(adds page_count, token_count, chunk_count).
+Three output tiers. The default row is id, file_name, title, description,
+authored_date, created_at, has_summary, image_count. ``--verbose`` adds the
+full row (page_count, token_count, chunk_count). ``--brief`` drops below the
+default to just id, file_name, title — the skinniest useful projection for
+triage. ``--verbose`` and ``--brief`` are mutually exclusive.
 
 Output:
     {
@@ -42,10 +44,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--project", type=str, default=None)
     p.add_argument("--limit", type=int, default=200)
     p.add_argument("--offset", type=int, default=0)
-    p.add_argument(
+    tier = p.add_mutually_exclusive_group()
+    tier.add_argument(
         "--verbose",
         action="store_true",
         help="Include page_count, token_count, chunk_count.",
+    )
+    tier.add_argument(
+        "--brief",
+        action="store_true",
+        help="Skinniest tier below the default: id, file_name, title only.",
     )
     p.add_argument(
         "--tag",
@@ -189,6 +197,9 @@ def work(*, conn, args, session_id) -> dict:
         doc_id, file_name, page_count, token_count, created_at,
         title, description, authored_date, has_summary, chunk_count, image_count,
     ) in rows:
+        if args.brief:
+            documents.append({"id": doc_id, "file_name": file_name, "title": title})
+            continue
         doc = {
             "id": doc_id,
             "file_name": file_name,

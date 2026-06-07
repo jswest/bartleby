@@ -102,6 +102,39 @@ def test_search_default_context_omits_keys(seeded_project, capsys):
         assert "context_after" not in r
 
 
+BRIEF_SEARCH_KEYS = {
+    "chunk_id", "source_kind", "source_name", "page_number",
+    "rank", "normalized_score", "text",
+}
+
+
+def test_search_brief_projection(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "pm25",
+        "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"]
+    for hit in out["results"]:
+        assert set(hit) == BRIEF_SEARCH_KEYS
+    assert out["modes"] == ["full-text"]  # envelope untouched
+
+
+def test_search_brief_ignores_add_context(seeded_project, capsys):
+    """--brief drops context even when --add-context is passed."""
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "equity",
+        "--add-context", "1",
+        "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"]
+    for hit in out["results"]:
+        assert set(hit) == BRIEF_SEARCH_KEYS
+
+
 def test_search_context_clamps_at_source_boundary(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],

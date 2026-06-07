@@ -35,6 +35,24 @@ def test_list_documents_happy_path(seeded_project, capsys):
     assert by_name["beta.txt"]["authored_date"] is None
 
 
+def test_list_documents_brief_projects_three_fields(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"], "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["documents"]
+    for d in out["documents"]:
+        assert set(d) == {"id", "file_name", "title"}
+    assert out["total"] == 2  # envelope unchanged
+
+
+def test_list_documents_brief_and_verbose_are_mutually_exclusive(seeded_project, capsys):
+    code, _ = _run(capsys, [
+        "--project", seeded_project["project"], "--brief", "--verbose",
+    ])
+    assert code == 2  # argparse mutually-exclusive-group error
+
+
 def test_list_documents_verbose_includes_chunk_count(seeded_project, capsys):
     list_documents.main([
         "--project", seeded_project["project"], "--verbose",

@@ -27,6 +27,10 @@ Output:
       "hint": str|null         # set when more pages remain
     }
 
+With ``--brief`` each finding is trimmed to ``finding_id``, ``title``, and
+``citation_count`` — dropping ``description``, ``session_name``,
+``model``/``harness``, and ``created_at``. The envelope is unchanged.
+
 Memory-off sessions get a ``{"code": "MEMORY_OFF"}`` error envelope instead —
 findings are the agent's memory and are inaccessible when memory is off.
 """
@@ -44,6 +48,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--project", type=str, default=None)
     p.add_argument("--limit", type=int, default=200)
     p.add_argument("--offset", type=int, default=0)
+    p.add_argument(
+        "--brief",
+        action="store_true",
+        help="Skinniest tier: finding_id, title, citation_count only. Drops "
+             "description, session_name, model/harness, created_at.",
+    )
     return p.parse_args(argv)
 
 
@@ -64,19 +74,29 @@ def work(*, conn, args, session_id) -> dict:
         (args.limit, args.offset),
     )
 
-    findings = [
-        {
-            "finding_id": finding_id,
-            "title": title,
-            "description": description,
-            "session_name": session_name,
-            "model": model,
-            "harness": harness,
-            "created_at": created_at,
-            "citation_count": citation_count,
-        }
-        for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
-    ]
+    if args.brief:
+        findings = [
+            {
+                "finding_id": finding_id,
+                "title": title,
+                "citation_count": citation_count,
+            }
+            for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
+        ]
+    else:
+        findings = [
+            {
+                "finding_id": finding_id,
+                "title": title,
+                "description": description,
+                "session_name": session_name,
+                "model": model,
+                "harness": harness,
+                "created_at": created_at,
+                "citation_count": citation_count,
+            }
+            for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
+        ]
 
     next_offset = args.offset + len(findings)
     has_more = next_offset < total
