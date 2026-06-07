@@ -141,10 +141,20 @@ p.meta,
   color: var(--color-off);
 }
 
+/* The identifier line directly under an entity title: a source file name, or a
+   "#42" finding id. One treatment across search cards, the documents list, and
+   the findings list so the three surfaces read alike — title, then this locator
+   line, then the muted .meta facts, then the description. */
+.ident {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  color: var(--color-off);
+  margin-top: var(--space-3xs);
+}
+
 /* The finding_id, surfaced so users can match what the agent says in chat
-   ("finding 42") to a row or page here. The display font + a weight bump (the
-   parent .meta is 200) reads it as an identifier without breaking out of the
-   muted .meta line. */
+   ("finding 42") to a row or page here. The display font reads it as an
+   identifier; it sits in the .ident line (documents put their file name there). */
 .finding-id {
   font-family: var(--font-display);
   font-weight: 400;
@@ -215,6 +225,15 @@ p.meta,
 .surface--finding {
   background: var(--color-off-light);
   border-color: var(--color-off);
+}
+/* On the pale-mint finding ground, the default sage .meta/.ident (--color-off)
+   and the thin 200 weight fall below a comfortable contrast. Darken to the
+   readable link green and restore a normal weight so the identifier line and
+   meta facts stay legible against the tint. */
+.surface--finding .meta,
+.surface--finding .ident {
+  color: var(--color-link);
+  font-weight: 400;
 }
 .surface--interactive {
   transition: border-color 0.12s, box-shadow 0.12s;
@@ -447,6 +466,30 @@ input[type="number"] {
 .markdown-body img {
   max-width: 100%;
   height: auto;
+}
+
+/* A markdown snippet inside a result card — the same renderer as the full
+   report body, but tightened: smaller type, less inter-block space, and
+   headings demoted so a stray "# Heading" in a chunk doesn't tower over the
+   card. Defined after the base rules so the equal-specificity overrides win on
+   declaration order. */
+.markdown-body--compact {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.markdown-body--compact > * + *,
+.markdown-body--compact * + p {
+  margin-top: var(--space-sm);
+}
+.markdown-body--compact :is(h1, h2, h3, h4, h5, h6) {
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin-top: var(--space-sm);
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.markdown-body--compact :first-child {
+  margin-top: 0;
 }
 
 /* =========================================================================

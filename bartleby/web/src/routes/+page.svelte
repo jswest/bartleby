@@ -48,27 +48,41 @@
   {:else if corpus}
     <div class="overview">
       <div class="stat-strip">
-        <span><strong>{fmt(corpus.chunk_count)}</strong> chunks</span>
-        <span><strong>{fmt(corpus.token_count)}</strong> tokens</span>
-        <span class="dates">
-          {#if corpus.authored_date.min}
-            {corpus.authored_date.min} – {corpus.authored_date.max}
-          {:else}
-            no dated documents
-          {/if}
-          · <span class="muted">{fmt(corpus.authored_date.undated_document_count)} undated</span>
-        </span>
-        <span>
-          <strong>{fmt(corpus.summary_coverage.summarized)}</strong> summarized
-          {#if corpus.summary_coverage.unsummarized}
-            · <span class="muted">{fmt(corpus.summary_coverage.unsummarized)} without</span>
-          {/if}
-        </span>
+        <div class="stat">
+          <span class="stat-value">{fmt(corpus.chunk_count)}</span>
+          <span class="stat-label">chunks</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">{fmt(corpus.token_count)}</span>
+          <span class="stat-label">tokens</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value stat-value--text">
+            {#if corpus.authored_date.min}
+              {corpus.authored_date.min} – {corpus.authored_date.max}
+            {:else}
+              no dated documents
+            {/if}
+          </span>
+          <span class="stat-label">
+            {#if corpus.authored_date.undated_document_count}
+              {fmt(corpus.authored_date.undated_document_count)} undated
+            {:else}
+              all dated
+            {/if}
+          </span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">{fmt(corpus.summary_coverage.summarized)}</span>
+          <span class="stat-label">
+            summarized{#if corpus.summary_coverage.unsummarized} · {fmt(corpus.summary_coverage.unsummarized)} without{/if}
+          </span>
+        </div>
       </div>
 
       <div class="panels">
         {#if corpus.documents_by_year.length}
-          <section class="panel">
+          <section class="panel surface">
             <h3>Documents by year</h3>
             <ul class="histogram">
               {#each corpus.documents_by_year as y}
@@ -85,7 +99,7 @@
         {/if}
 
         {#if corpus.content_mix.length}
-          <section class="panel">
+          <section class="panel surface">
             <h3>Content mix</h3>
             <ul class="rows">
               {#each corpus.content_mix as c}
@@ -99,7 +113,7 @@
         {/if}
 
         {#if corpus.tags.length}
-          <section class="panel">
+          <section class="panel surface">
             <h3>Tags</h3>
             <div class="tags">
               {#each corpus.tags as t}
@@ -116,7 +130,7 @@
         {/if}
 
         {#if corpus.largest_documents.length}
-          <section class="panel">
+          <section class="panel surface">
             <h3>Largest documents</h3>
             <ul class="rows">
               {#each corpus.largest_documents as d}
@@ -184,27 +198,60 @@
   }
 
   .overview {
-    margin-top: var(--space-3xl);
+    margin-top: var(--space-4xl);
     font-family: var(--font-sans);
   }
+  /* The data panels inherit the base serif `li`; force sans across the whole
+     dashboard so the rows/histograms read as data, not prose. */
+  .overview li {
+    font-family: var(--font-sans);
+  }
+
+  /* The status strip: one value-over-label unit per stat, framed by a rule top
+     and bottom so it reads as its own band between the cards and the panels. */
   .stat-strip {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-sm) var(--space-xl);
-    padding-bottom: var(--space-lg);
+    gap: var(--space-lg) var(--space-3xl);
+    padding: var(--space-lg) 0 var(--space-xl);
+    border-top: 1px solid var(--color-rule);
     border-bottom: 1px solid var(--color-rule);
-    font-size: var(--text-sm);
-    color: var(--color-text-soft);
   }
-  .stat-strip strong {
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3xs);
+  }
+  .stat-value {
     font-family: var(--font-display);
+    font-size: var(--text-xl);
+    line-height: 1;
+    color: var(--color-text);
+  }
+  /* The authored-date range is text, not a metric — render it in readable sans
+     instead of the pixel display face, which mangles a long date string. */
+  .stat-value--text {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    font-weight: 600;
+  }
+  .stat-label {
+    font-size: var(--text-2xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+    color: var(--color-off);
   }
 
+  /* Four panels in a 2×2 grid — auto-fit stranded the fourth in a lonely third
+     column at this width. Each panel is a .surface (set in the markup). */
   .panels {
-    margin-top: var(--space-xl);
+    margin-top: var(--space-2xl);
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-    gap: var(--space-xl) var(--space-2xl);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-xl);
+    /* Each panel is only as tall as its content — without this the short
+       panels stretch to match a tall neighbour, leaving big empty surfaces. */
+    align-items: start;
   }
   .panel h3 {
     font-size: var(--text-2xs);
