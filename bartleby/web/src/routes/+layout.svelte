@@ -2,12 +2,23 @@
   import "../app.css";
   import { page } from "$app/stores";
   import { marked } from "marked";
+  import DOMPurify from "isomorphic-dompurify";
   export let data;
 
+  // Every `{@html marked.parse(...)}` site (document summaries, finding bodies)
+  // flows through this singleton, so sanitize here once. Summaries are
+  // model-generated and finding bodies are agent-authored — both untrusted —
+  // and `marked` passes raw HTML through, so an embedded <script> would run.
+  // DOMPurify's defaults strip scripts/handlers/js: URLs while keeping the
+  // cite-chip <button> (data-chunk-id et al). Sanitize first, then add the
+  // link attrs to the clean output so target/rel don't depend on the sanitizer.
   marked.use({
     hooks: {
       postprocess: (html) =>
-        html.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '),
+        DOMPurify.sanitize(html).replace(
+          /<a /g,
+          '<a target="_blank" rel="noopener noreferrer" ',
+        ),
     },
   });
 
