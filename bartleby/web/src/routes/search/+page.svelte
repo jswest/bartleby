@@ -95,9 +95,9 @@
     padding: 0;
     margin: 0;
   }
-  /* Inline token-dark accent inside the result summary. */
+  /* Inline amber-text accent inside the result summary. */
   .note-inline {
-    color: var(--color-token-dark);
+    color: var(--color-token-text);
   }
   /* The secondary line inside the busy banner (slot content is styled here,
      by the caller's scope, not inside StatusBanner). */
