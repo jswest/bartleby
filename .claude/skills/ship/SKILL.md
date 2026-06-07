@@ -9,13 +9,30 @@ description: >-
 
 # ship — issue → tested PR
 
-Argument is one GitHub issue number (`#118`, `118`). Run the steps in order.
-Two hard stops are marked **PAUSE**: do not pass them without the user's OK.
+Argument is one GitHub issue number (`#118`, `118`), optionally followed by the
+`with-playwright` token (e.g. `/ship #134 with-playwright`) — see below. Run the
+steps in order. Two hard stops are marked **PAUSE**: do not pass them without the
+user's OK.
 
 Repo specifics: tests are `uv run pytest`; the main checkout is
 `/Users/johnwest/Code/spot/bartleby`; worktrees are **siblings** of it. A
 PreToolUse hook (`guard-main-write.sh`) blocks commits/pushes on `main` — treat
 a block as a signal you're on the wrong branch, not an error to route around.
+
+**Optional `with-playwright`.** The argument may carry a `with-playwright` token
+after the issue number (only that exact token). It turns on a visual-verification
+loop, and it fires **only if this issue's diff touches `bartleby/web/`** — for a
+backend-only change, ignore it and ship normally. When it's active:
+- Drive a real browser with the **Playwright MCP** tools. Launch the dev server
+  with `npm run dev` in the worktree (vite on `127.0.0.1:5173`) and stop it when
+  you're done; or invoke the built-in `run` skill to launch the app.
+- Screenshot each affected route as a baseline before you change it, then
+  re-screenshot and compare after each logical unit (step 8) and once more before
+  the PR (step 11). Read the screenshots and iterate on what looks wrong.
+- If the Playwright MCP isn't connected, say so and ask how to proceed — don't
+  silently skip the loop.
+
+Don't edit the built-in `verify`/`run` skills; this flag lives entirely here.
 
 ## 1. Preconditions
 - `git -C <main-checkout> status --porcelain` must be empty. If main has
@@ -53,7 +70,9 @@ trade-offs) and **wait for approval** before writing code. Trivial one-liners ma
 skip this — say so and proceed.
 
 ## 8. Implement + per-commit gates
-Work in logical units. For **every** code-producing commit, in this exact order:
+Work in logical units. If `with-playwright` is active, bracket each web-touching
+unit with before/after screenshots (see the flag note above). For **every**
+code-producing commit, in this exact order:
 1. `uv run pytest` — must pass.
 2. Run the `simplify-refactor` agent against the just-touched files.
 3. Apply the suggestions you agree with; push back on the rest.
