@@ -47,6 +47,26 @@ Now get into the details:
 - Reduce nesting depth. Prefer early returns and guard clauses.
 - Use language-appropriate idioms rather than generic patterns.
 
+### Instruction-File Bloat
+When the touched files include `CLAUDE.md`, apply the same "every line must earn
+its place" lens to its prose — instruction files accrete a line per incident and
+nobody pushes back. Flag and propose tightening for:
+- Redundancy or duplication within the file (two lines saying the same thing).
+- Rules already covered elsewhere (`ARCHITECTURE.md`, the decision log, the global
+  `CLAUDE.md`).
+- Verbose phrasing that could be said in fewer words.
+- Stale entries describing code or conventions that no longer exist.
+
+**Load-bearing guardrail:** unlike code, deleting a line here can silently remove
+an instruction the agent relies on. Tighten wording and dedupe; **never drop an
+actual rule or constraint just because it could be shortened.** Preserve meaning — when
+in doubt, flag the line as a question rather than cutting it.
+
+The same applies to other agent-facing instruction docs (`SKILL.md`,
+`CONTRIBUTING.md`), but `CLAUDE.md` is the primary target — don't turn this into
+general prose editing. And like all your findings, these stay advisory: surfaced
+for the human to accept or reject, never auto-applied.
+
 ## Anti-Patterns to Eliminate
 
 Actively hunt for and remove:
