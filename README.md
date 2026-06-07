@@ -81,33 +81,88 @@ uv tool install --editable .
 
 ### Pinning to a release
 
-The examples above install whatever `HEAD` you have checked out — fine for following along, but a moving target if you'd rather upgrade on your own schedule. Releases are git tags of the form `v0.<schema>.<patch>`, so you can pin to one directly without even cloning:
+The examples above install whatever `HEAD` you have checked out — fine for following along, but a moving target if you'd rather upgrade on your own schedule. Releases are git tags of the form `v0.<schema>.<patch>`, so you can pin to one directly without even cloning.
+
+**Read the number first.** The **minor** *is* the database schema version. A minor bump (`v0.7.x` → `v0.8.0`) means the schema changed and existing corpora must be re-ingested; a patch bump (`v0.7.0` → `v0.7.1`) is always safe to take in place. So you can compare two tags and know instantly whether moving between them will cost you a re-ingest. (Maintainers: see [`scripts/release.py`](./scripts/release.py) for how tags are cut.)
+
+To see what's available, browse the [releases page](https://github.com/jswest/bartleby/releases) or list the tags without cloning:
+
+```
+git ls-remote --tags https://github.com/jswest/bartleby.git 'v*'
+```
+
+Then pin to the one you want:
 
 ```
 uv tool install 'git+https://github.com/jswest/bartleby.git@v0.7.0'
 ```
 
-Extras and the `--with`/`--force` flags work the same as above. Versions are read straight from the tag, so `bartleby --version` always tells you exactly what you're running.
+Extras and the `--with`/`--force` flags work the same as above. Versions are read straight from the tag, so `bartleby --version` always tells you exactly what you're running. (To pin with extras, see the `#egg=` form under [Upgrading from a release](#upgrading-from-a-release) below.)
 
-**Reading the number:** the **minor** *is* the database schema version. A minor bump (`v0.7.x` → `v0.8.0`) means the schema changed and existing corpora must be re-ingested; a patch bump (`v0.7.0` → `v0.7.1`) is always safe to take in place. So you can scan two tags and know instantly whether upgrading will cost you a re-ingest. (Maintainers: see [`scripts/release.py`](./scripts/release.py) for how tags are cut.)
+### Upgrading from a release
+
+When a newer release lands, moving to it is two pieces — the CLI and the skill — plus a quick check on the version number. (This is the pinned-release counterpart to [After updating Bartleby](#after-updating-bartleby), which covers riding `main`.)
+
+**First, find the latest tag** — don't reuse a number from memory. Browse the [releases page](https://github.com/jswest/bartleby/releases), or:
+
+```
+git ls-remote --tags https://github.com/jswest/bartleby.git 'v*'
+```
+
+Compare its minor (middle) number to what `bartleby --version` currently reports: same minor → a safe in-place upgrade; a higher minor → the schema moved and you'll re-ingest (see below). Use the new tag wherever `<latest>` appears below.
+
+**1. Reinstall the CLI at the new tag.** Repeat whatever extras you first used and add `--force` to replace the installed tool. The `#egg=bartleby[...]` fragment is how extras attach to a `git+https` URL — drop it and you get a working CLI with **no** Docling/sec2md, which silently breaks HTML/EDGAR ingestion (or falls back to weaker extraction). For SEC work, keep both:
+
+```
+uv tool install 'git+https://github.com/jswest/bartleby.git@<latest>#egg=bartleby[docling,sec2md]' --force
+```
+
+**2. Re-copy the skill at the matching tag.** The skill is a folder of files, so it can't ride the `git+https` install — you need the repo checked out at `<latest>`:
+
+```
+git clone https://github.com/jswest/bartleby.git   # first time only
+cd bartleby && git fetch && git checkout <latest>
+```
+
+Then re-copy it, following the same **`rm -rf` first, then `cp -r`** rule from [Install the skill](#install-the-skill) (skip the `rm` and you nest a stale `SKILL.md`):
+
+```
+rm -rf ~/.claude/skills/bartleby     # do NOT skip this line
+cp -r skill ~/.claude/skills/bartleby
+ls ~/.claude/skills/bartleby/SKILL.md   # confirm it landed directly under bartleby/
+```
+
+Restart your harness afterward so it reloads the skill.
+
+**If the new tag crossed a schema boundary** (its minor number is higher), existing projects need to be brought up to date before they'll open — see [After updating Bartleby](#after-updating-bartleby) for `bartleby project upgrade <name>` and the re-ingest case.
 
 ### Install the skill
 
-The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory — idempotently, so re-running doesn't nest it a level deeper. For Claude Code:
+The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory — **always delete the old copy first, then copy.** For Claude Code:
 
 ```
 mkdir -p ~/.claude/skills
-rm -rf ~/.claude/skills/bartleby
+rm -rf ~/.claude/skills/bartleby     # do NOT skip this line
 cp -r skill ~/.claude/skills/bartleby
 ```
 
-`SKILL.md` must land *directly* under `~/.claude/skills/bartleby/`, not inside a subfolder:
+Don't skip the `rm -rf`. If `~/.claude/skills/bartleby/` already exists, `cp -r skill ~/.claude/skills/bartleby` copies the folder *inside* it — you end up with `~/.claude/skills/bartleby/skill/SKILL.md`, nested one level too deep. Your harness keeps reading the **old** top-level `SKILL.md` and never sees the new one, which shows up as stale or surprising agent behavior after an update.
+
+So `SKILL.md` must land *directly* under `~/.claude/skills/bartleby/`, not inside a subfolder:
 
 ```
 ~/.claude/skills/bartleby/
 ├── README.md
 └── SKILL.md
 ```
+
+Confirm it landed in the right place:
+
+```
+ls ~/.claude/skills/bartleby/SKILL.md
+```
+
+If that path exists, you're set. If instead you see `~/.claude/skills/bartleby/skill/SKILL.md`, the nesting bug bit you — `rm -rf ~/.claude/skills/bartleby` and copy again.
 
 Restart your harness after copying — skills load at startup. See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
 
@@ -124,7 +179,7 @@ WSJ users: once wsjpt is configured, `bartleby ready` loads the provider with no
 
 ### After updating Bartleby
 
-This project moves fast. If you'd rather not ride `main`, [pin to a release tag](#pinning-to-a-release) and upgrade deliberately. Otherwise, after every `git pull`, refresh both pieces from the new code:
+This project moves fast. If you'd rather not ride `main`, [pin to a release tag](#pinning-to-a-release) and upgrade deliberately on your own schedule with [Upgrading from a release](#upgrading-from-a-release). Otherwise, after every `git pull`, refresh both pieces from the new code:
 
 ```
 # 1. Reinstall the CLI (repeat whatever extras you first used)
