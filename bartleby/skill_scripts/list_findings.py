@@ -42,7 +42,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
-from bartleby.skill_scripts._common import memory_enabled
+from bartleby.skill_scripts._common import memory_enabled, pagination_hint
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -108,13 +108,7 @@ def work(*, conn, args, session_id) -> dict:
             for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
         ]
 
-    next_offset = args.offset + len(findings)
-    has_more = next_offset < total
-    hint = (
-        f"Showing {args.offset + 1}-{next_offset} of {total}. "
-        f"Pass --offset {next_offset} to continue."
-        if has_more and findings else None
-    )
+    hint = pagination_hint(args.offset, len(findings), total)
 
     return {
         "findings": findings,

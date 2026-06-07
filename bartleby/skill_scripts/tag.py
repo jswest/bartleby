@@ -56,7 +56,7 @@ from bartleby.skill_scripts._tags import (
     classify_full_vocabulary,
     classify_single_tag,
     fetch_vocabulary,
-    get_tag_by_name,
+    require_tag_by_name,
     summary_for,
     unassign,
 )
@@ -148,9 +148,7 @@ def work(*, conn, args, session_id) -> dict:
 
     single_tag = None
     if args.tag is not None:
-        single_tag = get_tag_by_name(conn, args.tag)
-        if single_tag is None:
-            raise SkillError("TAG_NOT_FOUND", f"No tag named {args.tag!r}.")
+        single_tag = require_tag_by_name(conn, args.tag)
 
     vocabulary = fetch_vocabulary(conn)
     if not vocabulary:

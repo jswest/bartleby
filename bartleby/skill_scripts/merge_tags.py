@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._tags import get_tag_by_name
+from bartleby.skill_scripts._tags import require_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -30,12 +30,8 @@ def work(*, conn, args, session_id) -> dict:
             "SELF_MERGE", "--from and --into must be different tags."
         )
 
-    src = get_tag_by_name(conn, args.from_name)
-    if src is None:
-        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.from_name!r}.")
-    dst = get_tag_by_name(conn, args.into_name)
-    if dst is None:
-        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.into_name!r}.")
+    src = require_tag_by_name(conn, args.from_name)
+    dst = require_tag_by_name(conn, args.into_name)
 
     cur = conn.cursor()
     moved_before = cur.execute(
