@@ -27,9 +27,10 @@ Output:
       }, ...]
     }
 
-``FINDING_NOT_FOUND`` when the id doesn't exist. Memory-off sessions get a
-``{"code": "MEMORY_OFF"}`` error envelope — findings are the agent's memory
-and are inaccessible when memory is off.
+``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
+can still read findings *this* session authored; reading a finding written by
+another session raises ``{"code": "MEMORY_OFF"}`` (other sessions' findings
+are walled off to avoid contaminating an evaluation run).
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ import argparse
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     finding_chunk_and_citation_ids,
-    require_memory_enabled,
+    memory_enabled,
     resolve_citations,
     session_provenance,
 )
@@ -53,8 +54,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def work(*, conn, args, session_id) -> dict:
-    require_memory_enabled(conn, session_id)
-
     cur = conn.cursor()
     row = cur.execute(
         "SELECT session_id, title, description, body, created_at "
@@ -66,6 +65,18 @@ def work(*, conn, args, session_id) -> dict:
             "FINDING_NOT_FOUND", f"No finding with id {args.finding_id}.",
         )
     owning_session_id, title, description, body, created_at = row
+
+    # Memory-off sessions can read back their *own* findings (so a run can
+    # verify what it just wrote) but not another session's — that would
+    # contaminate an evaluation with prior conclusions.
+    if not memory_enabled(conn, session_id) and owning_session_id != session_id:
+        raise SkillError(
+            "MEMORY_OFF",
+            f"This session has memory disabled and finding {args.finding_id} "
+            "was authored by another session, so it is not accessible. Start a "
+            "memory-enabled session (omit --no-memory) to read other sessions' "
+            "findings.",
+        )
 
     chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 

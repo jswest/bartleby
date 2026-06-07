@@ -51,29 +51,25 @@ def reject_malformed_citations(body: str) -> None:
     )
 
 
-def require_memory_enabled(conn, session_id: int) -> None:
-    """Raise ``MEMORY_OFF`` if the current session has memory disabled.
+def memory_enabled(conn, session_id: int) -> bool:
+    """Whether ``session_id`` has memory enabled.
 
-    Findings are the agent's persistent memory. ``search`` silently drops
-    findings from a mixed result list when memory is off (the load-bearing
-    invariant), but the finding-only read commands (``list_findings`` /
-    ``read_finding``) instead fail *explicitly*: a direct "read my findings"
-    that returned nothing would be more confusing than an honest error. This
-    deliberately reveals that findings exist — accepted as the right tradeoff
-    for direct-intent commands.
+    Findings are the agent's persistent memory. When memory is off, the read
+    paths narrow what's visible so an evaluation run isn't contaminated by
+    other sessions' conclusions:
+
+    - ``search`` silently drops *all* findings from a mixed result list (the
+      load-bearing invariant — ranked retrieval is the contamination vector).
+    - the direct-read commands (``list_findings`` / ``read_finding``) restrict
+      to the session's *own* findings: a run can always read back what it just
+      wrote, but never another session's work.
+
+    The runner resolves/creates the active session before work() runs, so the
+    row is guaranteed to exist (same assumption as search.py).
     """
-    # The runner resolves/creates the active session before work() runs, so
-    # the row is guaranteed to exist (same assumption as search.py).
-    memory_enabled = conn.cursor().execute(
+    return bool(conn.cursor().execute(
         "SELECT memory_enabled FROM sessions WHERE session_id = ?", (session_id,)
-    ).fetchone()[0]
-    if not memory_enabled:
-        raise SkillError(
-            "MEMORY_OFF",
-            "This session has memory disabled, so findings are not accessible. "
-            "Start a memory-enabled session (omit --no-memory) to browse or "
-            "read findings.",
-        )
+    ).fetchone()[0])
 
 
 def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:

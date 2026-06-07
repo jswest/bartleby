@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
@@ -42,12 +40,6 @@ def _active_session_id(project):
     """The session the runner auto-resolves (created by seeded_project access)."""
     from bartleby.session import ensure_active_session
     return ensure_active_session(project)
-
-
-def _run(capsys, argv):
-    with pytest.raises(SystemExit) as exc:
-        list_findings.main(argv)
-    return exc.value.code, capsys.readouterr()
 
 
 def test_list_findings_empty(seeded_project, capsys):
@@ -141,11 +133,12 @@ def test_list_findings_pagination_hint(seeded_project, capsys):
     assert out["hint"] is None
 
 
-def test_list_findings_memory_off(seeded_project, capsys):
+def test_list_findings_memory_off_scopes_to_own_session(seeded_project, capsys):
+    """Memory-off lists only the active session's findings, hiding others'."""
     from bartleby.session import start_session
 
     project = seeded_project["project"]
-    # Seed a finding under a memory-on session first.
+    # A finding authored by some *other* session.
     conn = open_db(project)
     try:
         cur = conn.cursor()
@@ -158,10 +151,18 @@ def test_list_findings_memory_off(seeded_project, capsys):
     finally:
         conn.close()
 
-    # Now make the active session memory-off.
-    start_session(project, memory_enabled=False)
+    # Start a memory-off session and give it one finding of its own.
+    info = start_session(project, memory_enabled=False)
+    conn = open_db(project)
+    try:
+        _seed_finding(conn, session_id=info["session_id"],
+                      title="mine", description="y")
+    finally:
+        conn.close()
 
-    code, captured = _run(capsys, ["--project", project])
-    assert code == 1
-    out = json.loads(captured.out)
-    assert out["code"] == "MEMORY_OFF"
+    list_findings.main(["--project", project])
+    out = json.loads(capsys.readouterr().out)
+    # Only this session's finding is visible; the other session's is excluded,
+    # and total reflects the scoped set.
+    assert out["total"] == 1
+    assert [f["title"] for f in out["findings"]] == ["mine"]

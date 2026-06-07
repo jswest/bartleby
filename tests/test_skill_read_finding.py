@@ -117,7 +117,8 @@ def test_read_finding_not_found(seeded_project, capsys):
     assert out["code"] == "FINDING_NOT_FOUND"
 
 
-def test_read_finding_memory_off(seeded_project, capsys):
+def test_read_finding_memory_off_other_session(seeded_project, capsys):
+    """A memory-off session cannot read a finding authored by another session."""
     from bartleby.session import start_session
 
     project = seeded_project["project"]
@@ -141,3 +142,25 @@ def test_read_finding_memory_off(seeded_project, capsys):
     assert code == 1
     out = json.loads(captured.out)
     assert out["code"] == "MEMORY_OFF"
+
+
+def test_read_finding_memory_off_own_session(seeded_project, capsys):
+    """A memory-off session can still read back a finding it authored itself."""
+    from bartleby.session import start_session
+
+    project = seeded_project["project"]
+    info = start_session(project, memory_enabled=False)
+
+    conn = open_db(project)
+    try:
+        finding_id, _ = _seed_finding(
+            conn, session_id=info["session_id"], title="own", description="mine",
+        )
+    finally:
+        conn.close()
+
+    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["finding_id"] == finding_id
+    assert out["title"] == "own"
+    assert out["session_id"] == info["session_id"]
