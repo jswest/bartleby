@@ -31,8 +31,10 @@ With ``--brief`` each finding is trimmed to ``finding_id``, ``title``, and
 ``citation_count`` — dropping ``description``, ``session_name``,
 ``model``/``harness``, and ``created_at``. The envelope is unchanged.
 
-Memory-off sessions get a ``{"code": "MEMORY_OFF"}`` error envelope instead —
-findings are the agent's memory and are inaccessible when memory is off.
+In a memory-off session the listing is scoped to findings *this* session
+authored (other sessions' findings are walled off to avoid contaminating an
+evaluation run); ``total`` and pagination reflect that scoped set. A
+memory-on session lists every finding.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
-from bartleby.skill_scripts._common import require_memory_enabled
+from bartleby.skill_scripts._common import memory_enabled
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -58,10 +60,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def work(*, conn, args, session_id) -> dict:
-    require_memory_enabled(conn, session_id)
-
     cur = conn.cursor()
-    total = cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+
+    # Memory-off: own findings only (see module docstring). Memory-on: all.
+    if memory_enabled(conn, session_id):
+        scope_sql, scope_params = "", ()
+    else:
+        scope_sql, scope_params = "WHERE f.session_id = ?", (session_id,)
+
+    total = cur.execute(
+        f"SELECT COUNT(*) FROM findings f {scope_sql}", scope_params,
+    ).fetchone()[0]
 
     rows = cur.execute(
         "SELECT f.finding_id, f.title, f.description, s.name, s.model, s.harness, "
@@ -70,8 +79,9 @@ def work(*, conn, args, session_id) -> dict:
         "LEFT JOIN sessions s ON s.session_id = f.session_id "
         "LEFT JOIN (SELECT finding_id, COUNT(*) AS n FROM finding_citations "
         "           GROUP BY finding_id) fc ON fc.finding_id = f.finding_id "
+        f"{scope_sql} "
         "ORDER BY f.finding_id DESC LIMIT ? OFFSET ?",
-        (args.limit, args.offset),
+        (*scope_params, args.limit, args.offset),
     )
 
     if args.brief:

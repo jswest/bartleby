@@ -59,7 +59,8 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, chunk_locations, comma_int_list, positive_int, source_names,
+    apply_preview, chunk_locations, comma_int_list, memory_enabled,
+    positive_int, source_names,
 )
 from bartleby.skill_scripts._tags import intersect_tag_filter
 
@@ -363,13 +364,12 @@ def work(*, conn, args, session_id) -> dict:
         conn, args.in_documents, args.tags,
     )
 
-    memory_enabled = conn.cursor().execute(
-        "SELECT memory_enabled FROM sessions WHERE session_id = ?", (session_id,)
-    ).fetchone()[0]
     # Findings drop out when memory is off OR when --in-documents/--tag is set
     # (findings have no document anchor). memory_excluded reports only the
     # memory case — that's the signal documented in SKILL.md.
-    memory_excluded = "finding" in source_kinds and not memory_enabled
+    memory_excluded = (
+        "finding" in source_kinds and not memory_enabled(conn, session_id)
+    )
     drop_findings = memory_excluded or in_documents is not None
     if drop_findings:
         source_kinds = [k for k in source_kinds if k != "finding"]
