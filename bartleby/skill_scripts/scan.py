@@ -52,8 +52,34 @@ With ``--brief`` each match keeps only locators — ``document_id``,
 ``--preview`` has no effect). Pairs with the always-present ``total`` for pure
 "where does this phrase occur" enumeration. The envelope is unchanged.
 
-``--in-documents`` and ``--tag`` (repeatable, OR semantics) scope the match
-the same way they do in ``search``; combined they intersect.
+Count-by aggregate (``--count-by document``):
+    Replaces the per-chunk ``matches`` with a per-document hit histogram.
+    ``distinct_document_count`` is the headline ("14 documents matched"),
+    ``total_chunk_count`` is the old ``total`` ("across 17 chunks"); both are
+    the full unpaginated totals. ``--limit``/``--offset`` paginate the
+    ``documents`` list (by document, not chunk). Cannot be combined with
+    ``--preview`` or ``--brief`` (they only shape per-chunk matches).
+
+    {
+      "query": str, "match_mode": "phrase" | "terms",
+      "count_by": "document",
+      "offset": int, "limit": int,
+      "distinct_document_count": int,   # the headline
+      "total_chunk_count": int,         # the old `total`
+      "documents": [
+        {"document_id": int, "file_name": str, "chunk_count": int}, ...
+      ]                                  # ORDER BY chunk_count DESC, document_id
+    }
+
+Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
+semantics) scope the match the same way they do in ``search``; combined they
+intersect. ``--authored-after`` / ``--authored-before`` add inclusive
+``YYYY-MM-DD`` date bounds — because ``authored_date`` is summarizer-inferred
+and often NULL, a bound excludes undated documents by default (``--include-nulls``
+keeps them). Whenever any scope filter is active the response carries a
+``filters`` object echoing it — ``{tags, in_documents, authored_after,
+authored_before, include_nulls, excluded_null_dated}`` — so the counts are
+self-describing; it is absent on an unfiltered scan.
 """
 
 from __future__ import annotations
@@ -63,9 +89,9 @@ import re
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, comma_int_list, nonneg_int, positive_int,
+    add_date_filter_args, apply_preview, comma_int_list, nonneg_int, positive_int,
 )
-from bartleby.skill_scripts._tags import intersect_tag_filter
+from bartleby.skill_scripts._tags import resolve_scope
 
 
 DEFAULT_PREVIEW = 240
@@ -93,9 +119,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Restrict to documents carrying this tag. Repeat for OR semantics.",
     )
     p.add_argument(
+        "--count-by",
+        choices=["document"],
+        default=None,
+        dest="count_by",
+        help="Aggregate mode. Instead of per-chunk matches, return a "
+             "per-document hit histogram plus distinct_document_count and "
+             "total_chunk_count. Cannot be combined with --preview/--brief.",
+    )
+    p.add_argument(
         "--preview",
         type=positive_int,
-        default=DEFAULT_PREVIEW,
+        default=None,
         help=f"Truncate each match's text to the first N chars (default {DEFAULT_PREVIEW}).",
     )
     p.add_argument(
@@ -107,7 +142,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
     p.add_argument("--project", type=str, default=None)
-    return p.parse_args(argv)
+    add_date_filter_args(p)
+    args = p.parse_args(argv)
+    if args.count_by and (args.preview is not None or args.brief):
+        p.error(
+            "--count-by returns a per-document histogram, not per-chunk matches, "
+            "so it cannot be combined with --preview or --brief."
+        )
+    return args
 
 
 def _build_fts_query(query: str, match_mode: str) -> str:
@@ -131,35 +173,76 @@ def work(*, conn, args, session_id) -> dict:
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     match_mode = "terms" if args.match_terms else "phrase"
-    in_documents, tag_names = intersect_tag_filter(conn, args.in_documents, args.tags)
+    scope = resolve_scope(
+        conn,
+        in_documents=args.in_documents,
+        tags=args.tags,
+        authored_after=args.authored_after,
+        authored_before=args.authored_before,
+        include_nulls=args.include_nulls,
+    )
+    restrict = scope.document_ids  # None = whole corpus, [] = empty, else a set
 
-    def _response(matches: list, total: int) -> dict:
-        return {
-            "query": args.query,
-            "match_mode": match_mode,
-            "in_documents": in_documents,
-            "tags": tag_names,
-            "offset": args.offset,
-            "limit": args.limit,
-            "total": total,
-            "preview": args.preview,
-            "matches": matches,
-        }
+    def _envelope(extra: dict) -> dict:
+        return scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
 
     fts_query = _build_fts_query(args.query, match_mode)
-    # Empty token set, or a tag/in-documents scope that resolved to no
-    # documents: nothing can match.
-    if not fts_query or (in_documents is not None and not in_documents):
-        return _response([], 0)
+    # Nothing can match: an empty token set, or a scope that resolved to no
+    # documents (an empty tag / in-documents / date slice).
+    no_match = not fts_query or (restrict is not None and not restrict)
 
     where = "chunks_fts MATCH ? AND c.source_kind = 'document'"
     params: list = [fts_query]
-    if in_documents is not None:
-        placeholders = ",".join("?" * len(in_documents))
+    if restrict is not None:
+        placeholders = ",".join("?" * len(restrict))
         where += f" AND c.source_id IN ({placeholders})"
-        params.extend(in_documents)
+        params.extend(restrict)
 
     cur = conn.cursor()
+
+    if args.count_by == "document":
+        if no_match:
+            distinct_document_count = total_chunk_count = 0
+            documents = []
+        else:
+            distinct_document_count, total_chunk_count = cur.execute(
+                f"SELECT COUNT(DISTINCT c.source_id), COUNT(*) "
+                f"FROM chunks_fts JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+                f"WHERE {where}",
+                params,
+            ).fetchone()
+            documents = [
+                {"document_id": source_id, "file_name": file_name,
+                 "chunk_count": chunk_count}
+                for source_id, file_name, chunk_count in cur.execute(
+                    f"SELECT c.source_id, d.file_name, COUNT(*) AS n "
+                    f"FROM chunks_fts "
+                    f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+                    f"JOIN documents d ON d.document_id = c.source_id "
+                    f"WHERE {where} "
+                    f"GROUP BY c.source_id "
+                    f"ORDER BY n DESC, c.source_id "
+                    f"LIMIT ? OFFSET ?",
+                    [*params, args.limit, args.offset],
+                )
+            ]
+        return _envelope({
+            "count_by": "document",
+            "offset": args.offset,
+            "limit": args.limit,
+            "distinct_document_count": distinct_document_count,
+            "total_chunk_count": total_chunk_count,
+            "documents": documents,
+        })
+
+    # Default mode: paginated per-chunk matches.
+    preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
+    if no_match:
+        return _envelope({
+            "offset": args.offset, "limit": args.limit, "total": 0,
+            "preview": preview, "matches": [],
+        })
+
     total = cur.execute(
         f"SELECT COUNT(*) FROM chunks_fts "
         f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
@@ -200,13 +283,16 @@ def work(*, conn, args, session_id) -> dict:
                 "page_number": page_number,
                 "section_heading": section_heading,
                 "content_type": content_type,
-                "text": apply_preview(text, args.preview),
+                "text": apply_preview(text, preview),
                 "text_length": len(text),
             }
             for (chunk_id, source_id, chunk_index, section_heading,
                  page_number, content_type, text, file_name) in rows
         ]
-    return _response(matches, total)
+    return _envelope({
+        "offset": args.offset, "limit": args.limit, "total": total,
+        "preview": preview, "matches": matches,
+    })
 
 
 def main(argv: list[str] | None = None) -> None:
