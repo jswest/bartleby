@@ -12,3 +12,18 @@ export function pluralize(count, singular, plural = `${singular}s`) {
   const shown = typeof count === 'number' ? count.toLocaleString('en-US') : count;
   return `${shown} ${count === 1 ? singular : plural}`;
 }
+
+// Whether a chunk's text is reliably markdown-authored — so it should render
+// through `marked` — versus extracted/plain text that must stay literal (running
+// it through marked would mangle stray *, _, # chars). Agent/model output
+// (findings, summaries) and a Docling pipe table (sec_table) and a Markdown
+// source file (.md) are markdown; everything else is literal. Shared by the
+// search/scan cards and the /chunks view so the rule lives in one place.
+export function isMarkdownChunk({ source_kind, content_type, file_name }) {
+  return (
+    source_kind === 'finding' ||
+    source_kind === 'summary' ||
+    content_type === 'sec_table' ||
+    (file_name?.toLowerCase().endsWith('.md') ?? false)
+  );
+}

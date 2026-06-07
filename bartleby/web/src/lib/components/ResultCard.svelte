@@ -1,6 +1,7 @@
 <script>
   import { marked } from "marked";
-  import { pluralize, stripExt } from "$lib/format.js";
+  import { pluralize, stripExt, isMarkdownChunk } from "$lib/format.js";
+  import { CHUNK_ICON as chunkIcon } from "$lib/icons.js";
 
   // One card for both search hits and scan matches — they share ~90% of their
   // shape. `variant` picks the two differences: a search hit shows a normalized
@@ -17,17 +18,20 @@
   $: scorePct = Math.round((item.normalized_score ?? 0) * 100);
   $: truncated = variant === "scan" && item.text_length > item.text.length;
 
+  // The "open chunk in context" link → /chunks/<id>. Built as a string (chunk_id
+  // is an integer, so no escaping) and {@html}'d so the identical markup isn't
+  // duplicated across the two meta-line variants. CHUNK_ICON is inline SVG.
+  $: chunkLink =
+    `<a class="chunk-link" href="/chunks/${item.chunk_id}"` +
+    ` title="Open chunk ${item.chunk_id} in context"` +
+    ` aria-label="Open chunk ${item.chunk_id} in context">${chunkIcon}</a>`;
+
   // Render the snippet as markdown only when its text is reliably
-  // markdown-authored: agent/model output (findings, summaries), a Docling pipe
-  // table (sec_table), or a Markdown source file. Extracted PDF / plain text
-  // stays literal — running it through marked would mangle stray *, _, # chars.
+  // markdown-authored (see isMarkdownChunk). Extracted PDF / plain text stays
+  // literal — running it through marked would mangle stray *, _, # chars.
   // marked.parse is sanitized globally (the +layout.svelte marked.use hook wires
   // DOMPurify), so {@html} here is safe.
-  $: isMarkdown =
-    item.source_kind === "finding" ||
-    item.source_kind === "summary" ||
-    item.content_type === "sec_table" ||
-    (item.file_name?.toLowerCase().endsWith(".md") ?? false);
+  $: isMarkdown = isMarkdownChunk(item);
 </script>
 
 <li class="result surface surface--interactive">
@@ -57,11 +61,11 @@
       <span class="kind">{item.source_kind}</span>
       {#if item.section_heading} · {item.section_heading}{/if}
       {#if item.content_type} · {item.content_type}{/if}
-      · chunk {item.chunk_id}
+      · chunk {item.chunk_id}{@html chunkLink}
     {:else}
       {#if item.section_heading}{item.section_heading} · {/if}
       {#if item.content_type}{item.content_type} · {/if}
-      chunk {item.chunk_id} · {pluralize(item.text_length, "char")}
+      chunk {item.chunk_id}{@html chunkLink} · {pluralize(item.text_length, "char")}
     {/if}
   </p>
 
@@ -128,6 +132,24 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 600;
+  }
+  /* Tiny "open chunk" affordance riding the meta line, right after the chunk id.
+     Sits on the baseline of the surrounding text; brightens to the link color on
+     hover so it's discoverable without shouting. */
+  .chunk-link {
+    display: inline-flex;
+    vertical-align: baseline;
+    margin-left: var(--space-3xs);
+    color: var(--color-off);
+  }
+  .chunk-link:hover {
+    color: var(--color-link);
+  }
+  /* The glyph is injected via {@html}, so it sits outside Svelte's scoping —
+     reach it with :global (the .chunk-link ancestor is still scoped). */
+  .chunk-link :global(.icon) {
+    position: relative;
+    top: 1px;
   }
   .snippet {
     margin-top: var(--space-sm);

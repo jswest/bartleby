@@ -1,7 +1,10 @@
 <script>
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
+  import { stripExt } from "$lib/format.js";
+  import { CHUNK_ICON } from "$lib/icons.js";
   export let data;
 
   $: byId = new Map(data.finding.citations.map((c) => [c.chunk_id, c]));
@@ -18,7 +21,7 @@
   );
 
   function renderChip(c, isActive) {
-    const name = c.file_name ? c.file_name.replace(/\.pdf$/i, "") : null;
+    const name = stripExt(c.file_name);
     const label =
       name && c.page_number ? `${name} p.${c.page_number}`
       : name ? name
@@ -30,7 +33,11 @@
       `chunk ${c.chunk_id}`,
     ].filter(Boolean).join(" · ");
     const cls = `cite-chip${isActive ? " active" : ""}`;
-    return `<button type="button" class="${cls}" data-chunk-id="${c.chunk_id}" title="${esc(title)}">${esc(label)}</button>`;
+    const chip = `<button type="button" class="${cls}" data-chunk-id="${c.chunk_id}" title="${esc(title)}">${esc(label)}</button>`;
+    // A sibling jump button → /chunks/<id>. A <button> (not <a>) so it routes
+    // in-tab via goto; the layout's marked hook rewrites every <a> to a new tab.
+    const jump = `<button type="button" class="cite-jump" data-chunk-id="${c.chunk_id}" title="Open chunk ${c.chunk_id} in context" aria-label="Open chunk ${c.chunk_id} in context">${CHUNK_ICON}</button>`;
+    return `<span class="cite">${chip}${jump}</span>`;
   }
 
   function esc(s) {
@@ -56,6 +63,12 @@
   let container;
   onMount(() => {
     container.addEventListener("click", (e) => {
+      const jump = e.target.closest(".cite-jump");
+      if (jump) {
+        e.preventDefault();
+        goto(`/chunks/${jump.dataset.chunkId}`);
+        return;
+      }
       const btn = e.target.closest(".cite-chip");
       if (!btn) return;
       e.preventDefault();
@@ -146,5 +159,28 @@
     background: var(--color-off);
     color: var(--color-surface);
     border-color: var(--color-off);
+  }
+  /* The chip and its jump button travel together as one inline unit, so a line
+     break never splits them. Also raw {@html}, hence :global. */
+  :global(.cite) {
+    white-space: nowrap;
+  }
+  :global(.cite-jump) {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: baseline;
+    margin: 0 0.15em 0 0.1em;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--color-off);
+    cursor: pointer;
+  }
+  :global(.cite-jump:hover) {
+    color: var(--color-link);
+  }
+  :global(.cite-jump .icon) {
+    position: relative;
+    top: 1px;
   }
 </style>

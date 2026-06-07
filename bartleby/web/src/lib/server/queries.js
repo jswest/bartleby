@@ -184,6 +184,55 @@ export function getDocumentFilePath(documentId) {
   return row ? row.file_path : null;
 }
 
+// How many neighbor chunks to show on each side of the target in the /chunks
+// view — the surrounding context, rendered muted. Clamped at source boundaries.
+const CHUNK_NEIGHBORS = 2;
+
+// A single chunk plus its neighbor window — the chunks sharing its
+// (source_kind, source_id), within ±CHUNK_NEIGHBORS of its chunk_index, ordered
+// by chunk_index with the target flagged. Layers on a "back to source" link and
+// a display label: for a document/summary/image chunk that's the document detail
+// page (via resolveSource, same mapping as citations/search); for a finding
+// chunk it's the finding page. Returns null for an unknown chunk id.
+export function getChunk(chunkId) {
+  const { db } = getDb();
+  const target = db.prepare(`
+    SELECT chunk_id, source_kind, source_id, chunk_index, text,
+           section_heading, page_number, content_type
+    FROM chunks WHERE chunk_id = ?
+  `).get(chunkId);
+  if (!target) return null;
+
+  const neighbors = db.prepare(`
+    SELECT chunk_id, chunk_index, text, section_heading, page_number, content_type
+    FROM chunks
+    WHERE source_kind = ? AND source_id = ? AND chunk_index BETWEEN ? AND ?
+    ORDER BY chunk_index
+  `).all(
+    target.source_kind, target.source_id,
+    target.chunk_index - CHUNK_NEIGHBORS, target.chunk_index + CHUNK_NEIGHBORS
+  ).map((c) => ({ ...c, is_target: c.chunk_id === target.chunk_id }));
+
+  // Resolve the source identity + back link. Findings don't resolve to a
+  // document (resolveSource returns nulls), so they link to their own page.
+  let title = null;
+  let file_name = null;
+  let back_href = null;
+  if (target.source_kind === 'finding') {
+    title = titleMeta(db, 'findings', 'finding_id', [target.source_id]).get(target.source_id)?.title ?? null;
+    back_href = `/findings/${target.source_id}`;
+  } else {
+    const source = resolveSource(target.source_kind, target.source_id, target.page_number);
+    file_name = source.file_name;
+    if (source.document_id != null) {
+      title = titleMeta(db, 'summaries', 'document_id', [source.document_id]).get(source.document_id)?.title ?? null;
+      back_href = documentHref(source.document_id, source.page_number);
+    }
+  }
+
+  return { ...target, neighbors, title, file_name, back_href };
+}
+
 // Tags for a set of documents, as a Map<document_id, tags[]>. The /documents
 // list delegates enumeration + filtering to the list_documents skill (one
 // source of truth for the date/null semantics), but the skill is agent-shaped
