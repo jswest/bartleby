@@ -169,9 +169,15 @@ def test_scan_match_terms_is_superset_of_phrase(scan_corpus, capsys):
 def test_scan_in_documents_scope(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d2"])])
     out = json.loads(capsys.readouterr().out)
-    assert out["in_documents"] == [scan_corpus["d2"]]
+    assert out["filters"]["in_documents"] == [scan_corpus["d2"]]
     assert out["total"] == 1
     assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+
+
+def test_scan_unfiltered_omits_filters_object(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER])
+    out = json.loads(capsys.readouterr().out)
+    assert "filters" not in out
 
 
 def test_scan_excludes_summary_chunks(scan_corpus, capsys):
@@ -207,3 +213,117 @@ def test_scan_output_shape(scan_corpus, capsys):
     }
     assert m["file_name"] == "filing_a.txt"
     assert m["document_id"] == scan_corpus["d1"]
+
+
+# ---------- --count-by document (aggregate mode) ----------
+
+
+def test_scan_count_by_document_histogram(scan_corpus, capsys):
+    # MARKER hits d1 twice (chunks 1, 3) and d2 once: 3 chunks, 2 documents.
+    _run(scan_corpus, [MARKER, "--count-by", "document"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["count_by"] == "document"
+    assert out["distinct_document_count"] == 2   # the headline
+    assert out["total_chunk_count"] == 3         # the old `total`
+    assert out["documents"] == [
+        {"document_id": scan_corpus["d1"], "file_name": "filing_a.txt",
+         "chunk_count": 2},
+        {"document_id": scan_corpus["d2"], "file_name": "filing_b.txt",
+         "chunk_count": 1},
+    ]
+    # The per-chunk projection's keys are gone in aggregate mode.
+    for absent in ("matches", "preview", "total"):
+        assert absent not in out
+
+
+def test_scan_count_by_paginates_documents_with_stable_totals(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--count-by", "document", "--limit", "1"])
+    p1 = json.loads(capsys.readouterr().out)
+    assert [d["document_id"] for d in p1["documents"]] == [scan_corpus["d1"]]
+    # Rollups are always the full, unpaginated totals.
+    assert p1["distinct_document_count"] == 2
+    assert p1["total_chunk_count"] == 3
+
+    _run(scan_corpus, [MARKER, "--count-by", "document", "--limit", "1",
+                       "--offset", "1"])
+    p2 = json.loads(capsys.readouterr().out)
+    assert [d["document_id"] for d in p2["documents"]] == [scan_corpus["d2"]]
+    assert p2["distinct_document_count"] == 2
+
+
+def test_scan_count_by_no_match_is_all_zeros(scan_corpus, capsys):
+    _run(scan_corpus, ["phrase that appears nowhere", "--count-by", "document"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_document_count"] == 0
+    assert out["total_chunk_count"] == 0
+    assert out["documents"] == []
+
+
+def test_scan_count_by_rejects_preview_and_brief(scan_corpus):
+    for bad in (["--preview", "100"], ["--brief"]):
+        with pytest.raises(SystemExit) as exc:
+            _run(scan_corpus, [MARKER, "--count-by", "document", *bad])
+        # argparse-level conflict → exit 2.
+        assert exc.value.code == 2
+
+
+# ---------- date scope (shared with list_documents / describe_corpus) ----------
+
+
+def _date_d1(corpus, value="2024-03-01"):
+    """Give d1's existing summary an authored_date (d2/d3 stay undated)."""
+    conn = open_db(corpus["project"])
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET authored_date = ? WHERE document_id = ?",
+            (value, corpus["d1"]),
+        )
+    finally:
+        conn.close()
+
+
+def test_scan_date_bound_filters_and_echoes(scan_corpus, capsys):
+    _date_d1(scan_corpus)
+    _run(scan_corpus, [MARKER, "--authored-after", "2024-01-01"])
+    out = json.loads(capsys.readouterr().out)
+    # Only d1 is dated and in-bounds, so only its marker chunks survive.
+    assert out["total"] == 2
+    assert all(m["document_id"] == scan_corpus["d1"] for m in out["matches"])
+    f = out["filters"]
+    assert f["authored_after"] == "2024-01-01"
+    assert f["authored_before"] is None
+    assert f["include_nulls"] is False
+    # d2 and d3 have no summary → undated → dropped by the bound, counted.
+    assert f["excluded_null_dated"] == 2
+
+
+def test_scan_date_bound_includes_nulls(scan_corpus, capsys):
+    _date_d1(scan_corpus)
+    _run(scan_corpus, [MARKER, "--authored-after", "2024-01-01", "--include-nulls"])
+    out = json.loads(capsys.readouterr().out)
+    # Undated d2 rides along now, so its marker chunk returns too.
+    assert out["total"] == 3
+    assert out["filters"]["include_nulls"] is True
+    assert out["filters"]["excluded_null_dated"] == 0
+
+
+def test_scan_count_by_carries_date_filter(scan_corpus, capsys):
+    _date_d1(scan_corpus)
+    _run(scan_corpus, [MARKER, "--count-by", "document",
+                       "--authored-after", "2024-01-01"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_document_count"] == 1
+    assert out["total_chunk_count"] == 2
+    assert out["documents"] == [
+        {"document_id": scan_corpus["d1"], "file_name": "filing_a.txt",
+         "chunk_count": 2},
+    ]
+    assert out["filters"]["excluded_null_dated"] == 2
+
+
+def test_scan_invalid_date_raises(scan_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--authored-after", "2024"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INVALID_DATE"

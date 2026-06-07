@@ -242,6 +242,35 @@ def nonneg_int(value: str) -> int:
     return n
 
 
+def add_date_filter_args(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--authored-after`` / ``--authored-before`` /
+    ``--include-nulls`` trio (consumed by ``list_documents``, ``scan``, and
+    ``describe_corpus``). The help text is the canonical wording; resolution
+    and validation happen in ``_tags.resolve_scope`` / ``validate_date_bound``.
+    """
+    parser.add_argument(
+        "--authored-after",
+        type=str, default=None, dest="authored_after",
+        help=(
+            "Keep documents whose authored_date is on or after this "
+            "YYYY-MM-DD. Composable with --tag and --authored-before."
+        ),
+    )
+    parser.add_argument(
+        "--authored-before",
+        type=str, default=None, dest="authored_before",
+        help="Keep documents whose authored_date is on or before this YYYY-MM-DD.",
+    )
+    parser.add_argument(
+        "--include-nulls",
+        action="store_true", dest="include_nulls",
+        help=(
+            "With a date bound active, keep NULL-dated (undated) documents "
+            "instead of excluding them. No effect without a date bound."
+        ),
+    )
+
+
 def apply_preview(text: str, preview: int | None) -> str:
     """Truncate ``text`` to ``preview`` chars (appending ``…``); pass through
     unchanged when ``preview`` is ``None`` or the text already fits."""
