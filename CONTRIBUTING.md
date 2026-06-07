@@ -128,6 +128,6 @@ the README under [Pinning to a release](./README.md#pinning-to-a-release) and
 None of this requires Claude. The loop is just good hygiene: branch in a worktree,
 keep commits atomic and tested, run `uv run pytest` before you commit, open a PR that
 closes the issue, and let someone else merge it. `/ship` automates the bookkeeping;
-it doesn't replace your judgment. A machine-readable companion to this file — a
-repo-root `CLAUDE.md` that Claude auto-loads — is on its way
-([#140](https://github.com/jswest/bartleby/issues/140)).
+it doesn't replace your judgment. The machine-readable companion to this file is
+[`CLAUDE.md`](./CLAUDE.md) — the same conventions in terse, imperative form, which
+Claude auto-loads when you open the repo.
