@@ -71,7 +71,7 @@ def test_read_finding_happy_path(seeded_project, capsys):
         conn.close()
 
     read_finding.main([
-        "--project", project, "--finding-id", str(finding_id),
+        "--project", project, "--finding", str(finding_id),
     ])
     out = json.loads(capsys.readouterr().out)
 
@@ -102,7 +102,7 @@ def test_read_finding_no_citations(seeded_project, capsys):
     finally:
         conn.close()
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding", str(finding_id)])
     out = json.loads(capsys.readouterr().out)
     assert out["citations"] == []
     assert len(out["chunk_ids"]) == 1
@@ -110,7 +110,7 @@ def test_read_finding_no_citations(seeded_project, capsys):
 
 def test_read_finding_not_found(seeded_project, capsys):
     code, captured = _run(capsys, [
-        "--project", seeded_project["project"], "--finding-id", "99999",
+        "--project", seeded_project["project"], "--finding", "99999",
     ])
     assert code == 1
     out = json.loads(captured.out)
@@ -137,7 +137,7 @@ def test_read_finding_memory_off_other_session(seeded_project, capsys):
     start_session(project, memory_enabled=False)
 
     code, captured = _run(capsys, [
-        "--project", project, "--finding-id", str(finding_id),
+        "--project", project, "--finding", str(finding_id),
     ])
     assert code == 1
     out = json.loads(captured.out)
@@ -159,7 +159,7 @@ def test_read_finding_memory_off_own_session(seeded_project, capsys):
     finally:
         conn.close()
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding", str(finding_id)])
     out = json.loads(capsys.readouterr().out)
     assert out["finding_id"] == finding_id
     assert out["title"] == "own"

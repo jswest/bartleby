@@ -235,7 +235,7 @@ def test_finding_scripts_surface_session_provenance(seeded_project, tmp_path, ca
     # Stamp the authoring (active) session, then confirm read/list reflect it.
     set_session_provenance(project, model="qwen3.6:35b-mlx", harness="ollama-cli")
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding", str(finding_id)])
     read_out = json.loads(capsys.readouterr().out)
     assert read_out["model"] == "qwen3.6:35b-mlx"
     assert read_out["harness"] == "ollama-cli"

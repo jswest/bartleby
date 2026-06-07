@@ -279,6 +279,22 @@ def apply_preview(text: str, preview: int | None) -> str:
     return text[:preview] + "…"
 
 
+def pagination_hint(offset: int, count: int, total: int) -> str | None:
+    """The shared ``Showing X-Y of N`` next-page hint, or ``None`` when done.
+
+    ``count`` is the number of rows on the current page. Returns ``None`` when
+    the page is empty or already reaches ``total``. Shared by ``list_documents``
+    and ``list_findings`` (``scan`` builds a different envelope around its own
+    ``total`` and isn't a consumer)."""
+    next_offset = offset + count
+    if count == 0 or next_offset >= total:
+        return None
+    return (
+        f"Showing {offset + 1}-{next_offset} of {total}. "
+        f"Pass --offset {next_offset} to continue."
+    )
+
+
 def finding_chunk_and_citation_ids(
     cur, finding_id: int,
 ) -> tuple[list[int], list[int]]:

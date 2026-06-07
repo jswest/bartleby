@@ -74,7 +74,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
 
     delete_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(finding_id),
+        "--finding", str(finding_id),
     ])
     out = json.loads(capsys.readouterr().out)
 
@@ -122,7 +122,7 @@ def test_delete_finding_unknown_id(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         delete_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", "99999",
+            "--finding", "99999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)

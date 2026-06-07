@@ -133,7 +133,7 @@ def test_list_documents_date_bound_excludes_null_dated(seeded_project, capsys):
     assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
     assert out["total"] == 1
     # beta is dropped purely for being undated — that must be reported.
-    assert out["excluded_null_dated"] == 1
+    assert out["filters"]["excluded_null_dated"] == 1
 
 
 def test_list_documents_authored_before(seeded_project, capsys):
@@ -145,7 +145,7 @@ def test_list_documents_authored_before(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["documents"] == []
     assert out["total"] == 0
-    assert out["excluded_null_dated"] == 1
+    assert out["filters"]["excluded_null_dated"] == 1
 
 
 def test_list_documents_date_range_both_bounds(seeded_project, capsys):
@@ -157,7 +157,7 @@ def test_list_documents_date_range_both_bounds(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
-    assert out["excluded_null_dated"] == 1
+    assert out["filters"]["excluded_null_dated"] == 1
 
 
 def test_list_documents_include_nulls_keeps_undated(seeded_project, capsys):
@@ -171,14 +171,16 @@ def test_list_documents_include_nulls_keeps_undated(seeded_project, capsys):
     by_name = {d["file_name"] for d in out["documents"]}
     assert by_name == {"alpha.pdf", "beta.txt"}
     assert out["total"] == 2
-    # Nothing was excluded: the undated doc rode along.
-    assert out["excluded_null_dated"] == 0
+    # Nothing was excluded: the undated doc rode along (date bound active, so the
+    # filters echo is present and reports zero).
+    assert out["filters"]["excluded_null_dated"] == 0
 
 
-def test_list_documents_no_date_bound_reports_zero_excluded(seeded_project, capsys):
+def test_list_documents_no_filter_omits_filters_echo(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
-    assert out["excluded_null_dated"] == 0
+    # No scope filter active → no filters echo at all (uniform contract).
+    assert "filters" not in out
 
 
 def test_list_documents_invalid_date_raises(seeded_project, capsys):
@@ -292,4 +294,4 @@ def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):
     # beta carries the tag but is undated → excluded by the bound, counted once.
     assert out["documents"] == []
     assert out["total"] == 0
-    assert out["excluded_null_dated"] == 1
+    assert out["filters"]["excluded_null_dated"] == 1

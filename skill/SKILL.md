@@ -59,16 +59,16 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_document --document <id>` | Whole-document read (summary + full text; `--summary` / `--full` narrow). **`--full` is clean prose carrying no `chunk_id`s** — use it for comprehension you won't cite from; to cite, read with `read_chunks` instead. |
 | `save_summary --document <id> ...` | Write or replace a document's agent-authored summary. Use when one is wrong or missing. `--title` / `--description` are how it shows up in `list_documents`, so make them informative. |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a `--body-file` staged under `~/.bartleby/tmp/` (see "Where to stage scratch"); citations are the `[^N]` markers in the prose, and at least one is required. |
-| `edit_finding --finding-id <id> ...` | Update an existing finding in place (title / description / body). Use it to fix malformed citations or revise — don't fork a new finding (`merge_findings` collapses ones that already fragmented). |
+| `edit_finding --finding <id> ...` | Update an existing finding in place (title / description / body). Use it to fix malformed citations or revise — don't fork a new finding (`merge_findings` collapses ones that already fragmented). |
 | `merge_findings --from <ids> --into <id> --body-file <path>` | **Collapse a cluster of duplicate findings into one.** `--into` survives (keeps its `finding_id` / provenance); you author the consolidated body; the `--from` sources are deleted. Echo the returned `body` verbatim. |
-| `delete_finding --finding-id <id>` | **Retract a finding outright** — its row, body chunks, and citations. The cited *document* chunks (evidence) are untouched. |
+| `delete_finding --finding <id>` | **Retract a finding outright** — its row, body chunks, and citations. The cited *document* chunks (evidence) are untouched. |
 | `list_findings` | **Browse what findings exist**, newest first — the `list_documents` of memory. `--brief` for a cheap survey. (`search --findings` ranks fragments; this lists what's there.) |
-| `read_finding --finding-id <id>` | **Read one whole finding by id** — full `body` plus resolved citations. Use it after `list_findings`. Findings are hints — never cite one. |
+| `read_finding --finding <id>` | **Read one whole finding by id** — full `body` plus resolved citations. Use it after `list_findings`. Findings are hints — never cite one. |
 | `read_tags` | List the controlled vocabulary. **Always run this before any other tag operation.** Empty until someone adds tags. |
 | `add_tag --name <n> --description <d>` | Create a tag (runs a similarity + name-conflict check; returns `status: "conflict"` on a near-match instead of duplicating). **Humans drive tag creation** — only propose one when explicitly asked. |
 | `delete_tag --name <n>` | Drop a tag. Cascades to all its assignments. |
 | `rename_tag --old <a> --new <b>` | Rename in place. Errors if `--new` already exists — use `merge_tags` to combine. |
-| `merge_tags --from <a> --to <b>` | Move all assignments from `--from` onto `--to`, then delete `--from`. |
+| `merge_tags --from <a> --into <b>` | Move all assignments from `--from` onto `--into`, then delete `--from`. |
 | `tag [--document <id> \| --all] [--tag <name>] [--force]` | Classify documents against the vocabulary with the configured summarizer model — `--all` (full-vocab) or `--tag <name>` (single-tag). The classifier reads the summary, not the body. **`tag --all` runs one LLM call per document — confirm with the human first** (report the count and the model). |
 | `assign_tag --documents <id,id,...> --tag <name>` | Attach one tag to one or more documents **directly, with no LLM** — the manual counterpart to `tag`, and the only way to apply *body-level* tags the summary-based classifier can't see (OCR quality, language, "contains tables"). Pass the whole set in one call. |
 | `unassign_tag --documents <id,id,...> --tag <name>` | Detach the `(document, tag)` assignment from the named documents. Unlike `delete_tag` (which drops the tag and cascades *every* document's assignment), this touches only the documents you name. |
@@ -136,7 +136,7 @@ Tags are a controlled vocabulary the user curates to slice the corpus by categor
 
 > **Memory-off sessions — check this first.** If this session was started with `--no-memory`, findings are walled off to your *own* session so a run can't be contaminated by other sessions' conclusions: `list_findings` shows only what *this* session authored, `read_finding` reads this session's findings but returns `{"code": "MEMORY_OFF"}` for another session's, and `search --findings` is silently dropped entirely (the response carries `"memory_excluded": true`). Don't plan around surveying or reading *prior* sessions' findings — you can't reach them. **`save_finding` still works**, and you can read back what you just wrote; it also returns the resolved `citations` in its own response, so you never need a read-back to verify what landed. The "use prior findings / tend the memory" guidance below applies only when memory is on.
 
-Prior findings live in the database and are reachable three ways: `search --findings` (ranked fragments matching a query), `list_findings` (browse what exists, newest first), and `read_finding --finding-id <id>` (one whole finding). Treat them as **hints**, never as evidence:
+Prior findings live in the database and are reachable three ways: `search --findings` (ranked fragments matching a query), `list_findings` (browse what exists, newest first), and `read_finding --finding <id>` (one whole finding). Treat them as **hints**, never as evidence:
 
 - Use them at the start of a topic to see what previous agents concluded and where gaps remain — `list_findings` to survey, `read_finding` to read one in full.
 - **Never cite a finding.** Findings are derivative; the underlying documents are the evidence.

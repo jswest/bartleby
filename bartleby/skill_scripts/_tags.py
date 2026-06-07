@@ -79,6 +79,18 @@ def get_tag_by_name(conn, name: str) -> TagRow | None:
     return TagRow(*row) if row else None
 
 
+def require_tag_by_name(conn, name: str) -> TagRow:
+    """``get_tag_by_name`` that raises ``TAG_NOT_FOUND`` instead of returning None.
+
+    The lookup-or-raise every tag command does on its target tag (assign/
+    unassign/delete/rename/merge/tag); folds the repeated ``if tag is None:
+    raise`` into one place."""
+    tag = get_tag_by_name(conn, name)
+    if tag is None:
+        raise SkillError("TAG_NOT_FOUND", f"No tag named {name!r}.")
+    return tag
+
+
 def resolve_documents(
     conn, document_ids: list[int],
 ) -> tuple[list[tuple[int, str]], list[int]]:

@@ -225,10 +225,12 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
         conn.close()
 
     merge_tags.main([
-        "--project", seeded_project["project"], "--from", "a", "--to", "b",
+        "--project", seeded_project["project"], "--from", "a", "--into", "b",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "merged"
+    assert out["from"]["name"] == "a"
+    assert out["into"]["name"] == "b"
 
     conn = open_db(seeded_project["project"])
     try:
@@ -509,7 +511,7 @@ def test_search_tag_filter_restricts_results(seeded_project, capsys, monkeypatch
         "--full-text", "alpha", "--tag", "ch",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["tags"] == ["ch"]
+    assert out["filters"]["tags"] == ["ch"]
     assert all(
         r["source_kind"] != "finding" for r in out["results"]
     )  # findings dropped under --tag

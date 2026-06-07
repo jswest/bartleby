@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """merge_tags — move all assignments from one tag onto another, then delete the source.
 
-Errors if either tag doesn't exist or if ``--from`` == ``--to``.
+Errors if either tag doesn't exist or if ``--from`` == ``--into``.
 
 Output:
     {"status": "merged", "from": {"tag_id": int, "name": str},
-     "to": {"tag_id": int, "name": str}, "moved_assignments": int}
+     "into": {"tag_id": int, "name": str}, "moved_assignments": int}
 """
 
 from __future__ import annotations
@@ -13,29 +13,25 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._tags import get_tag_by_name
+from bartleby.skill_scripts._tags import require_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("merge_tags", __doc__)
     p.add_argument("--from", type=str, required=True, dest="from_name")
-    p.add_argument("--to", type=str, required=True, dest="to_name")
+    p.add_argument("--into", type=str, required=True, dest="into_name")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
-    if args.from_name == args.to_name:
+    if args.from_name == args.into_name:
         raise SkillError(
-            "SELF_MERGE", "--from and --to must be different tags."
+            "SELF_MERGE", "--from and --into must be different tags."
         )
 
-    src = get_tag_by_name(conn, args.from_name)
-    if src is None:
-        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.from_name!r}.")
-    dst = get_tag_by_name(conn, args.to_name)
-    if dst is None:
-        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.to_name!r}.")
+    src = require_tag_by_name(conn, args.from_name)
+    dst = require_tag_by_name(conn, args.into_name)
 
     cur = conn.cursor()
     moved_before = cur.execute(
@@ -50,7 +46,7 @@ def work(*, conn, args, session_id) -> dict:
     return {
         "status": "merged",
         "from": {"tag_id": src.tag_id, "name": src.name},
-        "to": {"tag_id": dst.tag_id, "name": dst.name},
+        "into": {"tag_id": dst.tag_id, "name": dst.name},
         "moved_assignments": moved_before,
     }
 

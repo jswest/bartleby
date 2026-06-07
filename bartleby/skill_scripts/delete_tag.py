@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._tags import get_tag_by_name
+from bartleby.skill_runner import build_arg_parser, run
+from bartleby.skill_scripts._tags import require_tag_by_name
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -25,9 +25,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def work(*, conn, args, session_id) -> dict:
-    tag = get_tag_by_name(conn, args.name)
-    if tag is None:
-        raise SkillError("TAG_NOT_FOUND", f"No tag named {args.name!r}.")
+    tag = require_tag_by_name(conn, args.name)
 
     cur = conn.cursor()
     n_assignments = cur.execute(
