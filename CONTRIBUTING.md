@@ -26,6 +26,7 @@ the tooling encodes the conventions so you don't have to keep them all in your h
 | Piece | What it does |
 | --- | --- |
 | `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR (the loop below). |
+| `skills/release/SKILL.md` | The `/release` command — dry-run → confirm → publish a release (see [Cutting a release](#cutting-a-release)). |
 | `hooks/guard-main-write.sh` | A safety rail that refuses commits/pushes on `main`. |
 | `agents/simplify-refactor.md` | A subagent that does a quality/simplification pass over changed code. |
 | `agents/git-workflow-manager.md` | A subagent that turns a pile of changes into clean, atomic commits. |
@@ -128,9 +129,13 @@ change; run it yourself anytime.
 ## Cutting a release
 
 Releases are a deliberate, batched act on `main` after a few changes have landed —
-not something done per-PR. The mechanics live in
-[`scripts/release.py`](./scripts/release.py) (dry-run first, then `--tag --push`),
-and the consumer side — pinning to and upgrading between releases — is documented in
+not something done per-PR. Typing `/release` walks Claude through it: enforce the
+on-`main` / clean / synced preconditions, dry-run [`scripts/release.py`](./scripts/release.py)
+to show the computed next version and notes, **PAUSE for your explicit OK**, then
+`--tag --push` to publish and report the release URL. The script stays the source
+of truth for the version math and the schema-drift guard; the skill only advises
+and orchestrates (and never invents a version or reaches around the guard hook).
+The consumer side — pinning to and upgrading between releases — is documented in
 the README under [Pinning to a release](./README.md#pinning-to-a-release) and
 [Upgrading from a release](./README.md#upgrading-from-a-release).
 

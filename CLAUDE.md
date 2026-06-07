@@ -41,6 +41,10 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
   re-run `uv run pytest` → commit.
 - **Use `/ship #<N>`** for the full issue→PR loop. Claude opens the PR with a
   `Closes #<N>` line; **a human merges** — never merge yourself.
+- **Use `/release`** to cut a release — a deliberate, post-merge act on `main`,
+  never per-issue. It dry-runs `scripts/release.py`, pauses for your OK, then
+  `--tag --push`. The script owns the version math; never invent a version or
+  reach around the guard hook with a bare `git tag`/`git push`.
 
 ## Tooling
 
