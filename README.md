@@ -500,6 +500,17 @@ See [`./skill/README.md`](./skill/README.md) for the full story.
 
 ---
 
+## Contributing
+
+Bartleby is built hand-in-hand with Claude Code, and the workflow that makes that
+work — the `/ship` issue→PR loop, the worktree convention, the commit gates, the
+safety hook — is version-controlled right in the repo. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for how we develop here (and how to do it by
+hand if you'd rather). Architectural invariants and the decision log live in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+---
+
 ## License
 
 MIT.
