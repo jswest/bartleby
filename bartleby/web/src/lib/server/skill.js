@@ -26,6 +26,15 @@ export class SkillError extends Error {
   }
 }
 
+// Normalize any thrown value into the {message, code} shape routes render. A
+// SkillError carries the skill's own code; anything else is an unexpected
+// failure tagged 'ERROR'. Shared by every loader that calls runSkill.
+export function toSkillError(e) {
+  return e instanceof SkillError
+    ? { message: e.message, code: e.code }
+    : { message: String(e?.message ?? e), code: 'ERROR' };
+}
+
 /**
  * Run one skill script as a subprocess and return its parsed JSON.
  *

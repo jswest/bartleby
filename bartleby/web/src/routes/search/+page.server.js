@@ -1,4 +1,4 @@
-import { runSkill, SkillError } from '$lib/server/skill.js';
+import { runSkill, toSkillError } from '$lib/server/skill.js';
 import { listTags, enrichHits, enrichScanMatches } from '$lib/server/queries.js';
 import { ALL_KINDS, DEFAULT_KINDS } from '$lib/constants.js';
 
@@ -53,9 +53,6 @@ export async function load({ url }) {
     }
     return { params, available, result, error: null };
   } catch (e) {
-    const error = e instanceof SkillError
-      ? { message: e.message, code: e.code }
-      : { message: String(e?.message ?? e), code: 'ERROR' };
-    return { params, available, result: null, error };
+    return { params, available, result: null, error: toSkillError(e) };
   }
 }
