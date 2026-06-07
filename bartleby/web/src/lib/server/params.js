@@ -7,3 +7,11 @@ export function parseIdParam(raw) {
   if (!Number.isInteger(id)) throw error(404, 'Not found');
   return id;
 }
+
+// Parse an integer query param into [lo, hi], falling back when absent or junk.
+// Shared by the search and documents loaders for limit/offset/context bounds.
+export function clampInt(raw, lo, hi, fallback) {
+  const n = parseInt(raw ?? '', 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
