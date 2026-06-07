@@ -53,7 +53,7 @@ uv tool install .
 
 This installs `bartleby` as a command-line tool in an isolated environment.
 
-To opt into the Docling converter (slower text extraction, but layout-aware; required for HTML/MD ingestion), which is something you will almost always want, as Docling allows `.txt`, `.md`, and `.html` files to be read:
+To opt into the Docling converter (slower, but layout-aware) — which you'll almost always want, since it's required to ingest `.md` and `.html` files:
 
 ```
 uv tool install '.[docling]'
@@ -221,11 +221,11 @@ This creates a project directory (`foo` in this case) and marks it active. Subse
 bartleby scribe --files /path/to/your/docs
 ```
 
-Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image files (`.jpg`, `.png`, `.webp`, `.bmp`, `.tiff`). A file whose extension is missing or unrecognized is content-sniffed (magic bytes) and ingested if it turns out to be a supported type — so a PDF that lost its `.pdf` (e.g. a docket scraper that truncates long filenames) is still picked up; in a directory ingest, anything that can't be identified is skipped with a note rather than silently dropped. Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. With a vision provider configured, embedded images inside PDFs and standalone image files are also analyzed (OCR transcription + scene description) and chunked into the same searchable index. Everything goes into the project's SQLite database.
+Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image files (`.jpg`, `.png`, `.webp`, `.bmp`, `.tiff`); unrecognized extensions are content-sniffed and kept if they turn out to be a supported type (details under [`bartleby scribe`](#bartleby-scribe)). Bartleby extracts text, chunks it, generates embeddings, and (optionally) writes a one-shot summary per document. With a vision provider configured, embedded images and standalone image files are analyzed too (OCR + scene description) and folded into the same searchable index. Everything lands in the project's SQLite database.
 
 ### 4. Start an agent session
 
-In your harness of choice, load the `bartleby` skill and ask the agent a question about your corpus. The skill will guide it through searching, reading, synthesizing, and citing.
+In your harness of choice, load the `bartleby` skill (install it first with `bartleby ready` — see [Install the skill](#install-the-skill)) and ask the agent a question about your corpus. The skill guides it through searching, reading, synthesizing, and citing.
 
 If you want the agent to ignore findings from prior sessions, start the session with the memory flag off:
 
@@ -241,7 +241,7 @@ bartleby session start --no-memory
 bartleby serve
 ```
 
-Spins up a local SvelteKit UI for the active project. The landing page is a corpus overview (date range, year histogram, tags, largest documents); `/documents` lists every ingested file with date/tag filters and paging, alongside its summary and the original PDF; `/findings` shows every saved research note with inline citation chips that jump to the cited page in the source. Safe to leave running alongside an ingest or a research session — it opens the database read-only. Requires Node.js and npm on `PATH`.
+Spins up a local SvelteKit UI for the active project — a corpus overview, document and finding browsers, and full-corpus search, with inline citations that link into the source PDFs at the cited page (full tour under [`bartleby serve`](#bartleby-serve)). It opens the database read-only, so it's safe to leave running alongside an ingest or a research session. Requires Node.js and npm on `PATH`.
 
 ---
 
@@ -491,7 +491,7 @@ To avoid a Hub network check on every run, Bartleby switches Hugging Face into o
 
 ## What's the `bartleby` skill?
 
-A folder you drop into your agent harness that teaches the agent how to use this database. It exposes a small set of scripts (`search`, `read_document`, `save_finding`, etc.) and a `SKILL.md` that codifies an opinionated research methodology — what counts as evidence, when to read a full document vs. searching, how to cite.
+A skill bundle (installed with `bartleby ready`) that teaches the agent how to use this database. It exposes a small set of scripts (`search`, `read_document`, `save_finding`, etc.) and a `SKILL.md` that codifies an opinionated research methodology — what counts as evidence, when to read a full document vs. searching, how to cite.
 
 See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for the full story.
 
