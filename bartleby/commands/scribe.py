@@ -686,7 +686,6 @@ def _ingest_pdf_docling(
     file_hash: str,
     file_name: str,
     archive_root: Path,
-    sparse_text_threshold: int,
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_max_dimension: int,
@@ -699,7 +698,9 @@ def _ingest_pdf_docling(
 
     if on_stage is not None:
         on_stage("extracting")
-    docling_result = docling_pipeline.convert(archived)
+    docling_result = docling_pipeline.convert(
+        archived, extract_images=vision_provider is not None
+    )
     if on_page_count is not None:
         on_page_count(docling_result.page_count)
     document_id = _insert_document(
@@ -723,23 +724,17 @@ def _ingest_pdf_docling(
             conn, document_id, _build_chunk_inputs(rows, embeddings),
         )
 
-    # Side-pass for embedded images so docling users still get image search.
-    if vision_provider is not None:
+    # Embedded images come out of the same docling pass (no second parse).
+    if vision_provider is not None and docling_result.images:
         if on_stage is not None:
             on_stage("analyzing images")
-        pdf_result = pdfplumber_pipeline.convert(
-            archived,
-            sparse_text_threshold=sparse_text_threshold,
-            ocr_min_confidence=0,    # text discarded; OCR doesn't matter
-        )
         image_routes = [
             _ImageRoute(
-                bytes_=emb.png_bytes,
-                page_number=page.page_number,
-                image_index_on_page=emb.image_index_on_page,
+                bytes_=img.png_bytes,
+                page_number=img.page_number,
+                image_index_on_page=img.image_index_on_page,
             )
-            for page in pdf_result.pages
-            for emb in page.embedded_images
+            for img in docling_result.images
         ]
         _run_image_routes(
             conn, document_id, image_routes,
@@ -902,7 +897,6 @@ def _process_one(
                 conn, archived,
                 file_hash=file_hash, file_name=path.name,
                 archive_root=archive_root,
-                sparse_text_threshold=sparse_text_threshold,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_max_dimension=vision_max_dimension,
                 vision_min_dimension=vision_min_dimension,
