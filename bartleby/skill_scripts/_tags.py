@@ -155,6 +155,208 @@ def intersect_tag_filter(
     return sorted(set(in_documents) & set(tagged)), tag_names
 
 
+# ---------- scope resolution (tags + in_documents + date bounds) ----------
+
+
+def validate_date_bound(flag: str, raw: str | None) -> str | None:
+    """Validate a user-supplied date *bound*, raising ``INVALID_DATE`` on junk.
+
+    ``normalize_authored_date`` returns None on unparseable input, which is
+    right for summarizer-inferred *storage* but a footgun for a *filter*: a
+    silently-dropped bound would widen the result without warning. So we reuse
+    its parsing but raise instead of nulling.
+    """
+    from bartleby.ingest.summarize import normalize_authored_date
+
+    if raw is None:
+        return None
+    norm = normalize_authored_date(raw)
+    if norm is None:
+        raise SkillError(
+            "INVALID_DATE",
+            f"{flag} must be a real calendar date in YYYY-MM-DD form; got {raw!r}.",
+        )
+    return norm
+
+
+@dataclass
+class Scope:
+    """A resolved corpus scope: which documents, plus the echo of how it was asked.
+
+    ``document_ids`` is the concrete set the caller restricts to — ``None``
+    means "whole corpus" (no filter), ``[]`` means "a filter was applied but it
+    matched nothing" (short-circuit to zero results). The remaining fields echo
+    the *requested* filter so a response can be self-describing via
+    ``filters_dict``.
+    """
+
+    document_ids: list[int] | None
+    in_documents: list[int] | None      # echo: as requested (pre-resolution)
+    tags: list[str] | None              # echo: requested tag names
+    authored_after: str | None
+    authored_before: str | None
+    include_nulls: bool
+    excluded_null_dated: int
+
+    @property
+    def date_active(self) -> bool:
+        return self.authored_after is not None or self.authored_before is not None
+
+    @property
+    def active(self) -> bool:
+        """True if any scope filter was requested (tags, in_documents, or a date bound)."""
+        return (
+            self.in_documents is not None
+            or self.tags is not None
+            or self.date_active
+        )
+
+    def filters_dict(self) -> dict | None:
+        """The self-describing ``filters`` echo, or ``None`` when unfiltered.
+
+        Shared by ``scan`` and ``describe_corpus`` so both surface scope
+        identically. ``list_documents`` predates this and keeps its own
+        top-level shape (the issue mandates no behavior change there).
+        """
+        if not self.active:
+            return None
+        return {
+            "tags": self.tags,
+            "in_documents": self.in_documents,
+            "authored_after": self.authored_after,
+            "authored_before": self.authored_before,
+            "include_nulls": self.include_nulls,
+            "excluded_null_dated": self.excluded_null_dated,
+        }
+
+    def echo_into(self, env: dict) -> dict:
+        """Attach the ``filters`` echo to ``env`` in place when scoped; return it.
+
+        Folds the "compute filters_dict, set the key only if non-None" dance that
+        ``scan`` and ``describe_corpus`` would otherwise each repeat.
+        """
+        filters = self.filters_dict()
+        if filters is not None:
+            env["filters"] = filters
+        return env
+
+    def restrict_in(self, col: str) -> tuple[str, list]:
+        """A bare ``document_ids`` predicate for ``col`` plus its params.
+
+        Returns one of three forms, *without* a leading ``WHERE``/``AND`` so the
+        caller composes it freely:
+          - ``("", [])`` — whole corpus, no restriction.
+          - ``("0", [])`` — a filter matched nothing; matches no rows.
+          - ``("<col> IN (?,?)", [ids...])`` — restrict to the resolved slice.
+        This is the single source for the None/empty/list branch all three
+        scripts otherwise hand-roll.
+        """
+        if self.document_ids is None:
+            return "", []
+        if not self.document_ids:
+            return "0", []
+        ph = ",".join("?" * len(self.document_ids))
+        return f"{col} IN ({ph})", list(self.document_ids)
+
+
+def _apply_date_bound(
+    conn, base_ids: list[int] | None, *,
+    after: str | None, before: str | None, include_nulls: bool,
+) -> tuple[list[int], int]:
+    """Resolve an active date bound to ``(document_ids, excluded_null_dated)``.
+
+    ``base_ids`` is the tag/in-documents scope the bound layers on top of —
+    ``None`` means the whole corpus, otherwise a non-empty list (callers
+    short-circuit an empty base before getting here). Mirrors the semantics
+    ``list_documents`` shipped: undated docs can't satisfy a bound, so they're
+    excluded by default and counted in ``excluded_null_dated``; ``include_nulls``
+    keeps them and zeros the count.
+    """
+    bounds, bound_params = [], []
+    if after is not None:
+        bounds.append("s.authored_date >= ?")
+        bound_params.append(after)
+    if before is not None:
+        bounds.append("s.authored_date <= ?")
+        bound_params.append(before)
+    bounds_sql = " AND ".join(bounds)
+
+    base_sql, base_params = "", []
+    if base_ids is not None:
+        ph = ",".join("?" * len(base_ids))
+        base_sql = f" AND d.document_id IN ({ph})"
+        base_params = list(base_ids)
+
+    if include_nulls:
+        date_pred = f"(s.authored_date IS NULL OR ({bounds_sql}))"
+    else:
+        date_pred = f"(s.authored_date IS NOT NULL AND {bounds_sql})"
+
+    cur = conn.cursor()
+    document_ids = sorted(
+        row[0] for row in cur.execute(
+            f"SELECT d.document_id FROM documents d "
+            f"LEFT JOIN summaries s USING (document_id) "
+            f"WHERE {date_pred}{base_sql}",
+            [*bound_params, *base_params],
+        )
+    )
+
+    excluded = 0
+    if not include_nulls:
+        excluded = cur.execute(
+            f"SELECT COUNT(*) FROM documents d "
+            f"LEFT JOIN summaries s USING (document_id) "
+            f"WHERE s.authored_date IS NULL{base_sql}",
+            base_params,
+        ).fetchone()[0]
+    return document_ids, excluded
+
+
+def resolve_scope(
+    conn, *,
+    in_documents: list[int] | None = None,
+    tags: list[str] | None = None,
+    authored_after: str | None = None,
+    authored_before: str | None = None,
+    include_nulls: bool = False,
+) -> Scope:
+    """Fold ``--tag`` ∩ ``--in-documents`` ∩ date bounds into one ``Scope``.
+
+    The single scope resolver for ``list_documents``, ``scan``, and
+    ``describe_corpus``. Tags and ``in_documents`` intersect via
+    ``intersect_tag_filter``; an active date bound then narrows that set (and
+    accounts for the undated docs it drops). Unknown tags raise ``TAG_NOT_FOUND``
+    and malformed bounds raise ``INVALID_DATE``.
+    """
+    after = validate_date_bound("--authored-after", authored_after)
+    before = validate_date_bound("--authored-before", authored_before)
+
+    scoped_docs, tag_names = intersect_tag_filter(conn, in_documents, tags)
+    date_active = after is not None or before is not None
+
+    if not date_active:
+        document_ids, excluded = scoped_docs, 0
+    elif scoped_docs is not None and not scoped_docs:
+        # Tag/in-documents scope already empty — the bound can't add anything.
+        document_ids, excluded = [], 0
+    else:
+        document_ids, excluded = _apply_date_bound(
+            conn, scoped_docs,
+            after=after, before=before, include_nulls=include_nulls,
+        )
+
+    return Scope(
+        document_ids=document_ids,
+        in_documents=in_documents,
+        tags=tag_names,
+        authored_after=after,
+        authored_before=before,
+        include_nulls=include_nulls,
+        excluded_null_dated=excluded,
+    )
+
+
 # ---------- similarity check ----------
 
 

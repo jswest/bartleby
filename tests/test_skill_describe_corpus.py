@@ -116,3 +116,116 @@ def test_describe_corpus_rejects_nonpositive_top_n(seeded_project):
         with pytest.raises(SystemExit):
             describe_corpus.main(["--project", seeded_project["project"],
                                   "--top-n", bad])
+
+
+# ---------- filtered describe_corpus (scope flags) ----------
+
+
+def test_describe_corpus_unfiltered_omits_filters(seeded_project, capsys):
+    out = _run(seeded_project["project"], capsys)
+    assert "filters" not in out
+
+
+def test_describe_corpus_scoped_to_one_document(seeded_project, capsys):
+    # Scope to alpha alone: every aggregate narrows to that single document.
+    out = _run(seeded_project["project"], capsys,
+               extra=["--in-documents", str(seeded_project["doc_a"])])
+    assert out["document_count"] == 1
+    assert out["token_count"] == 1000
+    assert out["chunk_count"] == 4
+    assert {r["content_type"]: r["chunk_count"] for r in out["content_mix"]} == {"text": 4}
+    assert out["summary_coverage"] == {"summarized": 1, "unsummarized": 0}
+    assert [d["id"] for d in out["largest_documents"]] == [seeded_project["doc_a"]]
+    assert out["authored_date"]["undated_document_count"] == 1  # alpha summary has no date
+    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["tags"] is None
+    assert out["filters"]["excluded_null_dated"] == 0
+
+
+def test_describe_corpus_tags_facet_lists_only_slice_tags(seeded_project, capsys):
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('ch', 'Central Hudson')")
+        ch = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('nyseg', 'NYSEG')")
+        nyseg = conn.last_insert_rowid()
+        cur.execute("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                    (seeded_project["doc_a"], ch))
+        cur.execute("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                    (seeded_project["doc_b"], nyseg))
+    finally:
+        conn.close()
+
+    out = _run(project, capsys, extra=["--tag", "ch"])
+    assert out["document_count"] == 1
+    # nyseg lives only on beta, which is outside the ch slice → it's dropped.
+    assert out["tags"] == [{"name": "ch", "document_count": 1}]
+    assert out["filters"]["tags"] == ["ch"]
+
+
+def test_describe_corpus_date_bound_reports_excluded_nulls(seeded_project, capsys):
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET authored_date = '2024-03-01' WHERE document_id = ?",
+            (seeded_project["doc_a"],),
+        )
+    finally:
+        conn.close()
+
+    out = _run(project, capsys, extra=["--authored-after", "2024-01-01"])
+    assert out["document_count"] == 1   # only dated alpha survives the bound
+    assert out["authored_date"] == {
+        "min": "2024-03-01", "max": "2024-03-01",
+        "dated_document_count": 1, "undated_document_count": 0,
+    }
+    assert out["documents_by_year"] == [{"year": "2024", "document_count": 1}]
+    # beta is undated → dropped by the bound, surfaced honestly.
+    assert out["filters"]["excluded_null_dated"] == 1
+    assert out["filters"]["authored_after"] == "2024-01-01"
+
+
+def test_describe_corpus_scoped_content_mix_reaches_images(seeded_project, capsys):
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        # An image on beta adds image_ocr + image_description chunks.
+        seed_image(conn, seeded_project["doc_b"], file_hash="img1",
+                   file_path="/tmp/img1.png")
+    finally:
+        conn.close()
+
+    out = _run(project, capsys,
+               extra=["--in-documents", str(seeded_project["doc_b"])])
+    assert {r["content_type"]: r["chunk_count"] for r in out["content_mix"]} == {
+        None: 2, "image_ocr": 1, "image_description": 1,
+    }
+    assert out["chunk_count"] == 4  # 2 text + 2 image chunks, all on beta
+
+
+def test_describe_corpus_empty_slice_is_all_zeros_with_filters(seeded_project, capsys):
+    out = _run(seeded_project["project"], capsys,
+               extra=["--in-documents", "999999"])
+    assert out["document_count"] == 0
+    assert out["chunk_count"] == 0
+    assert out["token_count"] == 0
+    assert out["content_mix"] == []
+    assert out["tags"] == []
+    assert out["largest_documents"] == []
+    assert out["authored_date"] == {
+        "min": None, "max": None,
+        "dated_document_count": 0, "undated_document_count": 0,
+    }
+    # Still self-describing — the filter that emptied the slice is echoed.
+    assert out["filters"]["in_documents"] == [999999]
+
+
+def test_describe_corpus_invalid_date_raises(seeded_project):
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        describe_corpus.main(["--project", seeded_project["project"],
+                              "--authored-after", "nonsense"])
+    assert exc.value.code == 1
