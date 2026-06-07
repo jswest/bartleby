@@ -11,7 +11,7 @@
 {:else}
   <ul class="entity-list">
     {#each data.tags as t}
-      <li class="entity">
+      <li class="entity surface">
         <h2><a href="/tags/{t.tag_id}">{t.name}</a></h2>
         <p class="meta">
           {pluralize(t.document_count, "document")}

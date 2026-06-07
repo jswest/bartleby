@@ -58,6 +58,6 @@
 
 <style>
   .empty {
-    margin-top: 2rem;
+    margin-top: var(--space-2xl);
   }
 </style>

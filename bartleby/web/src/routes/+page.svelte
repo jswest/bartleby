@@ -1,5 +1,6 @@
 <script>
   import { pluralize, stripExt } from "$lib/format.js";
+  import StatusBanner from "$lib/components/StatusBanner.svelte";
   export let data;
 
   $: ({ project, counts, corpus, error } = data);
@@ -37,10 +38,10 @@
   </ul>
 
   {#if error}
-    <p class="overview-error">
+    <StatusBanner variant="error">
       Corpus overview unavailable: {error.message}
       {#if error.code}<span class="code">({error.code})</span>{/if}
-    </p>
+    </StatusBanner>
   {:else if corpus}
     <div class="overview">
       <div class="stat-strip">
@@ -130,17 +131,19 @@
 </section>
 
 <style>
+  /* The corpus dashboard is intentionally wider than the text-column width
+     (--width-content); it's a grid of panels, not a reading column. */
   .home {
     max-width: 52rem;
   }
   h1.display {
     font-family: var(--font-display);
-    font-size: 3rem;
-    margin-bottom: 0.25rem;
+    font-size: var(--text-5xl);
+    margin-bottom: var(--space-2xs);
   }
   .tagline {
     color: var(--color-off);
-    margin-bottom: 2rem;
+    margin-bottom: var(--space-2xl);
   }
   .project {
     font-family: var(--font-display);
@@ -150,93 +153,81 @@
     padding: 0;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-    gap: 1rem;
+    gap: var(--space-lg);
   }
   ul.cards a {
     display: block;
-    padding: 1.25rem;
-    border: 1px solid #d6d4c6;
-    border-radius: 6px;
+    padding: var(--space-lg);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-lg);
     text-decoration: none;
     color: inherit;
-    background: #fafaf6;
+    background: var(--color-surface-card);
     transition: border-color 0.1s, background 0.1s;
   }
   ul.cards a:hover {
     border-color: var(--color-off);
-    background: #fff;
+    background: var(--color-surface);
   }
   ul.cards h2 {
-    font-size: 1rem;
+    font-size: var(--text-base);
     color: var(--color-off);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.5rem;
+    letter-spacing: var(--tracking-wide);
+    margin-bottom: var(--space-sm);
   }
   .count {
     font-family: var(--font-display);
-    font-size: 2.5rem;
+    font-size: var(--text-4xl);
     line-height: 1;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--space-sm);
   }
   .hint {
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     color: var(--color-off);
   }
 
-  .overview-error {
-    margin-top: 2rem;
-    font-family: var(--font-sans);
-    font-size: 0.9rem;
-    color: #8a2b22;
-  }
   .overview {
-    margin-top: 2.5rem;
+    margin-top: var(--space-3xl);
     font-family: var(--font-sans);
   }
   .stat-strip {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 1.5rem;
-    padding-bottom: 1.25rem;
+    gap: var(--space-sm) var(--space-xl);
+    padding-bottom: var(--space-lg);
     border-bottom: 1px solid var(--color-rule);
-    font-size: 0.9rem;
-    color: #333;
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
   }
   .stat-strip strong {
     font-family: var(--font-display);
   }
-  .muted {
-    color: var(--color-off);
-  }
-  .code {
-    color: var(--color-token-dark);
-  }
 
   .panels {
-    margin-top: 1.5rem;
+    margin-top: var(--space-xl);
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-    gap: 1.5rem 2rem;
+    gap: var(--space-xl) var(--space-2xl);
   }
   .panel h3 {
-    font-size: 0.7rem;
+    font-size: var(--text-2xs);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: var(--tracking-wide);
     color: var(--color-off);
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--space-md);
   }
   .rows {
     list-style: none;
     padding: 0;
     margin: 0;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
   .rows li {
     display: flex;
     justify-content: space-between;
-    gap: 1rem;
-    padding: 0.2rem 0;
+    gap: var(--space-lg);
+    padding: var(--space-2xs) 0;
   }
   .rows a {
     color: var(--color-token-dark);
@@ -250,14 +241,14 @@
     list-style: none;
     padding: 0;
     margin: 0;
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
   .histogram li {
     display: grid;
     grid-template-columns: 3rem 1fr 2.5rem;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.15rem 0;
+    gap: var(--space-sm);
+    padding: var(--space-3xs) 0;
   }
   .bar-track {
     background: var(--color-rule);
@@ -273,23 +264,5 @@
   .bar-count {
     text-align: right;
     color: var(--color-off);
-  }
-
-  .tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-  .tag {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border: 1px solid var(--color-rule);
-    border-radius: 3px;
-    font-size: 0.8rem;
-    color: inherit;
-    text-decoration: none;
-  }
-  a.tag:hover {
-    border-color: var(--color-off);
   }
 </style>
