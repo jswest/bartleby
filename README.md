@@ -299,6 +299,7 @@ Interactive configuration wizard. Asks for:
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
+| Docling device | `cpu` | `cpu` (default; required on Apple Silicon) or `cuda` to run docling's layout/OCR/table models on an NVIDIA GPU. Asked only when docling is in use. See [docs/gpu-ingest.md](docs/gpu-ingest.md) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
