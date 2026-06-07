@@ -431,7 +431,13 @@ Five views:
 - `/documents` — the ingested corpus, filterable by authored-date range (with an include-undated toggle) and tag, sortable by title / date / ingest order, and paginated. Each row shows its assigned tag chips (hover a chip for the tag's description); when a date filter hides undated documents it says how many and offers to show them. Click through to a split view: the one-shot summary on the left, the original document on the right.
 - `/tags` — the controlled tag vocabulary: every tag with its description and document count. Click a tag to see the documents carrying it.
 
-![Findings view: the saved finding's body on the left with inline citation chips, the source PDF on the right at the cited page.](./docs/serve-findings.png)
+![Corpus overview (`/`): document, chunk, and token totals, the authored-date range, a documents-by-year histogram, summary coverage, content mix, and the largest documents for the active project.](./docs/serve-overview.png)
+
+![Search (`/search`): fused full-text + semantic results across documents, findings, and images, with source-kind / tag / scope filters and markdown-aware snippets.](./docs/serve-search.png)
+
+![Findings (`/findings`): the saved finding's body on the left with inline citation chips, the source PDF on the right at the cited page.](./docs/serve-findings.png)
+
+![Documents (`/documents`): the ingested corpus with authored-date and tag filters, sorting, and paging — each row showing its file name, page count, and one-shot summary.](./docs/serve-documents.png)
 
 Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
 
