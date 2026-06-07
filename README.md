@@ -20,7 +20,7 @@ At the _Wall Street Journal_, we have found it useful to let an AI agent run wil
 It's split into two pieces that share a SQLite database:
 
 - **The `bartleby` CLI** scribes (parses, chunks, embeds, and indexes) documents. It also exposes helper commands that agents use during research sessions. Run on its own, it gives you a rich, queryable corpus regardless of whether you ever point an agent at it.
-- **The `bartleby` skill** (in [`./skill`](./skill)) is a skill you drop into Claude Code, Cowork, Goose, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
+- **The `bartleby` skill** (in [`./bartleby/skill`](./bartleby/skill)) is a skill you drop into Claude Code, Cowork, Goose, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
 
 A SQLite database binds these two together. The CLI writes it, the skill romps through it, writing findings back into it as it cavorts.
 
@@ -117,19 +117,10 @@ Compare its minor (middle) number to what `bartleby --version` currently reports
 uv tool install 'git+https://github.com/jswest/bartleby.git@<latest>#egg=bartleby[docling,sec2md]' --force
 ```
 
-**2. Re-copy the skill at the matching tag.** The skill is a folder of files, so it can't ride the `git+https` install — you need the repo checked out at `<latest>`:
+**2. Refresh the skill.** The skill now ships *inside* the package, so the CLI you just reinstalled already carries the matching version — `bartleby ready` stamps it straight into `~/.claude/skills/bartleby` with no separate checkout:
 
 ```
-git clone https://github.com/jswest/bartleby.git   # first time only
-cd bartleby && git fetch && git checkout <latest>
-```
-
-Then re-copy it, following the same **`rm -rf` first, then `cp -r`** rule from [Install the skill](#install-the-skill) (skip the `rm` and you nest a stale `SKILL.md`):
-
-```
-rm -rf ~/.claude/skills/bartleby     # do NOT skip this line
-cp -r skill ~/.claude/skills/bartleby
-ls ~/.claude/skills/bartleby/SKILL.md   # confirm it landed directly under bartleby/
+bartleby ready
 ```
 
 Restart your harness afterward so it reloads the skill.
@@ -138,17 +129,13 @@ Restart your harness afterward so it reloads the skill.
 
 ### Install the skill
 
-The skill lives in [`./skill`](./skill). Copy it into your harness's skills directory — **always delete the old copy first, then copy.** For Claude Code:
+The skill ships inside the package, so one command installs (or refreshes) it into your harness's skills directory:
 
 ```
-mkdir -p ~/.claude/skills
-rm -rf ~/.claude/skills/bartleby     # do NOT skip this line
-cp -r skill ~/.claude/skills/bartleby
+bartleby ready
 ```
 
-Don't skip the `rm -rf`. If `~/.claude/skills/bartleby/` already exists, `cp -r skill ~/.claude/skills/bartleby` copies the folder *inside* it — you end up with `~/.claude/skills/bartleby/skill/SKILL.md`, nested one level too deep. Your harness keeps reading the **old** top-level `SKILL.md` and never sees the new one, which shows up as stale or surprising agent behavior after an update.
-
-So `SKILL.md` must land *directly* under `~/.claude/skills/bartleby/`, not inside a subfolder:
+This stamps the skill that came with your installed `bartleby` into `~/.claude/skills/bartleby/`, **replacing any prior copy** so `SKILL.md` always lands *directly* under `~/.claude/skills/bartleby/` — never nested a level too deep:
 
 ```
 ~/.claude/skills/bartleby/
@@ -156,15 +143,13 @@ So `SKILL.md` must land *directly* under `~/.claude/skills/bartleby/`, not insid
 └── SKILL.md
 ```
 
-Confirm it landed in the right place:
+`bartleby ready` is idempotent and version-aware: re-running it when nothing changed is a no-op. Useful variants:
 
-```
-ls ~/.claude/skills/bartleby/SKILL.md
-```
+- `bartleby ready --check` — report whether the installed skill is current and exit non-zero if it's missing or stale, **without writing anything** (handy in scripts).
+- `bartleby ready --force` — reinstall even when already up to date.
+- `bartleby ready --dest <dir>` — install into a different skills directory (other harnesses also read `~/.claude/skills/`).
 
-If that path exists, you're set. If instead you see `~/.claude/skills/bartleby/skill/SKILL.md`, the nesting bug bit you — `rm -rf ~/.claude/skills/bartleby` and copy again.
-
-Restart your harness after copying — skills load at startup. See [`./skill/README.md`](./skill/README.md) for harness-specific notes.
+Restart your harness after installing — skills load at startup. See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for harness-specific notes.
 
 ### Verify your install
 
@@ -172,10 +157,10 @@ Restart your harness after copying — skills load at startup. See [`./skill/REA
 which bartleby                          # the CLI is on PATH
 bartleby --version                      # which version (or dev build) is installed
 bartleby project list                   # the CLI actually runs
-ls ~/.claude/skills/bartleby/SKILL.md   # the skill is discoverable
+bartleby ready --check                  # the installed skill is present and current
 ```
 
-WSJ users: once wsjpt is configured, `bartleby ready` loads the provider with no `ModuleNotFoundError: No module named 'wsjpt'`.
+WSJ users: once wsjpt is configured, `bartleby config` loads the provider with no `ModuleNotFoundError: No module named 'wsjpt'`.
 
 ### After updating Bartleby
 
@@ -185,12 +170,11 @@ This project moves fast. If you'd rather not ride `main`, [pin to a release tag]
 # 1. Reinstall the CLI (repeat whatever extras you first used)
 uv tool install '.[docling,sec2md]' --force
 
-# 2. Re-copy the skill so your agent sees the current contract
-rm -rf ~/.claude/skills/bartleby
-cp -r skill ~/.claude/skills/bartleby
+# 2. Refresh the skill so your agent sees the current contract
+bartleby ready
 ```
 
-Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1.)
+Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it.)
 
 **If the database schema changed**, existing projects won't open until they're brought up to date — a command will fail with a clear `schema version mismatch` message. Bring a project up to date with:
 
@@ -216,12 +200,12 @@ Models download **lazily, the first time each is needed** — the `BAAI/bge-base
 ### 1. Configure
 
 ```
-bartleby ready
+bartleby config
 ```
 
 The setup wizard asks for LLM provider/model, API keys, summary depth, temperature, and the max token threshold for reading whole documents. Settings save to `~/.bartleby/config.yaml`.
 
-![bartleby ready: the interactive setup wizard walking through provider, model, and summarization settings.](./docs/demo.gif)
+![bartleby config: the interactive setup wizard walking through provider, model, and summarization settings.](./docs/demo.gif)
 
 ### 2. Create a project
 
@@ -301,7 +285,7 @@ All queryable state lives in `bartleby.db`. Findings, audit logs, and agent-gene
 
 ## Command reference
 
-### `bartleby ready`
+### `bartleby config`
 
 Interactive configuration wizard. Asks for:
 
@@ -327,6 +311,19 @@ Interactive configuration wizard. Asks for:
 For local-only setups, see [Running fully local](#running-fully-local-for-sensitive-work) for the recommended model picks by hardware tier.
 
 Config saves to `~/.bartleby/config.yaml`.
+
+### `bartleby ready`
+
+Install or refresh the skill into your agent harness. Stamps the skill bundled with your installed `bartleby` into `~/.claude/skills/bartleby/` (or `--dest <dir>`), replacing any prior copy so `SKILL.md` lands directly under it. "Latest" is decided by a content hash over the skill files — not the version number — because `SKILL.md` is edited between releases, so re-running is a no-op only when the bundled skill genuinely matches what's installed.
+
+| Flag | Effect |
+| --- | --- |
+| (none) | Install or refresh if the installed copy differs from the bundled one; no-op if already current. |
+| `--check` | Report status and exit non-zero if missing or stale; writes nothing. |
+| `--force` | Reinstall even when already up to date. |
+| `--dest <dir>` | Install into a different skill directory. |
+
+Restart your harness afterward — skills load at startup.
 
 ### `bartleby project`
 
@@ -468,8 +465,8 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 
 Bartleby is built to run end-to-end without an internet connection — the path for journalists working with sensitive material. Two pieces, both pointed at the same local Ollama:
 
-1. **Ingest** — Run `bartleby ready`, set `provider: ollama` (and `vision_provider: ollama` if you want image analysis), and pick a model your hardware can run.
-2. **Research** — Install [Goose](https://goose-docs.ai/) (Apache 2.0; originally Block's, now governed by the Linux Foundation's Agentic AI Foundation) and point it at the same local Ollama. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `cp -r skill ~/.claude/skills/bartleby` install you'd do for Claude Code works unchanged. If you have Ollama, you can run [Pi](https://pi.dev), which is also excellent with `ollama launch pi --model <model-slug>`.
+1. **Ingest** — Run `bartleby config`, set `provider: ollama` (and `vision_provider: ollama` if you want image analysis), and pick a model your hardware can run.
+2. **Research** — Install [Goose](https://goose-docs.ai/) (Apache 2.0; originally Block's, now governed by the Linux Foundation's Agentic AI Foundation) and point it at the same local Ollama. Goose reads Anthropic's Agent Skills format from `~/.claude/skills/`, so the `bartleby ready` install you'd do for Claude Code works unchanged. If you have Ollama, you can run [Pi](https://pi.dev), which is also excellent with `ollama launch pi --model <model-slug>`.
 
 No prompts, source text, or research notes leave the machine.
 
@@ -496,7 +493,18 @@ To avoid a Hub network check on every run, Bartleby switches Hugging Face into o
 
 A folder you drop into your agent harness that teaches the agent how to use this database. It exposes a small set of scripts (`search`, `read_document`, `save_finding`, etc.) and a `SKILL.md` that codifies an opinionated research methodology — what counts as evidence, when to read a full document vs. searching, how to cite.
 
-See [`./skill/README.md`](./skill/README.md) for the full story.
+See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for the full story.
+
+---
+
+## Contributing
+
+Bartleby is built hand-in-hand with Claude Code, and the workflow that makes that
+work — the `/ship` issue→PR loop, the worktree convention, the commit gates, the
+safety hook — is version-controlled right in the repo. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for how we develop here (and how to do it by
+hand if you'd rather). Architectural invariants and the decision log live in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 

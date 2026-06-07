@@ -26,17 +26,19 @@ Every script opens the project DB via the shared runner, which validates the sch
 
 ## Installation
 
-Copy the skill directory into your harness's skills location.
+The skill ships inside the `bartleby` package, so the CLI installs it for you.
 
 **Claude Code:**
 
 ```
-cp -r skill ~/.claude/skills/bartleby
+bartleby ready
 ```
 
-**Other harnesses:** consult the harness's docs for where skills live. The skill is a self-contained folder; you should be able to drop it anywhere a compliant harness reads skills from.
+This stamps the skill into `~/.claude/skills/bartleby/`. Re-run it any time to refresh; `bartleby ready --check` reports whether your installed copy is current.
 
-The main [README](../README.md#install-the-skill) has a note about re-copying after every `git pull` — worth reading if you're updating an existing install.
+**Other harnesses:** point it elsewhere with `bartleby ready --dest <dir>`. The skill is a self-contained folder; it drops anywhere a compliant harness reads skills from.
+
+The main [README](../../README.md#install-the-skill) covers refreshing after an update — worth reading if you're updating an existing install.
 
 ---
 

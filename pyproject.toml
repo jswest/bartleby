@@ -66,10 +66,15 @@ include = ["bartleby*"]
 # works from an installed wheel, not just a checkout. Only the source is bundled;
 # node_modules/.svelte-kit/build are dev/build artifacts regenerated at runtime,
 # and package-lock.json is not tracked (npm regenerates it on first install).
+#
+# The harness-facing skill (SKILL.md + README.md) ships under bartleby/skill so
+# `bartleby ready` can stamp it into ~/.claude/skills from an installed tool, not
+# just a checkout — same reasoning as the web bundle above.
 [tool.setuptools.package-data]
 bartleby = [
     "web/package.json",
     "web/svelte.config.js",
     "web/vite.config.js",
     "web/src/**/*",
+    "skill/*",
 ]

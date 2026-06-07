@@ -1,339 +1,133 @@
-"""Interactive configuration wizard for Bartleby."""
+"""`bartleby ready` — install or refresh the skill into an agent harness.
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
+The harness-facing skill (SKILL.md + README.md) ships as package data under
+``bartleby/skill``, so this command works from an installed tool, not just a
+checkout. It stamps that skill into ``~/.claude/skills/bartleby`` (or
+``--dest``), wiping any prior copy first so the folder can't nest one level
+too deep — the classic ``cp -r`` footgun the README used to warn about.
 
-from bartleby.config import CONFIG_PATH, load_config, save_config
-from bartleby.lib.consts import (
-    DEFAULT_HTML_CONVERTER,
-    DEFAULT_OCR_MIN_CONFIDENCE,
-    DEFAULT_PDF_CONVERTER,
-    DEFAULT_SPARSE_TEXT_THRESHOLD,
-    DEFAULT_VISION_MAX_DIMENSION,
-    DEFAULT_VISION_MIN_DIMENSION,
-)
-from bartleby.providers import ALLOWED_PROVIDERS
+"Latest" is decided by a content hash over the skill's files, not the version
+number: ``SKILL.md`` is edited constantly off-tag, so two builds at the same
+version can carry different skills. A small ``.bartleby-skill`` marker written
+into the destination records that hash plus the bartleby version that produced
+it, so we can report ``up to date`` vs ``stale`` and show a readable version
+line.
+"""
 
-ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
-ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
-ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
+from __future__ import annotations
 
-PROVIDER_DEFAULT_MODEL = {
-    "anthropic": "claude-haiku-4-5",
-    "openai": "gpt-5-mini",
-    "ollama": "qwen3-vl:30b",
-    "wsjpt": "fast",
-}
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
 
-VISION_PROVIDER_DEFAULT_MODEL = {
-    "anthropic": "claude-haiku-4-5",
-    "openai": "gpt-5-mini",
-    "ollama": "qwen3-vl:30b",
-    "wsjpt": "fast",
-}
+import bartleby
+from bartleby import __version__
+from bartleby.lib import console
 
-DEFAULT_SUMMARY_DEPTH = "one-shot"
-DEFAULT_TEMPERATURE = 0.0
-DEFAULT_MAX_SUMMARIZE_TOKENS = 50_000
-DEFAULT_MAX_READ_TOKENS = 50_000
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_DEST = Path.home() / ".claude" / "skills" / "bartleby"
 
-console = Console()
+# Hidden marker dropped alongside SKILL.md so we can recognise our own installs
+# and report the version that produced them. Harnesses ignore unknown files.
+MARKER_NAME = ".bartleby-skill"
 
 
-def _help(text: str) -> None:
-    """Print a concise, dim help blurb above the upcoming prompt.
+def _source_dir() -> Path:
+    """The packaged skill directory — resolves for a checkout and a wheel alike."""
+    return Path(bartleby.__file__).resolve().parent / "skill"
 
-    The wizard's prompt labels stay short (Rich renders them on one line); the
-    orienting detail lives here, indented and dimmed so it reads as secondary.
-    Multi-line strings are printed line-for-line.
+
+def _hash_dir(root: Path) -> str | None:
+    """SHA-256 over the directory's files (name + bytes), sorted for stability.
+
+    The marker is excluded so an install's own version stamp doesn't perturb
+    the content identity it records. Returns ``None`` when ``root`` is absent.
     """
-    for line in text.split("\n"):
-        console.print(f"  {line}", style="dim")
+    if not root.is_dir():
+        return None
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.name == MARKER_NAME or not path.is_file():
+            continue
+        h.update(path.relative_to(root).as_posix().encode())
+        h.update(b"\0")
+        h.update(path.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
 
 
-def _prompt_provider(existing: dict, *, help_text: str,
-                     label: str = "LLM provider",
-                     key: str = "provider") -> str:
-    default_provider = existing.get(key, "anthropic")
-    if default_provider not in ALLOWED_PROVIDERS:
-        default_provider = "anthropic"
-    choices = " / ".join(ALLOWED_PROVIDERS)
-    _help(help_text)
-    while True:
-        provider = Prompt.ask(
-            f"{label} ({choices})", default=default_provider
-        ).lower()
-        if provider in ALLOWED_PROVIDERS:
-            return provider
-        console.print(f"[red]Invalid provider. Choose from: {choices}[/red]")
+def _read_marker(dest: Path) -> dict:
+    marker = dest / MARKER_NAME
+    if not marker.is_file():
+        return {}
+    try:
+        return json.loads(marker.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
-def _prompt_model(provider: str, existing: dict,
-                  *, help_text: str, key: str = "model",
-                  defaults: dict[str, str] = PROVIDER_DEFAULT_MODEL) -> str:
-    default_model = existing.get(key) or defaults[provider]
-    _help(help_text)
-    return Prompt.ask("Model name", default=default_model)
+def _looks_like_skill_dir(dest: Path) -> bool:
+    """A guard against ``rmtree``-ing an unrelated directory passed as --dest."""
+    return (dest / "SKILL.md").is_file() or (dest / MARKER_NAME).is_file()
 
 
-def _prompt_api_key(provider: str, existing: dict, *, help_text: str | None = None) -> str | None:
-    field = f"{provider}_api_key"
-    existing_key = existing.get(field, "")
-    _help(help_text or (
-        "Saved to the config file. Leave blank to fall back to the "
-        f"{provider.upper()}_API_KEY environment variable."
-    ))
-    if existing_key:
-        if Confirm.ask("API key already configured. Update it?", default=False):
-            entered = Prompt.ask("API key", password=True)
-            return entered or existing_key
-        return existing_key
-    entered = Prompt.ask(
-        "API key (optional)", password=True, default=""
-    )
-    return entered or None
-
-
-def _prompt_pdf_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("pdf_converter", DEFAULT_PDF_CONVERTER)
-    if default not in ALLOWED_PDF_CONVERTERS:
-        default = DEFAULT_PDF_CONVERTER
-    choices = " / ".join(ALLOWED_PDF_CONVERTERS)
-    _help(help_text)
-    while True:
-        b = Prompt.ask(
-            f"PDF converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_PDF_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_html_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("html_converter", DEFAULT_HTML_CONVERTER)
-    if default not in ALLOWED_HTML_CONVERTERS:
-        default = DEFAULT_HTML_CONVERTER
-    choices = " / ".join(ALLOWED_HTML_CONVERTERS)
-    _help(help_text)
-    while True:
-        b = Prompt.ask(
-            f"HTML converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_HTML_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_summary_depth(existing: dict, *, help_text: str) -> str:
-    default = existing.get("summary_depth", DEFAULT_SUMMARY_DEPTH)
-    choices = " / ".join(ALLOWED_SUMMARY_DEPTHS)
-    _help(help_text)
-    while True:
-        depth = Prompt.ask(
-            f"Summary depth ({choices})", default=default
-        ).lower()
-        if depth in ALLOWED_SUMMARY_DEPTHS:
-            return depth
-        console.print(f"[red]Invalid summary depth. Choose from: {choices}[/red]")
-
-
-def _prompt_temperature(existing: dict, *, help_text: str) -> float:
-    default = float(existing.get("temperature", DEFAULT_TEMPERATURE))
-    _help(help_text)
-    while True:
-        t = FloatPrompt.ask("Temperature", default=default)
-        if 0 <= t <= 1:
-            return t
-        console.print("[red]Temperature must be between 0 and 1[/red]")
-
-
-def _prompt_ollama_url(existing: dict) -> str:
-    _help("Where your local Ollama server listens.")
-    return Prompt.ask(
-        "Ollama server URL",
-        default=existing.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL),
+def _install(src: Path, dest: Path, src_hash: str) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+    (dest / MARKER_NAME).write_text(
+        json.dumps({"version": __version__, "hash": src_hash}) + "\n"
     )
 
 
-def _prompt_positive_int(prompt: str, default: int, *, help_text: str) -> int:
-    _help(help_text)
-    while True:
-        n = IntPrompt.ask(prompt, default=default)
-        if n > 0:
-            return n
-        console.print("[red]Must be a positive integer[/red]")
+def main(*, dest: Path | None = None, check: bool = False, force: bool = False) -> None:
+    src = _source_dir()
+    src_hash = _hash_dir(src)
+    if src_hash is None:
+        console.error(f"Skill source not found at {src}.")
+        sys.exit(1)
 
+    dest = dest or DEFAULT_DEST
+    dest_hash = _hash_dir(dest)
+    installed_version = _read_marker(dest).get("version")
+    up_to_date = dest_hash is not None and dest_hash == src_hash
 
-def main():
-    console.print(Panel.fit(
-        "[bold cyan]Bartleby Configuration[/bold cyan]\n"
-        "Let's set up your preferences and API keys.",
-        border_style="cyan",
-    ))
-
-    existing = load_config()
-    # Rebuild the config from prompts; only preserve project-pointer state.
-    config: dict = {}
-    if existing.get("active_project"):
-        config["active_project"] = existing["active_project"]
-
-    console.print("\n[bold]LLM Configuration[/bold] (for ingest-time summarization)")
-    _help(
-        "An LLM summarizes each document at ingest. Summaries are searchable "
-        "and shown when browsing.\nSkip this to ingest and index raw text only."
-    )
-    use_llm = Confirm.ask(
-        "Do you want to configure an LLM provider?",
-        default=bool(existing.get("provider")),
-    )
-
-    if use_llm:
-        provider = _prompt_provider(
-            existing,
-            help_text="The service that runs your summarization model.",
-        )
-        config["provider"] = provider
-        config["model"] = _prompt_model(
-            provider, existing,
-            help_text="The summarization model. The default is a fast, "
-            "low-cost choice for this provider.",
-        )
-
-        if provider in ("anthropic", "openai", "wsjpt"):
-            key = _prompt_api_key(provider, existing)
-            field = f"{provider}_api_key"
-            if key:
-                config[field] = key
-            else:
-                config.pop(field, None)
-        elif provider == "ollama":
-            config["ollama_base_url"] = _prompt_ollama_url(existing)
-
-        console.print("\n[bold]Summarization[/bold]")
-        depth = _prompt_summary_depth(
-            existing,
-            help_text="none = skip summaries; one-shot = one summary per "
-            "document.\nSummaries are indexed for search/scan and shown in listings.",
-        )
-        config["summary_depth"] = depth
-        if depth == "one-shot":
-            config["temperature"] = _prompt_temperature(
-                existing,
-                help_text="0 = deterministic, repeatable summaries; higher = "
-                "more varied wording.\nLeave at 0 unless summaries feel too rigid.",
-            )
-            config["max_summarize_tokens"] = _prompt_positive_int(
-                "Max summarization input tokens",
-                int(existing.get("max_summarize_tokens", DEFAULT_MAX_SUMMARIZE_TOKENS)),
-                help_text="Caps how much document text is sent to the summarizer; "
-                "longer documents are truncated.\nHigher = more context, higher cost.",
+    if check:
+        if up_to_date:
+            console.complete(f"Skill is up to date (v{installed_version or '?'}) at {dest}.")
+            return
+        if dest_hash is None:
+            console.warn(f"Skill is not installed at {dest}. Run `bartleby ready`.")
+        elif installed_version == __version__:
+            console.warn(
+                f"Skill content has drifted from the packaged copy (v{__version__}). "
+                "Run `bartleby ready`."
             )
         else:
-            config.pop("temperature", None)
-            config.pop("max_summarize_tokens", None)
+            console.warn(
+                f"Skill is stale (installed v{installed_version or '?'} → "
+                f"packaged v{__version__}). Run `bartleby ready`."
+            )
+        sys.exit(1)
+
+    if up_to_date and not force:
+        console.complete(f"Skill already up to date (v{__version__}) at {dest}.")
+        return
+
+    if dest.exists() and any(dest.iterdir()) and not _looks_like_skill_dir(dest):
+        console.error(
+            f"{dest} exists and doesn't look like a skill directory (no SKILL.md). "
+            "Refusing to overwrite it — pass a different --dest."
+        )
+        sys.exit(1)
+
+    _install(src, dest, src_hash)
+
+    if dest_hash is None:
+        console.big(f"Installed skill v{__version__} → {dest}")
+    elif installed_version and installed_version != __version__:
+        console.big(f"Updated skill v{installed_version} → v{__version__} at {dest}")
     else:
-        # No LLM → no summarization.
-        for k in ("provider", "model", "summary_depth", "temperature",
-                 "max_summarize_tokens", "ollama_base_url",
-                 "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
-            config.pop(k, None)
-        config["summary_depth"] = "none"
-
-    console.print("\n[bold]Converters[/bold]")
-    config["pdf_converter"] = _prompt_pdf_converter(
-        existing,
-        help_text="pdfplumber = fast text extraction; docling = slower but "
-        "layout-aware (tables, columns, reading order).",
-    )
-    config["html_converter"] = _prompt_html_converter(
-        existing,
-        help_text="docling handles general HTML/Markdown; sec2md is specialized "
-        "for iXBRL EDGAR filings (preserves SEC tables/headings, others stay on "
-        "docling).",
-    )
-    config["sparse_text_threshold"] = _prompt_positive_int(
-        "Sparse-text threshold",
-        int(existing.get("sparse_text_threshold", DEFAULT_SPARSE_TEXT_THRESHOLD)),
-        help_text="Pages with fewer than this many extracted characters are "
-        "treated as scanned and routed to OCR/VLM.\nLower = more pages OCR'd "
-        "(slower, catches more).",
-    )
-
-    console.print("\n[bold]Image analysis[/bold] (VLM captions/OCR for embedded + standalone images)")
-    _help(
-        "A vision model captions and OCRs images (embedded figures and "
-        "standalone image files).\nSkip to leave images unanalyzed."
-    )
-    use_vision = Confirm.ask(
-        "Configure a vision provider for image analysis?",
-        default=bool(existing.get("vision_provider")),
-    )
-    if use_vision:
-        vprovider = _prompt_provider(
-            existing, label="Vision provider", key="vision_provider",
-            help_text="The service that runs your vision (image) model.",
-        )
-        config["vision_provider"] = vprovider
-        config["vision_model"] = _prompt_model(
-            vprovider, existing,
-            key="vision_model", defaults=VISION_PROVIDER_DEFAULT_MODEL,
-            help_text="The vision model used to caption/OCR images. The default "
-            "is a fast, low-cost choice for this provider.",
-        )
-        # If the vision provider is the same as the LLM provider, reuse the
-        # api key already prompted for above. Otherwise prompt fresh.
-        if vprovider in ("anthropic", "openai", "wsjpt"):
-            if vprovider != config.get("provider"):
-                key = _prompt_api_key(vprovider, existing)
-                field = f"{vprovider}_api_key"
-                if key:
-                    config[field] = key
-        elif vprovider == "ollama":
-            # Reuse ollama_base_url if already set; otherwise prompt.
-            if "ollama_base_url" not in config:
-                config["ollama_base_url"] = _prompt_ollama_url(existing)
-        config["vision_max_dimension"] = _prompt_positive_int(
-            "Max image dimension (px)",
-            int(existing.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)),
-            help_text="Images are downscaled so their long edge is at most this "
-            "many pixels before the VLM sees them.\nLower = faster/cheaper, less detail.",
-        )
-        config["vision_min_dimension"] = _prompt_positive_int(
-            "Min image dimension (px)",
-            int(existing.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)),
-            help_text="Images with an edge smaller than this are skipped — "
-            "avoids wasting VLM calls (and crashes) on thin slivers.",
-        )
-        config["ocr_min_confidence"] = _prompt_positive_int(
-            "Tesseract min confidence",
-            int(existing.get("ocr_min_confidence", DEFAULT_OCR_MIN_CONFIDENCE)),
-            help_text="Tesseract average confidence (0-100); pages scoring below "
-            "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more.",
-        )
-    else:
-        for k in ("vision_provider", "vision_model",
-                 "vision_max_dimension", "vision_min_dimension",
-                 "ocr_min_confidence"):
-            config.pop(k, None)
-
-    console.print("\n[bold]Document reading[/bold]")
-    config["max_read_tokens"] = _prompt_positive_int(
-        "Max read tokens",
-        int(existing.get("max_read_tokens", DEFAULT_MAX_READ_TOKENS)),
-        help_text="An agent's `read_document` must pass --force to pull a "
-        "document larger than this many tokens.\nGuards against blowing the "
-        "context window on a huge file.",
-    )
-
-    save_config(config)
-
-    console.print("\n[bold green]Configuration saved.[/bold green]")
-    console.print(f"Config location: [cyan]{CONFIG_PATH}[/cyan]")
-
-    if not config.get("active_project"):
-        console.print(
-            "\n[yellow]Tip:[/yellow] Create a project with "
-            "[bold]bartleby project create <name>[/bold]"
-        )
+        console.big(f"Refreshed skill v{__version__} at {dest}")
+    console.warn("Restart your harness so it reloads the skill.")
