@@ -202,7 +202,7 @@ bartleby session start --no-memory
 bartleby serve
 ```
 
-Spins up a local SvelteKit UI for the active project. `/documents` shows every ingested file alongside its summary and the original PDF; `/findings` shows every saved research note with inline citation chips that jump to the cited page in the source. Safe to leave running alongside an ingest or a research session — it opens the database read-only. Requires Node.js and npm on `PATH`.
+Spins up a local SvelteKit UI for the active project. The landing page is a corpus overview (date range, year histogram, tags, largest documents); `/documents` lists every ingested file with date/tag filters and paging, alongside its summary and the original PDF; `/findings` shows every saved research note with inline citation chips that jump to the cited page in the source. Safe to leave running alongside an ingest or a research session — it opens the database read-only. Requires Node.js and npm on `PATH`.
 
 ---
 
@@ -373,15 +373,15 @@ bartleby serve
 
 Five views:
 
-- `/` — landing page with counts for the active project.
+- `/` — a corpus overview for the active project (the same aggregate the agent's `describe_corpus` returns): document / chunk / token totals, the authored-date range shown with its undated count, a documents-by-year histogram, summary coverage, content mix, tag chips, and the largest documents — plus nav cards into findings and documents.
 - `/search` — search the whole corpus using the same engine the agent uses. **Search** mode fuses full-text + semantic ranking (RRF) across documents, summaries, findings, and images; **Scan** mode enumerates *every* chunk matching a literal phrase, paginated. Filter by source kind, tag, and document scope; expand any hit to its full text or open the source file at the cited page. (Semantic queries load the embedding model per request, so the first hit takes a few seconds — the page shows a loading state.)
 - `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page.
-- `/documents` — every ingested document, alphabetized by summary title, each showing its assigned tag chips (hover a chip for the tag's description). Click through to a split view: the one-shot summary on the left, the original document on the right.
+- `/documents` — the ingested corpus, filterable by authored-date range (with an include-undated toggle) and tag, sortable by title / date / ingest order, and paginated. Each row shows its assigned tag chips (hover a chip for the tag's description); when a date filter hides undated documents it says how many and offers to show them. Click through to a split view: the one-shot summary on the left, the original document on the right.
 - `/tags` — the controlled tag vocabulary: every tag with its description and document count. Click a tag to see the documents carrying it.
 
 ![Findings view: the saved finding's body on the left with inline citation chips, the source PDF on the right at the cited page.](./docs/serve-findings.png)
 
-Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; search runs the skill scripts (`search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
+Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
 
 ---
 
