@@ -39,6 +39,8 @@ def test_search_full_text_only_documents(seeded_project, capsys):
     assert out["modes"] == ["full-text"]
     assert out["source_kinds"] == ["document", "image"]
     assert out["memory_excluded"] is False
+    # Unfiltered search → no filters echo (uniform contract with scan/list_*).
+    assert "filters" not in out
     # "pm25" appears only in alpha doc, chunk 0.
     texts = [r["text"] for r in out["results"]]
     assert any("pm25" in t for t in texts)
@@ -313,7 +315,7 @@ def test_search_in_documents_filters_to_listed_docs(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     # "alpha" appears in doc_a's chunks, but we scoped to doc_b — no hits.
-    assert out["in_documents"] == [seeded_project["doc_b"]]
+    assert out["filters"]["in_documents"] == [seeded_project["doc_b"]]
     assert out["results"] == []
 
 
@@ -373,7 +375,7 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["in_documents"] == [99999]
+    assert out["filters"]["in_documents"] == [99999]
     assert out["results"] == []
 
 

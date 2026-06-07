@@ -11,14 +11,19 @@ underlying document carries any of the given tags. Combines naturally with
 ``--in-documents`` (intersection: the document must be in both sets) and
 drops findings the same way (findings have no document anchor).
 
+Whenever a scope filter (``--in-documents`` / ``--tag``) is active the response
+carries a nested ``filters`` object echoing it — ``{tags, in_documents,
+authored_after, authored_before, include_nulls, excluded_null_dated}`` — the
+same contract ``scan`` / ``list_documents`` / ``describe_corpus`` emit (search
+takes no date bounds, so those keys are null/0). It is absent on an unfiltered
+search; the query terms themselves always stay top-level under ``query``.
+
 Output:
     {
       "query": str,
       "modes": [str, ...],
       "source_kinds": [str, ...],
       "memory_excluded": bool,
-      "in_documents": [int, ...]|null,
-      "tags": [str, ...]|null,
       "context": int,
       "results": [{
         "chunk_id": int, "source_kind": str, "source_id": int,
@@ -62,7 +67,7 @@ from bartleby.skill_scripts._common import (
     apply_preview, chunk_locations, comma_int_list, memory_enabled,
     positive_int, source_names,
 )
-from bartleby.skill_scripts._tags import intersect_tag_filter
+from bartleby.skill_scripts._tags import resolve_scope
 
 
 RRF_K = 60
@@ -360,9 +365,9 @@ def work(*, conn, args, session_id) -> dict:
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
-    in_documents, tag_names = intersect_tag_filter(
-        conn, args.in_documents, args.tags,
-    )
+    scope = resolve_scope(conn, in_documents=args.in_documents, tags=args.tags)
+    # None = whole corpus, [] = a filter matched nothing, else the resolved slice.
+    restrict = scope.document_ids
 
     # Findings drop out when memory is off OR when --in-documents/--tag is set
     # (findings have no document anchor). memory_excluded reports only the
@@ -370,34 +375,33 @@ def work(*, conn, args, session_id) -> dict:
     memory_excluded = (
         "finding" in source_kinds and not memory_enabled(conn, session_id)
     )
-    drop_findings = memory_excluded or in_documents is not None
+    drop_findings = memory_excluded or restrict is not None
     if drop_findings:
         source_kinds = [k for k in source_kinds if k != "finding"]
 
     def _response(results: list) -> dict:
-        return {
+        return scope.echo_into({
             "query": args.query,
             "modes": modes,
             "source_kinds": source_kinds,
             "memory_excluded": memory_excluded,
-            "in_documents": in_documents,
-            "tags": tag_names,
             "context": args.context,
             "results": results,
-        }
+        })
 
-    if not source_kinds:
+    # No source kinds left, or a scope filter that matched nothing: zero hits.
+    if not source_kinds or (restrict is not None and not restrict):
         return _response([])
 
-    scope = _build_scope(conn, source_kinds, in_documents)
+    scope_dict = _build_scope(conn, source_kinds, restrict)
     overfetch = max(args.limit * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR)
 
     rankings: list[list[int]] = []
     if "full-text" in modes:
-        rankings.append(_fts_search(conn, args.query, scope, overfetch))
+        rankings.append(_fts_search(conn, args.query, scope_dict, overfetch))
     if "semantic" in modes:
         rankings.append(
-            _semantic_search(conn, _embed_query(args.query), scope, overfetch)
+            _semantic_search(conn, _embed_query(args.query), scope_dict, overfetch)
         )
 
     scored = _rrf(rankings)[: args.limit]

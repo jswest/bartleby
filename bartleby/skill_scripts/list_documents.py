@@ -12,8 +12,8 @@ Output:
       "documents": [{...}, ...],
       "total": int,                  # documents matching all active filters
       "offset": int, "limit": int, "verbose": bool,
-      "excluded_null_dated": int,    # NULL-dated docs hidden by a date bound
       "hint": str|null               # set when more pages remain
+      # plus "filters": {...} when a scope filter (--tag / date bound) is active
     }
 
 ``title``, ``description``, and ``authored_date`` come from the document's
@@ -34,9 +34,14 @@ Date filtering: ``--authored-after`` / ``--authored-before`` bound
 summarizer-inferred and stored NULL on anything that isn't a clean
 ``YYYY-MM-DD`` — often the majority of a corpus. A date bound therefore cannot
 be satisfied by an undated document, so those are **excluded by default** and
-their count is reported as ``excluded_null_dated`` (so a hidden slice is never
-silent). Pass ``--include-nulls`` to keep undated documents in the result
-despite an active date bound.
+their count is reported as ``excluded_null_dated`` inside the ``filters`` echo
+(so a hidden slice is never silent). Pass ``--include-nulls`` to keep undated
+documents in the result despite an active date bound.
+
+Whenever any scope filter is active the response carries a ``filters`` object
+echoing it — ``{tags, in_documents, authored_after, authored_before,
+include_nulls, excluded_null_dated}`` — the same nested contract ``search`` /
+``scan`` / ``describe_corpus`` emit; it is absent on an unfiltered listing.
 """
 
 from __future__ import annotations
@@ -109,8 +114,6 @@ def work(*, conn, args, session_id) -> dict:
     pred, where_params = scope.restrict_in("d.document_id")
     where_clause = f"WHERE {pred} " if pred else ""
 
-    excluded_null_dated = scope.excluded_null_dated
-
     total = cur.execute(
         f"SELECT COUNT(*) FROM documents d {where_clause}",
         where_params,
@@ -170,15 +173,14 @@ def work(*, conn, args, session_id) -> dict:
         if has_more and documents else None
     )
 
-    return {
+    return scope.echo_into({
         "documents": documents,
         "total": total,
         "offset": args.offset,
         "limit": args.limit,
         "verbose": args.verbose,
-        "excluded_null_dated": excluded_null_dated,
         "hint": hint,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -509,7 +509,7 @@ def test_search_tag_filter_restricts_results(seeded_project, capsys, monkeypatch
         "--full-text", "alpha", "--tag", "ch",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["tags"] == ["ch"]
+    assert out["filters"]["tags"] == ["ch"]
     assert all(
         r["source_kind"] != "finding" for r in out["results"]
     )  # findings dropped under --tag
