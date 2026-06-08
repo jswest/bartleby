@@ -50,6 +50,18 @@ branch name. When present:
   **"Part of #<omnibus>"** with **no `Closes` keyword**; sub-issues close when the
   omnibus → main PR (which enumerates `Closes #<N>` for the bundle) merges. Do not
   put `Closes #<N>` on a sub-PR in this mode.
+- **Keep the omnibus issue's tracking current.** Promotion mode draws its `Closes
+  #<N>` manifest from the omnibus issue's hand-curated sub-issue checklist, which
+  drifts unless each sub-ship updates it. So when the sub-PR is opened (step 11),
+  edit the omnibus issue (`#<omnibus>`) to reflect this landing: tick this issue's
+  box `[ ]→[x]`, annotate it with the sub-PR number and target in the existing
+  style (`— … (#NNN)`), and flip any dependency/order marker the omnibus tracks.
+  **Edit only the one checklist line, by anchored match** — never free-form rewrite
+  the hand-curated body — and show the proposed issue diff at the step-11 PAUSE next
+  to the PR draft. If the omnibus issue has no checklist line referencing `#<N>`,
+  **report it and leave the body untouched** rather than invent tracking. (Ticking
+  on sub-PR-open is safe — promotion reconciles `Closes` against actually-merged
+  PRs.)
 - The guard hook still protects `main` only; the omnibus branch is not
   hook-protected. Composes with `with-playwright` and `skip-tests`.
 
@@ -168,7 +180,8 @@ origin/<base>...HEAD`) and wait for their OK. Then push and `gh pr create`.
 - Normal case: target `main` (the default) with a `Closes #<N>` line.
 - Under `onto`: pass `--base <omnibus-branch>`, and write **"Part of #<omnibus>"**
   with **no `Closes`** (see the flag note) — the sub-issue closes at the omnibus →
-  main merge, not here.
+  main merge, not here. Also show and apply the omnibus-issue tracking edit here
+  (see *Keep the omnibus issue's tracking current*).
 
 ## 12. Cleanup (only after the user confirms the merge)
 From the main checkout: `git worktree remove ../bartleby-issue-<N>-<slug>`,
