@@ -1,0 +1,3 @@
+# Skill scratch lives in `~/.bartleby/tmp/`, not `/tmp`
+
+the skill stages finding bodies (`save_finding`/`edit_finding --body-file`) under `~/.bartleby/tmp/`, created mode `700` by `config.ensure_scratch_dir()` which `skill_runner.run()` calls best-effort on every skill invocation (so the dir exists before the agent writes). `/tmp` is world-readable (`drwxrwxrwt`) on macOS, leaking in-progress research notes to other local users on shared machines (issue #13). Scratch is durable throwaway — scripts don't delete the source file after a successful write; the canonical copy is the `body` field returned to the agent. No config knob: `--body-file` still accepts any explicit path.

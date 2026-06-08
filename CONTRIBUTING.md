@@ -52,7 +52,7 @@ Almost all work starts from a GitHub issue and ends as a PR that closes it. Typi
    `uv run pytest` (must pass) → run the `simplify-refactor` agent over the touched
    files → apply the suggestions worth taking → re-run the tests → commit.
 5. **Docs sweep.** Check whether the change needs README / `ARCHITECTURE.md` /
-   `SKILL.md` updates (a new flag, changed behavior, a decision-log entry).
+   `SKILL.md` updates (a new flag, changed behavior, a new `docs/decisions/` entry).
 6. **Reconcile** with `origin/main` so any merge conflict surfaces now, not in the PR,
    then run the full test suite again.
 7. **PAUSE — PR.** Claude shows you the PR body and a final diff summary and waits
@@ -130,9 +130,11 @@ Two subagents do focused jobs so the main thread stays on the problem:
 
 ## Working agreements
 
-The full set of invariants and the decision log live in
+The full set of invariants lives in
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) — read that before changing anything
-load-bearing. The two that shape day-to-day work most:
+load-bearing; the decision log behind past calls lives one-per-file under
+[`docs/decisions/`](./docs/decisions/). The two invariants that shape day-to-day
+work most:
 
 - **No backwards compatibility, by default.** We delete old code rather than leaving
   dormant compat shims or feature-flagged old paths. The one sanctioned exception is

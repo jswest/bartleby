@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Instructions for Claude working in this repo. Terse on purpose. Two companions:
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — load-bearing invariants and the decision log. Read it before changing anything structural.
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — load-bearing invariants and current state. Read it before changing anything structural. The decision log (the *why* behind past calls) now lives one-per-file under [`docs/decisions/`](./docs/decisions/).
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — the human narrative of the workflow below.
 
 Bartleby ingests documents into per-project SQLite (FTS5 + sqlite-vec), then a
