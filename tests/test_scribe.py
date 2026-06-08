@@ -64,6 +64,16 @@ def isolated_project(tmp_path, monkeypatch):
     monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
     monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
 
+    # Pin ingest to the inline parse path. These end-to-end tests mock embedder /
+    # converters / providers, and those monkeypatches don't cross into spawned
+    # parse-pool workers — so force max_workers=1 (parse in-process) at the
+    # resolver, which holds even for tests that swap in their own load_config.
+    # The pool is exercised separately in test_ingest_pool.py with a picklable,
+    # model-free parse_fn.
+    monkeypatch.setattr(
+        "bartleby.commands.scribe._resolve_max_workers", lambda *a, **k: 1,
+    )
+
     bartleby.project.create_project("test_proj")
     yield projects
 
@@ -544,150 +554,79 @@ def test_scribe_persists_page_number_for_pdfplumber_chunks(
         conn.close()
 
 
-def test_scribe_stage_callback_progresses_through_phases(
-    isolated_project, tmp_path, mock_embed, monkeypatch
+def test_parse_document_stage_callback_fires_extract_then_embed(
+    isolated_project, tmp_path, mock_embed
 ):
-    """on_stage fires through extracting → embedding → analyzing → summarizing."""
+    """Parse emits its stages in order: extracting → embedding. (Caption and
+    summarize stages now fire downstream in the main-process drain, not here —
+    parse runs in a pool worker and only carries the parse-side stages.)"""
     from bartleby.commands import scribe as scribe_module
-    from bartleby.db.connection import open_db
-
-    stub_summary = _StubProvider()
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "one-shot",
-            "provider": "anthropic", "model": "m",
-            "temperature": 0.0, "max_summarize_tokens": 50_000,
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100, "ocr_min_confidence": 30,
-            "vision_provider": "stub", "vision_model": "stub-vl:1",
-            "vision_max_dimension": 1024,
-        },
-    )
-    monkeypatch.setattr(
-        scribe_module, "get_provider",
-        lambda name, **kwargs: stub_summary if name == "anthropic" else _StubVisionProvider(),
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        scribe_module, "chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
-
-    pdf = tmp_path / "img.pdf"
-    _pdf_with_image(pdf, _png_bytes())
-
-    stages: list[str] = []
-    archive_root = tmp_path / "archive"
-    archive_root.mkdir()
-    conn = open_db("test_proj")
-    try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=stub_summary, llm_model="m",
-            temperature=0.0, max_summarize_tokens=50_000,
-            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
-            on_stage=stages.append,
-        )
-    finally:
-        conn.close()
-
-    # Every phase fires in order; "extracting" is set by _process_one before
-    # the pdfplumber dispatcher, then the dispatcher fires embedding +
-    # analyzing images, then _process_one tops it off with summarizing.
-    assert stages[0] == "extracting"
-    assert "embedding" in stages
-    assert "analyzing images" in stages
-    assert stages[-1] == "summarizing"
-
-
-def test_scribe_page_count_callback_fires_for_pdf(
-    isolated_project, tmp_path, mock_embed, monkeypatch
-):
-    """on_page_count receives the converter's page count (issue #85)."""
-    from bartleby.commands import scribe as scribe_module
-    from bartleby.db.connection import open_db
-
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "none",
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100,
-        },
-    )
 
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
-    counts: list[int | None] = []
-    archive_root = tmp_path / "archive"
-    archive_root.mkdir()
-    conn = open_db("test_proj")
-    try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=None, llm_model=None,
-            temperature=0.0, max_summarize_tokens=1000,
-            vision_provider=None, vision_model=None,
-            on_page_count=counts.append,
-        )
-    finally:
-        conn.close()
+    stages: list[str] = []
+    scribe_module._parse_document(
+        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+        archive_root=tmp_path / "archive",
+        on_stage=stages.append,
+    )
 
-    assert counts == [1]
+    assert stages == ["extracting", "embedding"]
 
 
-def test_scribe_image_progress_callback_fires_per_image(
-    isolated_project, tmp_path, mock_embed, monkeypatch
+def test_parse_document_reports_page_count(
+    isolated_project, tmp_path, mock_embed
 ):
-    """_run_image_routes invokes on_progress(0, N) then once per image."""
+    """The parse result carries the converter's page count (issue #85)."""
+    from bartleby.commands import scribe as scribe_module
+
+    pdf = tmp_path / "doc.pdf"
+    _text_pdf(pdf)
+
+    parsed = scribe_module._parse_document(
+        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+        archive_root=tmp_path / "archive",
+    )
+
+    assert parsed.page_count == 1
+
+
+def test_caption_missing_image_progress_callback_fires_per_image(
+    isolated_project, tmp_path, mock_embed
+):
+    """The caption drain invokes on_image_progress(0, N) then once per image."""
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
-
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "none",
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100,
-            "vision_provider": "stub", "vision_model": "stub-vl:1",
-            "vision_max_dimension": 1024,
-        },
-    )
-    monkeypatch.setattr(
-        scribe_module, "get_provider",
-        lambda name, **kwargs: _StubVisionProvider(),
-    )
 
     pdf = tmp_path / "img.pdf"
     _pdf_with_image(pdf, _png_bytes())
 
-    seen: list[tuple[int, int]] = []
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     conn = open_db("test_proj")
     try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            pdf, ".pdf", file_hash="h", file_name="img.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=None, llm_model=None,
-            temperature=0.0, max_summarize_tokens=1000,
+            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        document_id = writer.persist_parse(parsed)
+
+        seen: list[tuple[int, int]] = []
+        scribe_module._caption_missing(
+            writer, document_id, "img.pdf",
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_enabled=True, on_stage=None,
             on_image_progress=lambda done, total: seen.append((done, total)),
         )
     finally:
@@ -1657,3 +1596,47 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
     scribe.main(project="test_proj", files=str(tmp_path))
 
     assert capsys.readouterr().out == ""
+
+
+# ---- _resolve_max_workers (no isolated_project: the real resolver, not the
+#      max_workers=1 pin that fixture installs) ----
+
+def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
+    from types import SimpleNamespace
+    from bartleby.commands import scribe as scribe_module
+    monkeypatch.setattr(scribe_module.os, "cpu_count", lambda: cores)
+    monkeypatch.setattr(
+        "psutil.virtual_memory",
+        lambda: SimpleNamespace(available=int(free_gb * 1024 ** 3)),
+    )
+
+
+def test_resolve_max_workers_timings_forces_one(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=16, free_gb=128)
+    assert scribe_module._resolve_max_workers({"max_workers": 8}, timings=True) == 1
+
+
+def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    # RAM-bound: 8 cores but only ~10GB free → 10 // 2.5 = 4 workers.
+    _fake_machine(monkeypatch, cores=8, free_gb=10)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 4
+    # CPU-bound: 2 cores, plenty of RAM → 2 workers.
+    _fake_machine(monkeypatch, cores=2, free_gb=128)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 2
+
+
+def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 2.5 = 0 → floored to 1
+    assert scribe_module._resolve_max_workers({}, timings=False) == 1
+
+
+def test_resolve_max_workers_honors_explicit_value_over_auto_with_warning(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=2, free_gb=128)   # auto = 2
+    warned: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", lambda m: warned.append(m))
+    assert scribe_module._resolve_max_workers({"max_workers": 6}, timings=False) == 6
+    assert warned and "max_workers=6" in warned[0]

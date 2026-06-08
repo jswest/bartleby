@@ -300,6 +300,7 @@ Interactive configuration wizard. Asks for:
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
+| Parse workers | auto | How many documents to parse in parallel. `0` = auto (`min(CPU cores, free RAM ÷ ~2.5 GB)`); raise for a faster bulk ingest on a big machine, lower if memory is tight |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |

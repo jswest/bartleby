@@ -50,6 +50,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -87,6 +88,7 @@ def test_config_with_summary_depth_none_omits_summarize_settings(
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "60000",               # Max read tokens
     ])
@@ -110,6 +112,7 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",
     ])
@@ -128,6 +131,7 @@ def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypat
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -154,6 +158,7 @@ def test_config_strips_legacy_keys_from_existing_config(isolated_config, monkeyp
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -177,6 +182,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",
+        "0",                   # Parse workers (0 = auto → omitted)
         "y",                   # Configure vision?
         "openai",              # Vision provider (same as LLM → no fresh api key)
         "gpt-5-mini",          # Vision model
@@ -210,6 +216,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",
+        "0",                   # Parse workers (0 = auto → omitted)
         "y",                   # Configure vision?
         "anthropic",           # Different provider → prompt for key
         "claude-haiku-4-5",

@@ -26,6 +26,15 @@ def _model():
     return SentenceTransformer(EMBEDDING_MODEL)
 
 
+def prewarm() -> None:
+    """Load the embedding model now (idempotent; cached per process).
+
+    The parse pool calls this in each worker's initializer so the model load is
+    paid once at startup rather than on the worker's first document.
+    """
+    _model()
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """Return a list of 768-dim float lists, one per input text.
 

@@ -35,3 +35,11 @@ DEFAULT_VISION_MAX_DIMENSION = 1024
 # either edge — thin rules, banners, sliver crops — are skipped before the VLM
 # call. 32 matches qwen3-vl's factor; raise it for models with larger patches.
 DEFAULT_VISION_MIN_DIMENSION = 32
+
+# Parse-pool sizing (#165). When `max_workers` is unset, scribe auto-picks
+# min(cpu_count, free_ram_gb // PER_WORKER_GB), floored at 1 — so a box that's
+# CPU-rich but RAM-poor doesn't launch more parse workers than memory can hold
+# and OOM. Each worker loads the embedding model and, for docling ingests, the
+# layout/table models; PER_WORKER_GB is a deliberately conservative resident-set
+# estimate for that footprint. `max_workers` in config overrides the auto-pick.
+PER_WORKER_GB = 2.5
