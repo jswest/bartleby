@@ -10,9 +10,29 @@ from __future__ import annotations
 import sys
 
 from rich.console import Console
+from rich.progress import TimeRemainingColumn
 
 import bartleby.lib.console as console_mod
-from bartleby.ingest.progress import ScribeProgress, _RESERVED_ROWS
+from bartleby.ingest.progress import (
+    ScribeProgress,
+    _ETA_MIN_SAMPLES,
+    _RESERVED_ROWS,
+    _fmt_eta,
+)
+
+
+class _FakeClock:
+    """A hand-cranked monotonic clock so ETA math is deterministic in tests."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def tick(self, dt: float) -> "_FakeClock":
+        self.t += dt
+        return self
 
 
 def _overall(sp: ScribeProgress) -> tuple[float, float]:
@@ -114,3 +134,87 @@ def test_lane_overflow_is_dropped_not_fatal():
     par.lane("w1", "a", "x")
     par.lane("w2", "b", "x")
     assert set(sp._by_key) == {"w1"}
+
+
+# -- per-phase ETA (#209) ----------------------------------------------------
+
+
+def test_fmt_eta_is_a_compact_duration():
+    assert _fmt_eta(45) == "45s"
+    assert _fmt_eta(59.9) == "59s"          # truncates, never rounds up to a minute
+    assert _fmt_eta(60) == "1m"
+    assert _fmt_eta(22 * 60) == "22m"
+    assert _fmt_eta(3600 + 3 * 60) == "1h03m"
+
+
+def test_overall_bar_has_a_time_remaining_column():
+    sp = ScribeProgress(n_lanes=2)
+    assert any(isinstance(c, TimeRemainingColumn) for c in sp._overall.columns)
+
+
+def test_eta_appears_on_the_active_phase_after_warmup():
+    # Two even ticks → a rate of 1 item/sec, so 8 of 10 left reads as ~8s.
+    clock = _FakeClock()
+    sp = ScribeProgress(n_lanes=2, clock=clock)
+    par = sp.phase("parse")
+    par.start(10)
+    clock.tick(1); par.advance()
+    clock.tick(1); par.advance()
+
+    header = sp._header().plain
+    assert "parse 2/10 · ~8s left" in header
+    assert header.count("left") == 1        # caption/summarize (pending) show none
+
+
+def test_eta_withheld_until_enough_samples():
+    clock = _FakeClock()
+    sp = ScribeProgress(n_lanes=2, clock=clock)
+    par = sp.phase("parse")
+    par.start(10)
+    # One sample short of the cold-start minimum → still no estimate.
+    for _ in range(_ETA_MIN_SAMPLES - 2):
+        clock.tick(1); par.advance()
+
+    assert sp._active_eta is None
+    assert "left" not in sp._header().plain
+
+
+def test_eta_withheld_until_enough_time_has_elapsed():
+    # Enough samples but a sub-second span is too little signal to trust.
+    clock = _FakeClock()
+    sp = ScribeProgress(n_lanes=2, clock=clock)
+    par = sp.phase("parse")
+    par.start(10)
+    clock.tick(0.2); par.advance()
+    clock.tick(0.2); par.advance()
+
+    assert len(sp._samples) >= _ETA_MIN_SAMPLES
+    assert sp._active_eta is None
+
+
+def test_eta_clears_when_the_phase_finishes():
+    clock = _FakeClock()
+    sp = ScribeProgress(n_lanes=2, clock=clock)
+    par = sp.phase("parse")
+    par.start(3)
+    clock.tick(1); par.advance()
+    clock.tick(1); par.advance()
+    assert sp._active_eta is not None       # warmed up mid-phase
+
+    clock.tick(1); par.advance()            # 3/3 — done, no ETA to show
+    assert sp._active_eta is None
+    assert "left" not in sp._header().plain
+
+
+def test_eta_does_not_bleed_across_a_phase_boundary():
+    clock = _FakeClock()
+    sp = ScribeProgress(n_lanes=2, clock=clock)
+    par = sp.phase("parse")
+    par.start(5)
+    clock.tick(1); par.advance()
+    clock.tick(1); par.advance()            # parse has an ETA
+
+    clock.tick(1); sp.phase("caption").start(8)   # fresh phase resets the window
+    assert sp._active == "caption"
+    assert sp._active_eta is None
+    assert "left" not in sp._header().plain
