@@ -151,6 +151,52 @@ def test_openai_summarize_returns_parsed_pydantic(monkeypatch):
     result = p.summarize("doc", model="gpt-5-mini", temperature=0.0)
     assert result is parsed
     assert fake.last_call["response_format"] is DocumentSummary
+    # GPT-5 models reject any non-default temperature, so we never send it.
+    assert "temperature" not in fake.last_call
+
+
+def test_openai_classify_omits_temperature(monkeypatch):
+    class _Schema(BaseModel):
+        ok: bool
+
+    parsed = _Schema(ok=True)
+    fake = _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
+    from bartleby.providers.openai import OpenAIProvider
+    p = OpenAIProvider()
+    result = p.classify("prompt", model="gpt-5-nano", schema=_Schema, temperature=0.3)
+    assert result is parsed
+    assert "temperature" not in fake.last_call
+
+
+def test_openai_warns_once_on_dropped_temperature(monkeypatch):
+    from bartleby.providers import openai as mod
+    monkeypatch.setattr(mod, "_temperature_warned", False)
+    warnings: list[str] = []
+    monkeypatch.setattr(mod.console, "warn", warnings.append)
+    parsed = DocumentSummary(**_SUMMARY_INPUT)
+    _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
+
+    p = mod.OpenAIProvider()
+    p.summarize("doc", model="gpt-5-mini", temperature=0.0)
+    p.summarize("doc", model="gpt-5-mini", temperature=0.0)
+
+    # Warned about the dropped value, exactly once across both calls.
+    assert len(warnings) == 1
+    assert "temperature=0.0" in warnings[0]
+
+
+def test_openai_no_warning_when_temperature_is_default(monkeypatch):
+    from bartleby.providers import openai as mod
+    monkeypatch.setattr(mod, "_temperature_warned", False)
+    warnings: list[str] = []
+    monkeypatch.setattr(mod.console, "warn", warnings.append)
+    parsed = DocumentSummary(**_SUMMARY_INPUT)
+    _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
+
+    mod.OpenAIProvider().summarize("doc", model="gpt-5-mini", temperature=1.0)
+
+    # 1.0 is the API default — nothing is dropped, so no warning.
+    assert warnings == []
 
 
 def test_openai_analyze_image_returns_parsed_pydantic(monkeypatch):
