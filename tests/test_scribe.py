@@ -780,6 +780,43 @@ def test_summarize_all_progress_callback_fires_per_document(
     assert owed == 0
 
 
+def test_summarize_all_lane_callback_reports_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """on_lane fires per summarized document with its file name and stage."""
+    from bartleby.commands import scribe as scribe_module
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="h", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+
+        pending = writer.documents_needing_summary()
+        lanes: list[tuple[object, str, str]] = []
+        scribe_module._summarize_all(
+            writer, pending,
+            llm_provider=_StubProvider(), llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=1, timings=False,
+            on_progress=None,
+            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+        )
+    finally:
+        conn.close()
+
+    assert lanes == [(lanes[0][0], "doc.txt", "summarizing")]
+
+
 def test_summarize_all_skips_capped_document(
     isolated_project, tmp_path, mock_embed
 ):
@@ -1051,6 +1088,47 @@ def test_caption_all_progress_callback_fires_per_image(
     assert seen, "expected at least one progress callback for one embedded image"
     assert seen[0] == (0, 1)
     assert seen[-1] == (1, 1)
+
+
+def test_caption_all_lane_callback_reports_owning_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """on_lane fires per analyzed image with the owning file and a stage label,
+    so the renderer can show which worker is captioning what."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    pdf = tmp_path / "img.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            pdf, ".pdf", file_hash="h", file_name="img.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        document_id = writer.persist_parse(parsed)
+
+        lanes: list[tuple[object, str, str]] = []
+        scribe_module._caption_all(
+            writer,
+            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_enabled=True, caption_workers=1, timings=False,
+            on_progress=None,
+            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+        )
+    finally:
+        conn.close()
+
+    assert lanes, "expected a lane update for the one embedded image"
+    assert all(item == "img.pdf" and stage == "captioning" for _, item, stage in lanes)
 
 
 def test_document_id_for_returns_parsed_document(

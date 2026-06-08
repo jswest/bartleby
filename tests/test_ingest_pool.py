@@ -19,13 +19,19 @@ from bartleby.ingest import pool
 class _Req:
     n: int
 
+    @property
+    def file_name(self) -> str:
+        # Mirrors ParseRequest.file_name, which the pool tags progress events with.
+        return f"doc-{self.n}"
+
 
 # Module-level so spawn can re-import them by qualified name in each worker.
-def _square(request: _Req, config: dict) -> dict:
+def _square(request: _Req, config: dict, report) -> dict:
+    report("squaring")
     return {"n": request.n, "sq": request.n * request.n, "bias": config["bias"]}
 
 
-def _boom_on_three(request: _Req, config: dict) -> dict | None:
+def _boom_on_three(request: _Req, config: dict, report) -> dict | None:
     # A parse_fn is expected to capture its own failures as data; here we model a
     # fn that returns a sentinel instead of raising, so the stream never breaks.
     if request.n == 3:
@@ -84,3 +90,43 @@ def test_parse_stream_pool_runs_warmup_once_per_worker():
 
 def _noop_warmup(config: dict) -> None:
     return None
+
+
+def test_parse_stream_inline_reports_progress():
+    # The inline path delivers ProgressEvents straight to on_progress (same
+    # process, no queue), tagged with a stable synthetic worker + the file name.
+    events: list[pool.ProgressEvent] = []
+    out = list(pool.parse_stream(
+        [_Req(1), _Req(2)],
+        parse_fn=_square, config={"bias": 0}, max_workers=1,
+        on_progress=events.append,
+    ))
+    assert sorted(o["n"] for o in out) == [1, 2]
+    assert {(e.worker, e.item, e.stage) for e in events} == {
+        ("worker-1", "doc-1", "squaring"),
+        ("worker-1", "doc-2", "squaring"),
+    }
+
+
+def test_parse_stream_inline_no_progress_callback_is_noop():
+    # report() is a noop when no on_progress is wired — parse_fn still calls it.
+    out = list(pool.parse_stream(
+        [_Req(1)], parse_fn=_square, config={"bias": 0}, max_workers=1,
+    ))
+    assert out[0]["sq"] == 1
+
+
+def test_parse_stream_pool_reports_progress_per_worker():
+    # Across the spawn pool, each worker posts its beats home over the queue; the
+    # drain thread (joined before parse_stream returns) delivers them all. Every
+    # file is reported, and the worker tags are real pool-process names.
+    events: list[pool.ProgressEvent] = []
+    requests = [_Req(i) for i in range(6)]
+    out = list(pool.parse_stream(
+        requests, parse_fn=_square, config={"bias": 0}, max_workers=2,
+        on_progress=events.append,
+    ))
+    assert sorted(o["n"] for o in out) == list(range(6))
+    assert {e.item for e in events} == {f"doc-{i}" for i in range(6)}
+    assert all(e.stage == "squaring" for e in events)
+    assert all(e.worker.startswith("SpawnPoolWorker") for e in events)
