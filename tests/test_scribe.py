@@ -1627,3 +1627,33 @@ def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
         assert writer.failures() == []
     finally:
         conn.close()
+
+
+def test_scribe_timings_emits_aggregate_json(
+    isolated_project, tmp_path, mock_embed, capsys
+):
+    """--timings prints a benchmark summary as JSON to stdout (issue #162)."""
+    import json
+
+    _write_txt(tmp_path / "a.txt", "First doc with some words.")
+    _text_pdf(tmp_path / "b.pdf")
+    scribe.main(project="test_proj", files=str(tmp_path), timings=True)
+
+    out = capsys.readouterr().out
+    agg = json.loads(out)
+    assert agg["docs"] == 2
+    assert agg["pages"] == 1            # only the PDF reports a page count
+    assert agg["wall_clock_s"] >= 0
+    # parse is the one stage every doc passes through (extracting → parse).
+    assert "parse" in agg["stages"]
+    assert agg["stages"]["parse"]["total_s"] >= 0
+
+
+def test_scribe_without_timings_writes_nothing_to_stdout(
+    isolated_project, tmp_path, mock_embed, capsys
+):
+    """Default path is unchanged: no JSON, clean stdout."""
+    _write_txt(tmp_path / "a.txt", "A normal ingest, no timing.")
+    scribe.main(project="test_proj", files=str(tmp_path))
+
+    assert capsys.readouterr().out == ""

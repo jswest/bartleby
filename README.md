@@ -358,6 +358,7 @@ bartleby scribe --files <path> [<path> ...] [options]
 | `--pdf-converter <name>` | Override PDF converter (`pdfplumber` or `docling`) |
 | `--html-converter <name>` | Override HTML converter (`docling` or `sec2md`) |
 | `--verbose` | Show debug output |
+| `--timings` | Benchmark mode: time each document's parse/embed/caption/summarize stages, print the per-doc split to stderr, and emit an aggregate (docs/sec, pages/sec, per-stage breakdown) as JSON to stdout. Off by default — normal ingest is unchanged. |
 
 **Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`). The type is taken from the extension when it is one of these; a missing or unrecognized extension is resolved by sniffing the file's magic bytes instead. A recognized extension is always trusted as-is — content never overrides it — so a `.txt` that happens to hold PDF bytes stays text.
 
@@ -381,6 +382,14 @@ Ingestion runs sequentially. The embedding model is heavy, and small corpora don
 **Ingest is restartable.** Each document's parse (text + embeddings), each image caption, and the summary are committed as independent units, so an interrupted run — a crash, a Ctrl-C, a VLM that goes down mid-corpus — loses no completed work. Re-run the same `bartleby scribe` command and it resumes by what's *missing*: a document that died after its text landed but before its images were captioned re-captions only those images; it never re-parses or re-captions finished images, and a fully-ingested file is skipped. A unit that keeps failing is retried a few times, then recorded and **left out rather than retried forever** — those incomplete units are reported at the end of the run and counted under "Failed units" in `bartleby project info`, so a skipped caption never quietly passes for a complete document.
 
 _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, news, and regulatory PDFs--with a good number of images, it took ~2 minutes per document running with entirely local models. Shorter documents with fewer images will perform _much_ faster. Long documents with lots of images are slower. For example, a ~200-page regulatory document with lots of fine print and 23 images took ~5 minutes to embed, describe the images, and summarize. A five-page news article with a single image took ~30 seconds.
+
+**Benchmarking ingest.** `--timings` turns the run into a repeatable measurement: it times each document's `prep` / `parse` / `embed` / `caption` / `summarize` stages (the chunk writes fold into `embed`), prints the per-doc split to stderr, and writes an aggregate — `docs`, `pages`, `wall_clock_s`, `docs_per_s`, `pages_per_s`, and a per-stage breakdown (`total_s`, `pct`, `mean_s`) — as a single JSON object to stdout. Capture it with a redirect, since the bar and prose stay on stderr:
+
+```
+bartleby scribe --project bench --files /path/to/sample --timings > bench.json
+```
+
+Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions?
 
 ### `bartleby session`
 
