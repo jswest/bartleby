@@ -92,6 +92,22 @@ otherwise it runs the tests anyway and tells you why. When tests are genuinely
 skipped, the PR and final report say so. Combine it with `with-playwright` in either
 order.
 
+### `onto #<omnibus>` (ship onto an omnibus branch)
+
+For a bundle of related issues that should reach `main` as one unit — a release,
+say — you can stage the sub-issues on a shared *omnibus branch* first. Append an
+`onto #<omnibus>` token, where `#<omnibus>` is the **issue number** tracking the
+bundle: `/ship #170 onto #169`. Claude reads that omnibus issue, derives its branch
+from the title's leading version (`v0.8.0 — …` → `omnibus/v0.8.0`), and creates the
+branch off `main` on the bundle's *first* ship — asking first, since that pushes a
+new long-lived branch. From there the whole loop retargets from `main` to the
+omnibus branch: worktree base, collision scan, reconcile, and PR base. The sub-PR
+says *"Part of #169"* rather than `Closes #170`, because GitHub only auto-closes
+from the default branch; the sub-issues all close when the omnibus → main PR (which
+lists every `Closes #<N>`) finally merges. The `main`-only guard rail is unchanged,
+so the omnibus branch itself isn't hook-protected — keeping work on sub-PRs is
+discipline, not enforcement. Composes with the two tokens above.
+
 ### The helper agents
 
 Two subagents do focused jobs so the main thread stays on the problem:
