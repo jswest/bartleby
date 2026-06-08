@@ -7,7 +7,11 @@ import pytest
 import bartleby.config
 import bartleby.db.connection
 import bartleby.project
-from bartleby.db.chunks import ChunkInput, insert_document_chunks
+from bartleby.db.chunks import (
+    ChunkInput,
+    insert_document_chunks,
+    insert_finding_chunks,
+)
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM, SCHEMA_VERSION
 
@@ -124,6 +128,10 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
     conn = apsw.Connection(str(db_path))
     try:
         cur = conn.cursor()
+        # v8 provenance (drop the FK-bearing columns before the table).
+        for table in ("documents", "summaries", "chunks"):
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
+        cur.execute("DROP TABLE ingests")
         cur.execute("DROP TABLE failed_ingests")
         cur.execute("ALTER TABLE sessions DROP COLUMN harness")
         cur.execute("ALTER TABLE sessions DROP COLUMN model")
@@ -163,7 +171,51 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
         ]
         assert "model" in session_cols
         assert "harness" in session_cols
-        # v8 table landed.
+        # v8 retry ledger + provenance landed (the half-migration this fixes:
+        # the upgrade used to stamp v8 but omit ingests + ingest_run_id).
         assert "failed_ingests" in names
+        assert "ingests" in names
+        for table in ("documents", "summaries", "chunks"):
+            tcols = [r[1] for r in cur.execute(f"PRAGMA table_info({table})")]
+            assert "ingest_run_id" in tcols, table
+    finally:
+        conn.close()
+
+    # The upgraded DB must be schema-equivalent to a freshly-created v8: same
+    # tables, same columns per table. This is the regression gate that keeps
+    # the upgrade chain in lockstep with db/schema.py.
+    bartleby.project.create_project("beta")
+
+    def _schema(conn):
+        tables = [
+            row[0] for row in conn.cursor().execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        ]
+        return {
+            t: sorted(
+                r[1] for r in conn.cursor().execute(f"PRAGMA table_info({t})")
+            )
+            for t in tables
+        }
+
+    upgraded, fresh = open_db("alpha"), open_db("beta")
+    try:
+        assert _schema(upgraded) == _schema(fresh)
+    finally:
+        upgraded.close()
+        fresh.close()
+
+    # The crash this fixes: chunk inserts unconditionally name ingest_run_id,
+    # so saving a finding on the upgraded DB used to raise "no such column".
+    conn = open_db("alpha")
+    try:
+        insert_finding_chunks(conn, 1, [
+            ChunkInput(text="finding body", embedding=_emb(), chunk_index=0),
+        ])
+        count = conn.cursor().execute(
+            "SELECT count(*) FROM chunks WHERE source_kind = 'finding'"
+        ).fetchone()[0]
+        assert count == 1
     finally:
         conn.close()
