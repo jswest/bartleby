@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -229,20 +229,23 @@ def _parse_image_routes(
     vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
+    on_warn: Callable[[str], None] | None = None,
 ) -> list[ParsedImage]:
     """Scale + archive each route into a ParsedImage (no VLM, no DB).
 
     Sub-minimum images are dropped here, exactly as before: VLM image processors
     crash on sub-patch-size edges and such slivers carry no describable content.
     With no vision provider there's nothing to caption, so routes produce no
-    rows (a warning, then skipped).
+    rows (a warning, then skipped). Notices go to ``on_warn`` (routed to the
+    parent), never the console — this runs in a spawn worker with no Live.
     """
     if not routes:
         return []
     if not vision_enabled:
-        console.warn(
-            f"Skipping {len(routes)} image(s) — no vision provider configured."
-        )
+        if on_warn is not None:
+            on_warn(
+                f"Skipping {len(routes)} image(s) — no vision provider configured."
+            )
         return []
     parsed: list[ParsedImage] = []
     for route in routes:
@@ -253,10 +256,11 @@ def _parse_image_routes(
             prepared, min_dimension=vision_min_dimension
         ):
             page_str = f" (page {route.page_number})" if route.page_number else ""
-            console.warn(
-                f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
-                f"is below the {vision_min_dimension}px vision minimum."
-            )
+            if on_warn is not None:
+                on_warn(
+                    f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
+                    f"is below the {vision_min_dimension}px vision minimum."
+                )
             continue
         archived = image_pipeline.archive_image(prepared, archive_root)
         parsed.append(ParsedImage(
@@ -378,6 +382,7 @@ def _parse_edgar_submission(
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
+    on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     """EDGAR full-submission `.txt`: unwrap the SGML envelope and route each
     inner document to its converter, landing as one document row.
@@ -397,7 +402,8 @@ def _parse_edgar_submission(
         label = doc.type or doc.filename or "document"
         kind = edgar_pipeline.classify(doc)
         if kind == "skip":
-            console.warn(f"{file_name}: skipping inner document {label}.")
+            if on_warn is not None:
+                on_warn(f"{file_name}: skipping inner document {label}.")
             continue
         if kind == "html":
             result = sec2md_pipeline.convert_bytes(doc.text.encode("utf-8"))
@@ -439,6 +445,7 @@ def _parse_pdf_pdfplumber(
     vision_max_dimension: int,
     vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
+    on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     if on_stage is not None:
         on_stage("extracting")
@@ -487,6 +494,7 @@ def _parse_pdf_pdfplumber(
         image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
+        on_warn=on_warn,
     )
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
@@ -505,6 +513,7 @@ def _parse_pdf_docling(
     vision_max_dimension: int,
     vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
+    on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     from bartleby.ingest import docling as docling_pipeline
 
@@ -541,6 +550,7 @@ def _parse_pdf_docling(
         image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
+        on_warn=on_warn,
     )
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
@@ -560,6 +570,7 @@ def _parse_image_file(
     vision_max_dimension: int,
     vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
+    on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     """A standalone image: one route, no document chunks. The summarizer (if
     enabled) builds its input from the image chunk once captioned. With vision
@@ -574,6 +585,7 @@ def _parse_image_file(
         [route], archive_root=archive_root, vision_enabled=vision_enabled,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
+        on_warn=on_warn,
     )
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
@@ -596,6 +608,7 @@ def _parse_document(
     vision_min_dimension: int,
     archive_root: Path,
     on_stage: Callable[[str], None] | None = None,
+    on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     """Route an archived file to its converter and return a parsed result."""
     if ext in IMAGE_EXTENSIONS:
@@ -604,7 +617,7 @@ def _parse_document(
             archive_root=archive_root, vision_enabled=vision_enabled,
             vision_max_dimension=vision_max_dimension,
             vision_min_dimension=vision_min_dimension,
-            on_stage=on_stage,
+            on_stage=on_stage, on_warn=on_warn,
         )
     if ext in PDF_EXTENSIONS:
         if pdf_converter == "docling":
@@ -613,7 +626,7 @@ def _parse_document(
                 archive_root=archive_root, vision_enabled=vision_enabled,
                 vision_max_dimension=vision_max_dimension,
                 vision_min_dimension=vision_min_dimension,
-                on_stage=on_stage,
+                on_stage=on_stage, on_warn=on_warn,
             )
         return _parse_pdf_pdfplumber(
             archived, file_hash=file_hash, file_name=file_name,
@@ -623,13 +636,14 @@ def _parse_document(
             vision_enabled=vision_enabled,
             vision_max_dimension=vision_max_dimension,
             vision_min_dimension=vision_min_dimension,
-            on_stage=on_stage,
+            on_stage=on_stage, on_warn=on_warn,
         )
     if edgar_pipeline.detect(archived):
         # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
         # wrapper is caught here instead of falling to the character chunker.
         return _parse_edgar_submission(
-            archived, file_hash=file_hash, file_name=file_name, on_stage=on_stage,
+            archived, file_hash=file_hash, file_name=file_name,
+            on_stage=on_stage, on_warn=on_warn,
         )
     if (
         ext in HTML_EXTENSIONS
@@ -952,6 +966,10 @@ class ParseOutcome:
     parse_stages: dict[str, float] | None = None  # canonical stage→seconds (--timings)
     error: str | None = None
     offline: bool = False  # the error was an offline-mode block (hint the user)
+    # User-facing notices collected during parse. A spawn worker has no access
+    # to the parent's Rich Live console, so it never prints — it routes them
+    # here and the main-process drain emits them (see _parse_request).
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -979,6 +997,10 @@ def _parse_request(
     current stage so the main process can render this worker's lane. The single
     ``on_stage`` the parsers already emit drives both the timer and ``report`` —
     one callback, two consumers.
+
+    User-facing notices (skipped images, skipped inner documents) accumulate via
+    ``on_warn`` and ride back on the outcome: a spawn worker has no Live console,
+    so the main-process drain is the only place that can print them.
     """
     timer = timing.StageTimer() if config.timings else None
     report("preparing")          # the lane shows the file the moment we pick it up
@@ -988,6 +1010,7 @@ def _parse_request(
             timer.mark(label)
         report(label)
 
+    warnings: list[str] = []
     try:
         parsed = _parse_document(
             _archive(request.path, config.archive_root, request.file_hash, request.ext),
@@ -999,17 +1022,21 @@ def _parse_request(
             vision_max_dimension=config.vision_max_dimension,
             vision_min_dimension=config.vision_min_dimension,
             archive_root=config.archive_root,
-            on_stage=on_stage,
+            on_stage=on_stage, on_warn=warnings.append,
         )
     except Exception as e:
         from bartleby.lib.quiet import offline_blocked
-        return ParseOutcome(request=request, error=str(e), offline=offline_blocked(e))
+        return ParseOutcome(
+            request=request, error=str(e), offline=offline_blocked(e),
+            warnings=warnings,
+        )
 
     if timer is not None:
         timer.finish()
     return ParseOutcome(
         request=request, parsed=parsed,
         parse_stages=dict(timer.totals) if timer is not None else None,
+        warnings=warnings,
     )
 
 
@@ -1421,6 +1448,11 @@ def main(
                 on_progress=lambda ev: parse_phase.lane(ev.worker, ev.item, ev.stage),
             ):
                 req = outcome.request
+                # Notices the worker collected (it has no Live console of its
+                # own); emit them here, where console.warn coordinates with the
+                # progress bar instead of stomping it.
+                for warning in outcome.warnings:
+                    console.warn(warning)
                 if outcome.error is not None:
                     writer.record_failure(
                         req.file_hash, req.file_name, "parse", outcome.error

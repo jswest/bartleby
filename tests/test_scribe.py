@@ -1097,6 +1097,64 @@ def test_parse_document_reports_page_count(
     assert parsed.page_count == 1
 
 
+def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
+    tmp_path, monkeypatch
+):
+    """The observed #227 corruptor: a sub-minimum image notice must go to
+    ``on_warn`` (routed to the parent), never the console — this code runs in a
+    spawn worker with no Live display, so a console write would stomp the bar."""
+    from bartleby.commands import scribe as scribe_module
+
+    # Force every prepared image below the VLM minimum so the skip branch fires.
+    monkeypatch.setattr(
+        scribe_module.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+    )
+    # A worker must never touch the console; fail loudly if it tries.
+    monkeypatch.setattr(
+        scribe_module.console, "warn",
+        lambda *a, **k: pytest.fail("worker-side parse called console.warn"),
+    )
+
+    warnings: list[str] = []
+    route = scribe_module._ImageRoute(
+        bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
+    )
+    images = scribe_module._parse_image_routes(
+        [route], archive_root=tmp_path / "archive", vision_enabled=True,
+        vision_max_dimension=1024, vision_min_dimension=128,
+        on_warn=warnings.append,
+    )
+
+    assert images == []
+    assert len(warnings) == 1
+    assert "page 3" in warnings[0]
+    assert "below the 128px vision minimum" in warnings[0]
+
+
+def test_parse_document_threads_on_warn_to_the_leaf(
+    isolated_project, tmp_path, mock_embed
+):
+    """on_warn reaches the leaf through the full dispatch chain: a standalone
+    image parsed with vision off surfaces the 'no vision provider' notice as a
+    routed warning, not a console write."""
+    from bartleby.commands import scribe as scribe_module
+
+    img = tmp_path / "pic.png"
+    img.write_bytes(_png_bytes())
+
+    warnings: list[str] = []
+    scribe_module._parse_document(
+        img, ".png", file_hash="h", file_name="pic.png",
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=128,
+        archive_root=tmp_path / "archive",
+        on_warn=warnings.append,
+    )
+
+    assert warnings == ["Skipping 1 image(s) — no vision provider configured."]
+
+
 def test_caption_all_progress_callback_fires_per_image(
     isolated_project, tmp_path, mock_embed
 ):
