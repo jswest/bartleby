@@ -319,15 +319,23 @@ class Writer:
         """
         with self.conn:
             cur = self.conn.cursor()
-            cur.execute(
-                "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count, "
-                " ingest_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (parsed.file_hash, parsed.file_name, str(parsed.archive_path),
-                 parsed.page_count, parsed.token_count, self.run_id),
-            )
-            document_id = self.conn.last_insert_rowid()
+            # Belt-and-suspenders: check if document already exists (race/replay safety)
+            existing = cur.execute(
+                "SELECT document_id FROM documents WHERE file_hash = ?",
+                (parsed.file_hash,),
+            ).fetchone()
+            if existing is not None:
+                document_id = existing[0]
+            else:
+                cur.execute(
+                    "INSERT INTO documents "
+                    "(file_hash, file_name, file_path, page_count, token_count, "
+                    " ingest_run_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (parsed.file_hash, parsed.file_name, str(parsed.archive_path),
+                     parsed.page_count, parsed.token_count, self.run_id),
+                )
+                document_id = self.conn.last_insert_rowid()
             if parsed.document_chunks:
                 insert_document_chunks(
                     self.conn, document_id, parsed.document_chunks,
