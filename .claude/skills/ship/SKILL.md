@@ -42,7 +42,7 @@ branch name. When present:
   sub-ships. Report whichever happened — pushing a new long-lived branch is a
   remote mutation, never create it silently.
 - **`base` becomes `<omnibus-branch>`** for every step below: sync, collision
-  scan, worktree start-point, the `skip-tests` guard, reconcile, and the PR base,
+  scan, worktree start-point, the pytest-skip checks (both paths), reconcile, and the PR base,
   diff-stat, and cleanup all retarget from `origin/main` to
   `origin/<omnibus-branch>`.
 - **Closure differs.** GitHub only auto-closes from the default branch, so a
@@ -68,18 +68,29 @@ backend-only change, ignore it and ship normally. When it's active:
 
 Don't edit the built-in `verify`/`run` skills; this flag lives entirely here.
 
-**Optional `skip-tests`.** The argument may carry a `skip-tests` token (only that
-exact token). It omits the `uv run pytest` runs in steps 8, 9, and 10 — a
-convenience for docs-only work, **not** a way to land untested code. It is
-honored **only if this issue's diff touches no test-affecting source**: if
-`git diff --name-only origin/<base>...HEAD` shows any `*.py`, `pyproject.toml`, or
-a file under `bartleby/web/`, **ignore the token and run the tests anyway**, and
-say why ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py`
-— running tests anyway"). Re-check this at **each** gate, not just once: a docs
-PR that grows a code change mid-stream must start running tests from that point.
-When tests are genuinely skipped, **say so** in the step-11 PR summary and the
-final report ("Tests skipped — docs-only diff") so a skipped suite never reads as
-a green one. The simplify-refactor pass (step 8) still runs regardless.
+**Skipping the pytest gates.** The `uv run pytest` runs in steps 8, 9, and 10 are
+omitted when **either** of these holds — evaluate both against
+`git diff --name-only origin/<base>...HEAD`:
+
+1. **Docs-only (automatic, no token).** The diff touches *only* documentation —
+   every changed path is a `*.md` file, `LICENSE`, or under `docs/`. Then pytest
+   can't be affected, so the gates skip on their own; no `skip-tests` token needed.
+2. **`skip-tests` token (opt-in).** The argument carries the `skip-tests` token
+   (only that exact token) **and** the diff touches no test-affecting source — no
+   `*.py`, no `pyproject.toml`, no file under `bartleby/web/`. The token is a
+   convenience for work that's docs-adjacent but falls outside the path-1 set (e.g.
+   a top-level `.sh` script or a `.txt` asset), **not** a way to land untested code. If the token
+   is present but the diff *does* touch test-affecting source, **ignore the token
+   and run the tests anyway**, and say why ("`skip-tests` requested but the diff
+   changes `bartleby/commands/ready.py` — running tests anyway").
+
+Re-check **both** paths at **each** gate, not just once: a docs PR that grows a
+code change mid-stream must start running tests from that point, and a diff that
+narrows back to docs-only resumes path-1 skipping (token or not). When tests are genuinely skipped,
+**say so** in the step-11 PR summary and the final report, naming the path —
+"Tests skipped — docs-only diff" (path 1) or "Tests skipped — `skip-tests`, diff
+touches no code" (path 2) — so a skipped suite never reads as a green one. The
+simplify-refactor pass (step 8) still runs regardless.
 
 ## 1. Preconditions
 - `git -C <main-checkout> status --porcelain` must be empty. If main has
@@ -127,26 +138,28 @@ skip this — say so and proceed.
 Work in logical units. If `with-playwright` is active, bracket each web-touching
 unit with before/after screenshots (see the flag note above). For **every**
 code-producing commit, in this exact order:
-1. `uv run pytest` — must pass. (Skipped when `skip-tests` is active *and* its
-   guard holds — see the flag note above; re-check the guard here.)
+1. `uv run pytest` — must pass. (Skipped when either skip path holds — a docs-only
+   diff or `skip-tests` with no code touched; see the "Skipping the pytest gates"
+   note above and re-check both paths here.)
 2. Run the `simplify-refactor` agent against the just-touched files.
 3. Apply the suggestions you agree with; push back on the rest.
-4. Re-run `uv run pytest` — must still pass. (Same `skip-tests` condition as 1.)
+4. Re-run `uv run pytest` — must still pass. (Same skip condition as 1.)
 5. Commit (in the worktree; the hook enforces you're off `main`).
 
 ## 9. Docs sweep
 Check README / ARCHITECTURE.md / skill `SKILL.md` for updates the change
 requires (new flags, changed behavior, a decision-log entry). If you change docs,
-re-run the step-8 gates before continuing (the `skip-tests` condition from step 8
-applies to the pytest run here too).
+re-run the step-8 gates before continuing (the skip condition from step 8 applies
+to the pytest run here too — note a docs-sweep edit that stays within the
+documentation set keeps a diff docs-only, so path 1 still skips).
 
 ## 10. Reconcile before the PR
 Bring the branch up to date so conflicts surface here, not in the PR:
 `git fetch origin && git merge origin/<base>` (or rebase). Resolve any conflicts,
-then run the **full** suite (`uv run pytest`) again — unless `skip-tests` is
-active and its guard still holds. Re-run the same `origin/<base>...HEAD` check from
-the flag note; because it's three-dot (the diff since the merge-base), merging
-`origin/<base>` in doesn't change what it sees.
+then run the **full** suite (`uv run pytest`) again — unless either skip path
+still holds (docs-only diff, or `skip-tests` with no code touched). Re-run the same
+`origin/<base>...HEAD` check from the flag note; because it's three-dot (the diff
+since the merge-base), merging `origin/<base>` in doesn't change what it sees.
 
 ## 11. PAUSE — PR
 Show the user the **PR body draft + a final diff summary** (`git diff --stat
