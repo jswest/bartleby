@@ -46,3 +46,11 @@ DEFAULT_VISION_MIN_DIMENSION = 64
 # layout/table models; PER_WORKER_GB is a deliberately conservative resident-set
 # estimate for that footprint. `max_workers` in config overrides the auto-pick.
 PER_WORKER_GB = 2.5
+
+# Caption-pool sizing (#166). Captioning runs after parse as its own concurrent
+# stage: many VLM/OCR calls per document, network/IO-bound rather than RAM-bound,
+# so it doesn't share parse's RAM-derived auto-formula — a fixed default is more
+# honest. 4 is a safe middle ground: a single-GPU local Ollama serializes vision
+# requests anyway, while a rate-limited cloud provider tolerates a few in flight.
+# Override with `caption_workers` in config.
+DEFAULT_CAPTION_WORKERS = 4

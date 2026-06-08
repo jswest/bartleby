@@ -458,6 +458,167 @@ def test_scribe_dedupes_identical_images_across_documents(
     assert vision.calls == calls_after_first
 
 
+def test_scribe_captions_many_images_concurrently_in_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#166: captioning is its own concurrent phase. Several documents parsed in
+    one run all get every image captioned through the caption thread pool — not
+    just the first — with the DB write staying on the single Writer thread."""
+    config = _vision_pdf_config()
+    config["caption_workers"] = 3
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    pdfs = []
+    for i in range(4):
+        pdf = tmp_path / f"doc{i}.pdf"
+        # A distinct colour per doc → distinct byte-hash, so no cross-doc dedup.
+        _pdf_with_image(
+            pdf, _png_bytes(color=(10 + i * 30, 80, 200 - i * 20)),
+            text=f"Body of document {i} " * 12,
+        )
+        pdfs.append(str(pdf))
+
+    scribe.main(project="test_proj", files=pdfs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 4
+        # The authoritative check (race-free, written on the writer thread):
+        # every image was captioned — none left with a NULL analysis.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NULL"
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0] == 4
+    finally:
+        conn.close()
+
+
+def test_scribe_dedupes_shared_image_within_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Two documents sharing an image, ingested in the same run, caption it once:
+    the caption phase keys pending work by image row, so a shared row is analyzed
+    a single time even though it joins two documents."""
+    config = _vision_pdf_config()
+    config["caption_workers"] = 1   # single-threaded → exact VLM call count
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
+    pdf_a = tmp_path / "a.pdf"
+    pdf_b = tmp_path / "b.pdf"
+    _pdf_with_image(pdf_a, image_bytes, text="Doc A text " * 12)
+    _pdf_with_image(pdf_b, image_bytes, text="Doc B text " * 12)
+
+    scribe.main(project="test_proj", files=[str(pdf_a), str(pdf_b)])
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT analysis_json FROM images"
+        ).fetchone()[0] is not None
+    finally:
+        conn.close()
+
+    # Analyzed exactly once despite living in two documents.
+    assert vision.calls == 1
+
+
+def test_scribe_one_caption_failure_does_not_block_the_rest(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A single image whose VLM call raises is recorded as a caption failure;
+    the other images in the same concurrent run are still captioned — one bad
+    image never tears down the phase."""
+    import threading
+
+    class _OneFailVision:
+        name = "one-fail-vision"
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def summarize(self, *a, **k):  # protocol completeness
+            raise NotImplementedError
+
+        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+            # Lock so the "first call fails" rule is deterministic under the pool.
+            with self._lock:
+                self.calls += 1
+                first = self.calls == 1
+            if first:
+                raise RuntimeError("VLM unavailable")
+            return VlmDescription(description="ok", notes="")
+
+    config = _vision_pdf_config()
+    config["caption_workers"] = 3
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailVision(),
+    )
+
+    pdfs = []
+    for i in range(3):
+        pdf = tmp_path / f"d{i}.pdf"
+        # Long enough not to trip the sparse-page render (one image per doc).
+        _pdf_with_image(
+            pdf, _png_bytes(color=(20 + i * 40, 90, 150)),
+            text=f"Body of document {i} with plenty of words so it is not sparse. " * 3,
+        )
+        pdfs.append(str(pdf))
+
+    scribe.main(project="test_proj", files=pdfs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 3
+        # Exactly one image left uncaptioned (the failed call); the other two land.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NULL"
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NOT NULL"
+        ).fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT stage FROM failed_ingests"
+        ).fetchone()[0] == "caption"
+    finally:
+        conn.close()
+
+
+def test_resolve_caption_workers_defaults_and_timings():
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
+
+    # Default when unset or zero; explicit value respected.
+    assert scribe_module._resolve_caption_workers(
+        {}, timings=False) == DEFAULT_CAPTION_WORKERS
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 0}, timings=False) == DEFAULT_CAPTION_WORKERS
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 9}, timings=False) == 9
+    # --timings forces a sequential baseline regardless of config.
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 9}, timings=True) == 1
+
+
 def test_scribe_ingests_standalone_image_file(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -651,10 +812,10 @@ def test_parse_document_reports_page_count(
     assert parsed.page_count == 1
 
 
-def test_caption_missing_image_progress_callback_fires_per_image(
+def test_caption_all_progress_callback_fires_per_image(
     isolated_project, tmp_path, mock_embed
 ):
-    """The caption drain invokes on_image_progress(0, N) then once per image."""
+    """The caption phase invokes on_progress(0, N) then once per image."""
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
 
@@ -676,11 +837,12 @@ def test_caption_missing_image_progress_callback_fires_per_image(
         document_id = writer.persist_parse(parsed)
 
         seen: list[tuple[int, int]] = []
-        scribe_module._caption_missing(
-            writer, document_id, "img.pdf",
+        scribe_module._caption_all(
+            writer,
+            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
-            vision_enabled=True, on_stage=None,
-            on_image_progress=lambda done, total: seen.append((done, total)),
+            vision_enabled=True, caption_workers=1, timings=False,
+            on_progress=lambda done, total: seen.append((done, total)),
         )
     finally:
         conn.close()

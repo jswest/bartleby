@@ -190,6 +190,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "1024",                # vision_max_dimension
         "32",                  # vision_min_dimension
         "30",                  # ocr_min_confidence
+        "4",                   # caption_workers
         "50000",               # max_read_tokens
     ])
     config.main()
@@ -199,6 +200,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
     assert cfg["vision_max_dimension"] == 1024
     assert cfg["vision_min_dimension"] == 32
     assert cfg["ocr_min_confidence"] == 30
+    assert cfg["caption_workers"] == 4
     # openai_api_key already set from the LLM block; no double prompt.
     assert cfg["openai_api_key"] == "sk-openai"
 
@@ -225,6 +227,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "1024",
         "32",
         "30",
+        "4",                   # caption_workers
         "50000",
     ])
     config.main()

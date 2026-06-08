@@ -305,6 +305,7 @@ Interactive configuration wizard. Asks for:
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
+| Caption workers | 4 | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
