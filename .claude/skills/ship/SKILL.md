@@ -120,19 +120,24 @@ omitted when **either** of these holds — evaluate both against
    can't be affected, so the gates skip on their own; no `skip-tests` token needed.
 2. **`skip-tests` token (opt-in).** The argument carries the `skip-tests` token
    (only that exact token) **and** the diff touches no test-affecting source — no
-   `*.py`, no `pyproject.toml`, no file under `bartleby/web/`. The token is a
-   convenience for work that's docs-adjacent but falls outside the path-1 set (e.g.
-   a top-level `.sh` script or a `.txt` asset), **not** a way to land untested code. If the token
-   is present but the diff *does* touch test-affecting source, **ignore the token
-   and run the tests anyway**, and say why ("`skip-tests` requested but the diff
-   changes `bartleby/commands/ready.py` — running tests anyway").
+   `*.py` and no `pyproject.toml`. The token is a convenience for work that's
+   test-irrelevant but falls outside the path-1 docs set: a frontend-only change
+   under `bartleby/web/` (Svelte/CSS/vite config — that tree holds no Python), a
+   top-level `.sh` script, a `.txt` asset. It is **not** a way to land untested
+   code. If the token is present but the diff *does* touch `*.py` or
+   `pyproject.toml`, **ignore the token and run the tests anyway**, and say why
+   ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py` —
+   running tests anyway"). One accepted gap: a *structural* `bartleby/web/` change
+   (move `src/`, drop `package.json`) can still fail the Python suite via
+   `tests/test_serve.py`, which asserts the packaged UI layout — `skip-tests` won't
+   catch that, so don't pair the token with a web restructure.
 
 Re-check **both** paths at **each** gate, not just once: a docs PR that grows a
 code change mid-stream must start running tests from that point, and a diff that
 narrows back to docs-only resumes path-1 skipping (token or not). When tests are genuinely skipped,
 **say so** in the step-11 PR summary and the final report, naming the path —
-"Tests skipped — docs-only diff" (path 1) or "Tests skipped — `skip-tests`, diff
-touches no code" (path 2) — so a skipped suite never reads as a green one. The
+"Tests skipped — docs-only diff" (path 1) or "Tests skipped — `skip-tests`, no
+`.py`/`pyproject.toml` touched" (path 2) — so a skipped suite never reads as a green one. The
 simplify-refactor pass (step 8) still runs regardless.
 
 ## 1. Preconditions
@@ -182,8 +187,8 @@ Work in logical units. If `with-playwright` is active, bracket each web-touching
 unit with before/after screenshots (see the flag note above). For **every**
 code-producing commit, in this exact order:
 1. `uv run pytest` — must pass. (Skipped when either skip path holds — a docs-only
-   diff or `skip-tests` with no code touched; see the "Skipping the pytest gates"
-   note above and re-check both paths here.)
+   diff or `skip-tests` with no `.py`/`pyproject.toml` touched; see the "Skipping
+   the pytest gates" note above and re-check both paths here.)
 2. Run the `simplify-refactor` agent against the just-touched files.
 3. Apply the suggestions you agree with; push back on the rest.
 4. Re-run `uv run pytest` — must still pass. (Same skip condition as 1.)
@@ -200,7 +205,7 @@ documentation set keeps a diff docs-only, so path 1 still skips).
 Bring the branch up to date so conflicts surface here, not in the PR:
 `git fetch origin && git merge origin/<base>` (or rebase). Resolve any conflicts,
 then run the **full** suite (`uv run pytest`) again — unless either skip path
-still holds (docs-only diff, or `skip-tests` with no code touched). Re-run the same
+still holds (docs-only diff, or `skip-tests` with no `.py`/`pyproject.toml` touched). Re-run the same
 `origin/<base>...HEAD` check from the flag note; because it's three-dot (the diff
 since the merge-base), merging `origin/<base>` in doesn't change what it sees.
 

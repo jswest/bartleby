@@ -81,7 +81,7 @@ what looks wrong. It's **off by default** because browser automation is slow and
 burns image tokens, so you opt in per run when a change is actually worth eyeballing.
 Backend-only issues ignore the token even if you pass it.
 
-### Skipping the test gates (docs-only changes)
+### Skipping the test gates
 
 The `uv run pytest` runs that otherwise gate every commit are skipped down two
 paths — both a convenience for diffs that can't affect tests, **not** a way to land
@@ -91,11 +91,15 @@ untested code:
   `LICENSE`, or under `docs/` — README wording, an `ARCHITECTURE.md` note, a
   `SKILL.md` tweak — Claude skips the gates on its own. A pure prose change can't
   move the suite, so there's nothing to gate and no token to remember.
-- **`skip-tests` — opt-in, for docs-adjacent files outside that set.** For a change
-  that's still test-irrelevant but touches something other than docs (a shell
-  script, a `.txt` asset), append a `skip-tests` token (`/ship #<N> skip-tests`).
-  Claude honors it only when the branch diff touches no `*.py`, `pyproject.toml`, or
-  `bartleby/web/` file — otherwise it runs the tests anyway and tells you why.
+- **`skip-tests` — opt-in, for test-irrelevant files outside that set.** For a change
+  that can't affect the suite but touches something other than docs — a frontend-only
+  edit under `bartleby/web/` (that tree is all Svelte/vite, no Python), a shell
+  script, a `.txt` asset — append a `skip-tests` token (`/ship #<N> skip-tests`).
+  Claude honors it only when the branch diff touches no `*.py` or `pyproject.toml`
+  file — otherwise it runs the tests anyway and tells you why. (One caveat: a
+  *structural* `bartleby/web/` change (moving `src/`, dropping `package.json`) can
+  still break the Python suite via `tests/test_serve.py`, which checks the packaged
+  UI layout — don't `skip-tests` a web restructure.)
 
 Either way, Claude re-checks at every gate, so a docs PR that grows a code change
 mid-stream starts running tests from that point. When tests are genuinely skipped,
