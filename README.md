@@ -302,7 +302,7 @@ Interactive configuration wizard. Asks for:
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
-| Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |
+| Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
