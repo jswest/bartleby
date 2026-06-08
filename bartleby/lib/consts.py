@@ -22,9 +22,16 @@ DOCLING_HF_REPOS = (
     "docling-project/docling-models",
 )
 
-# Ingest conversion / vision defaults, shared by the `ready` wizard (which
-# writes them into config) and `scribe` (which falls back to them when a knob
-# is absent from config). Keep the two in lockstep by sourcing both from here.
+# Ingest conversion / vision knobs shared by the `config` wizard (which writes
+# them into config) and `scribe` (which falls back to the DEFAULT_* values when a
+# knob is absent, and whose argparse `choices=` are built from the ALLOWED_*
+# lists). Sourcing both surfaces from here keeps them in lockstep — the values
+# scribe accepts can never drift from the ones the wizard validates. This module
+# imports nothing, so `cli.py` can read these at parser-build time without paying
+# the provider package's pydantic import cost on every invocation.
+ALLOWED_PROVIDERS = ("anthropic", "openai", "ollama", "wsjpt")
+ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
+ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
 DEFAULT_PDF_CONVERTER = "pdfplumber"
 DEFAULT_HTML_CONVERTER = "docling"
 DEFAULT_SPARSE_TEXT_THRESHOLD = 100
