@@ -555,16 +555,22 @@ def _parse_image_file(
     file_hash: str,
     file_name: str,
     archive_root: Path,
+    vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
+    on_stage: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     """A standalone image: one route, no document chunks. The summarizer (if
-    enabled) builds its input from the image chunk once captioned."""
+    enabled) builds its input from the image chunk once captioned. With vision
+    off the route produces no rows (warned + skipped in ``_parse_image_routes``),
+    so the document lands empty rather than stranding an uncaptionable row."""
+    if on_stage is not None:
+        on_stage("extracting")
     route = _ImageRoute(
         bytes_=archived.read_bytes(), page_number=None, image_index_on_page=0,
     )
     images = _parse_image_routes(
-        [route], archive_root=archive_root, vision_enabled=True,
+        [route], archive_root=archive_root, vision_enabled=vision_enabled,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
     )
@@ -594,9 +600,10 @@ def _parse_document(
     if ext in IMAGE_EXTENSIONS:
         return _parse_image_file(
             archived, file_hash=file_hash, file_name=file_name,
-            archive_root=archive_root,
+            archive_root=archive_root, vision_enabled=vision_enabled,
             vision_max_dimension=vision_max_dimension,
             vision_min_dimension=vision_min_dimension,
+            on_stage=on_stage,
         )
     if ext in PDF_EXTENSIONS:
         if pdf_converter == "docling":
@@ -661,6 +668,26 @@ class _DocUnit:
     stages: dict[str, float] | None = None
 
 
+class _ProgressTally:
+    """Counts completed work units and forwards ``(done, total)`` to a progress
+    callback — the shared meter for the caption (#166) and summarize (#188)
+    stages, which both report identically against a fixed-size work-list."""
+
+    def __init__(
+        self, total: int, on_progress: Callable[[int, int], None] | None
+    ) -> None:
+        self._total = total
+        self._on_progress = on_progress
+        self._done = 0
+        if on_progress is not None:
+            on_progress(0, total)
+
+    def advance(self) -> None:
+        self._done += 1
+        if self._on_progress is not None:
+            self._on_progress(self._done, self._total)
+
+
 def _caption_all(
     writer: Writer,
     units: list[_DocUnit],
@@ -708,16 +735,7 @@ def _caption_all(
         )
         return
 
-    total = len(pending)
-    done = 0
-    if on_progress is not None:
-        on_progress(0, total)
-
-    def _advance() -> None:
-        nonlocal done
-        done += 1
-        if on_progress is not None:
-            on_progress(done, total)
+    progress = _ProgressTally(len(pending), on_progress)
 
     # Capped rows (failed MAX_INGEST_ATTEMPTS× already) are skipped, not retried.
     to_caption: dict[int, PendingImage] = {}
@@ -727,7 +745,7 @@ def _caption_all(
                 f"{owner[image_id].file_name}: skipping image — failed "
                 f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
             )
-            _advance()
+            progress.advance()
         else:
             to_caption[image_id] = pi
 
@@ -766,7 +784,7 @@ def _caption_all(
                 unit.stages["caption"] = (
                     unit.stages.get("caption", 0.0) + (time.perf_counter() - t0)
                 )
-            _advance()
+            progress.advance()
         return
 
     with ThreadPoolExecutor(max_workers=caption_workers) as pool:
@@ -780,7 +798,7 @@ def _caption_all(
                 _persist(image_id, fut.result())
             except Exception as e:
                 _fail(image_id, e)
-            _advance()
+            progress.advance()
 
 
 def _summarize_all(
@@ -817,18 +835,9 @@ def _summarize_all(
     second map is populated only under ``timings`` (which forces one worker, so
     the per-document seconds stay a clean sequential baseline).
     """
-    total = len(pending)
-    done = 0
     incomplete = 0
     times: dict[int, tuple[str, float]] = {}
-    if on_progress is not None:
-        on_progress(0, total)
-
-    def _advance() -> None:
-        nonlocal done
-        done += 1
-        if on_progress is not None:
-            on_progress(done, total)
+    progress = _ProgressTally(len(pending), on_progress)
 
     # Capped docs (failed MAX_INGEST_ATTEMPTS× already) are surfaced, not retried.
     work: list[PendingSummary] = []
@@ -839,7 +848,7 @@ def _summarize_all(
                 f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
             )
             incomplete += 1
-            _advance()
+            progress.advance()
         else:
             work.append(ps)
 
@@ -876,7 +885,7 @@ def _summarize_all(
                 _fail(ps, e)
             if t0 is not None:
                 times[ps.document_id] = (ps.file_name, time.perf_counter() - t0)
-            _advance()
+            progress.advance()
         return incomplete, times
 
     # Pooled: keep at most ``summarize_workers`` inputs in flight (see docstring) —
@@ -895,7 +904,7 @@ def _summarize_all(
                     _persist(ps, fut.result())
                 except Exception as e:
                     _fail(ps, e)
-                _advance()
+                progress.advance()
                 nxt = next(it, None)
                 if nxt is not None:
                     in_flight[
