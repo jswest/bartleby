@@ -102,6 +102,14 @@ class PendingImage:
 
 
 @dataclass
+class PendingSummary:
+    """A parsed document still owing a summary — a summarize-pass work item."""
+    document_id: int
+    file_hash: str
+    file_name: str
+
+
+@dataclass
 class FailedUnit:
     file_hash: str
     file_name: str
@@ -228,6 +236,33 @@ class Writer:
             "   WHERE c.source_kind = 'image' AND di.document_id = ?)",
             (document_id, document_id),
         ).fetchone()[0]
+
+    def documents_needing_summary(self) -> list[PendingSummary]:
+        """Every parsed document that still owes a summary: no ``summaries`` row
+        yet, and at least one indexed (summarizable) chunk.
+
+        This is the work-list for the summarize pass (issue #167), which runs
+        after the parse/caption drain rather than inline per document. The
+        ``> 0`` chunk guard mirrors :meth:`summarizable_chunk_count`, so an
+        image-only doc with nothing extractable is never offered to the model
+        (issue #80) and isn't counted as owed. Capped documents *are* returned —
+        the pass surfaces them as still-incomplete instead of dropping them.
+        """
+        rows = self.conn.cursor().execute(
+            "SELECT d.document_id, d.file_hash, d.file_name "
+            "FROM documents d "
+            "WHERE NOT EXISTS ("
+            "    SELECT 1 FROM summaries s WHERE s.document_id = d.document_id) "
+            "  AND ("
+            "    (SELECT COUNT(*) FROM chunks "
+            "     WHERE source_kind = 'document' AND source_id = d.document_id) "
+            "  + (SELECT COUNT(*) FROM chunks c "
+            "       JOIN document_images di ON di.image_id = c.source_id "
+            "     WHERE c.source_kind = 'image' AND di.document_id = d.document_id) "
+            "  ) > 0 "
+            "ORDER BY d.document_id"
+        ).fetchall()
+        return [PendingSummary(*r) for r in rows]
 
     def summary_input(self, document_id: int) -> str:
         """Interleave document and image chunks in source order for the summarizer.
