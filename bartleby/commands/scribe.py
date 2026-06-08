@@ -1,8 +1,16 @@
-"""`bartleby scribe` — sequential ingest pipeline.
+"""`bartleby scribe` — restartable ingest pipeline over a single writer.
 
-Hash → archive → convert → embed → (optionally) summarize → write. All chunk
-writes go through ``bartleby.db.chunks`` typed helpers; image rows additionally
-get a join entry in ``document_images``.
+Per source file: hash → (parse → persist → caption → summarize), where parse
+produces a result and a single :class:`~bartleby.ingest.writer.Writer` drains it
+to SQLite. The three post-parse units commit independently, so ingest resumes by
+what's *missing*: a run that dies mid-captioning leaves the parse durable and
+the next run re-captions only the images that never landed (it never re-parses,
+never re-captions finished images). Deterministically-failing units are recorded
+in ``failed_ingests`` and capped, not retried forever — and surfaced, so a
+skipped unit never reads as a green one.
+
+All chunk writes go through the ``bartleby.db.chunks`` typed helpers via the
+Writer; image rows additionally get a join entry in ``document_images``.
 
 PDF path is converter-aware (``pdfplumber`` default, ``docling`` opt-in).
 HTML path is converter-aware too: ``docling`` is the default; ``sec2md`` is
@@ -20,7 +28,6 @@ import json
 import shutil
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -34,13 +41,7 @@ from rich.progress import (
 )
 
 from bartleby.config import ensure_provider_env, load_config
-from bartleby.db.chunks import (
-    ChunkInput,
-    delete_chunks_for,
-    insert_document_chunks,
-    insert_image_chunks,
-    insert_summary_chunks,
-)
+from bartleby.db.chunks import ChunkInput
 from bartleby.db.connection import open_db, resolve_project_name
 from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
@@ -57,8 +58,16 @@ from bartleby.ingest.chunk import (
     resolve_format_filter,
 )
 from bartleby.ingest.embed import embed_texts
-from bartleby.ingest.summarize import SummaryResult, count_tokens, summarize
+from bartleby.ingest.summarize import count_tokens, summarize
 from bartleby.ingest.text import chunk_text
+from bartleby.ingest.writer import (
+    MAX_INGEST_ATTEMPTS,
+    ImageCaption,
+    ParsedDocument,
+    ParsedImage,
+    PendingImage,
+    Writer,
+)
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
@@ -73,6 +82,15 @@ from bartleby.lib.consts import (
 )
 from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
+
+
+# Per-file outcomes the orchestrator reports back to the run loop.
+INGESTED = "ingested"          # parsed and/or resumed to completion this run
+SKIPPED = "skipped"            # already complete — nothing to do
+INCOMPLETE = "incomplete"      # work done, but some unit is still missing
+NO_VISION_SKIP = "no_vision"   # standalone image with no vision provider (warned)
+
+HTML_EXTENSIONS = {".html", ".htm"}
 
 
 # -------------------- shared helpers --------------------
@@ -150,73 +168,6 @@ def _collect_files(
     return sources, unidentified
 
 
-def _document_already_ingested(conn, file_hash: str) -> int | None:
-    """Return document_id iff this hash has a *complete* ingest.
-
-    Completeness = the document has at least one text chunk OR at least one
-    image attached. A bare ``documents`` row with neither is a stranded
-    partial from an interrupted run (the row is committed in autocommit
-    before chunks/images land); treating it as "ingested" would mean
-    skipping a broken document forever. Returning None here lets the
-    caller clean up the stranded row and re-ingest from scratch.
-    """
-    row = conn.cursor().execute(
-        "SELECT d.document_id "
-        "FROM documents d "
-        "WHERE d.file_hash = ? AND ("
-        "  EXISTS (SELECT 1 FROM chunks "
-        "          WHERE source_kind = 'document' AND source_id = d.document_id)"
-        "  OR EXISTS (SELECT 1 FROM document_images "
-        "             WHERE document_id = d.document_id)"
-        ")",
-        (file_hash,),
-    ).fetchone()
-    return row[0] if row else None
-
-
-def _cleanup_partial_document(conn, document_id: int) -> None:
-    """Drop a stranded document row and its dependent state.
-
-    FK CASCADE handles summaries and document_images; the polymorphic
-    chunks (kind=document, kind=summary) are cleared manually via
-    ``delete_chunks_for`` so chunks_fts and chunks_vec stay in sync.
-    Shared image rows survive — they're deduped on their own file_hash
-    and may be reused by other documents or by the upcoming re-ingest.
-    """
-    cur = conn.cursor()
-    summary_row = cur.execute(
-        "SELECT summary_id FROM summaries WHERE document_id = ?", (document_id,)
-    ).fetchone()
-
-    delete_chunks_for(conn, "document", document_id)
-    if summary_row is not None:
-        delete_chunks_for(conn, "summary", summary_row[0])
-
-    with conn:
-        conn.cursor().execute(
-            "DELETE FROM documents WHERE document_id = ?", (document_id,)
-        )
-
-
-def _insert_document(
-    conn,
-    *,
-    file_hash: str,
-    file_name: str,
-    archive_path: Path,
-    page_count: int | None,
-    full_text: str,
-) -> int:
-    token_count = count_tokens(full_text) if full_text else 0
-    conn.cursor().execute(
-        "INSERT INTO documents "
-        "(file_hash, file_name, file_path, page_count, token_count) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (file_hash, file_name, str(archive_path), page_count, token_count),
-    )
-    return conn.last_insert_rowid()
-
-
 def _build_chunk_inputs(
     rows: list[ChunkRow],
     embeddings: list[list[float]],
@@ -235,258 +186,146 @@ def _build_chunk_inputs(
     ]
 
 
-# -------------------- summary writing --------------------
+def _token_count(full_text: str) -> int:
+    return count_tokens(full_text) if full_text else 0
 
 
-def _write_summary(conn, document_id: int, summary: SummaryResult) -> int:
-    cur = conn.cursor()
-    prior = cur.execute(
-        "SELECT summary_id FROM summaries WHERE document_id = ?", (document_id,)
-    ).fetchone()
-    if prior:
-        delete_chunks_for(conn, "summary", prior[0])
-        cur.execute("DELETE FROM summaries WHERE summary_id = ?", (prior[0],))
-
-    cur.execute(
-        "INSERT INTO summaries "
-        "(document_id, title, description, text, model, authored_date) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (document_id, summary.title, summary.description,
-         summary.text, summary.model, summary.authored_date),
-    )
-    summary_id = conn.last_insert_rowid()
-
-    rows = chunk_markdown_string(summary.text)
-    if rows:
-        embeddings = embed_texts([r.text for r in rows])
-        insert_summary_chunks(conn, summary_id, _build_chunk_inputs(rows, embeddings))
-    return summary_id
+def _summary_chunks(text: str) -> list[ChunkInput]:
+    """Chunk + embed a summary's markdown body into ChunkInputs (producer side)."""
+    rows = chunk_markdown_string(text)
+    if not rows:
+        return []
+    embeddings = embed_texts([r.text for r in rows])
+    return _build_chunk_inputs(rows, embeddings)
 
 
-def _build_summary_input(conn, document_id: int, fallback_text: str) -> str:
-    """Interleave document and image chunks in source order for the summarizer.
-
-    Either set may be empty: a text-only doc has no image chunks, an image-only
-    doc (a standalone image, or an image-only PDF whose pages all rendered to
-    the VLM) has no document chunks. We build from whatever chunks exist so the
-    summarizer always sees real, indexed content — never the raw ``full_text``,
-    which for image-only docs is trace garbage (page labels, form-feed
-    separators) and makes the model confabulate (issue #80). ``fallback_text``
-    is returned only when there are no chunks of either kind, which the
-    chunk-count guard in ``_maybe_summarize`` already excludes.
-    """
-    cur = conn.cursor()
-    img_rows = cur.execute(
-        "SELECT di.page_number, c.chunk_index, c.text "
-        "FROM chunks c "
-        "JOIN document_images di ON di.image_id = c.source_id "
-        "WHERE c.source_kind = 'image' AND di.document_id = ?",
-        (document_id,),
-    ).fetchall()
-    doc_rows = cur.execute(
-        "SELECT page_number, chunk_index, text FROM chunks "
-        "WHERE source_kind = 'document' AND source_id = ?",
-        (document_id,),
-    ).fetchall()
-    if not img_rows and not doc_rows:
-        return fallback_text
-
-    KIND_DOC, KIND_IMG = 0, 1
-    entries = (
-        [(p, KIND_DOC, ci, t) for p, ci, t in doc_rows]
-        + [(p, KIND_IMG, ci, t) for p, ci, t in img_rows]
-    )
-    entries.sort(key=lambda r: (r[0] if r[0] is not None else -1, r[1], r[2]))
-
-    parts: list[str] = []
-    for page_number, kind, _chunk_index, text in entries:
-        if kind == KIND_IMG:
-            label = (
-                f"[Image on page {page_number}]"
-                if page_number is not None else "[Image]"
-            )
-            parts.append(f"{label}\n{text}")
-        else:
-            parts.append(text)
-    return "\n\n".join(parts)
+# -------------------- image parse + caption --------------------
 
 
-def _document_chunk_count(conn, document_id: int) -> int:
-    """Count indexed chunks attributable to a document: its own document chunks
-    plus any image chunks joined through ``document_images``.
-
-    Summary chunks are excluded — at summarize time the summary doesn't exist
-    yet, and it would never be an *input* to the summarizer anyway. This is the
-    "is there anything real to summarize?" test (issue #80): a document with
-    zero chunks has no extractable content, so the only text left to feed the
-    model is the trace ``full_text``, which makes it confabulate.
-    """
-    row = conn.cursor().execute(
-        "SELECT "
-        "  (SELECT COUNT(*) FROM chunks "
-        "   WHERE source_kind = 'document' AND source_id = ?) "
-        "+ (SELECT COUNT(*) FROM chunks c "
-        "     JOIN document_images di ON di.image_id = c.source_id "
-        "   WHERE c.source_kind = 'image' AND di.document_id = ?)",
-        (document_id, document_id),
-    ).fetchone()
-    return row[0]
-
-
-def _maybe_summarize(
-    conn,
-    document_id: int,
-    full_text: str,
-    *,
-    provider: Provider | None,
-    model: str | None,
-    temperature: float,
-    max_summarize_tokens: int,
-    on_stage: Callable[[str], None] | None = None,
-) -> None:
-    if provider is None or not model:
-        return
-    if _document_chunk_count(conn, document_id) == 0:
-        # No indexed chunks → nothing real to summarize. Handing the model the
-        # trace `full_text` (page labels, form-feed separators from an
-        # image-only / sub-threshold doc) makes it confabulate a plausible but
-        # entirely fabricated summary (issue #80). Skip, and surface it so the
-        # user can spot an ingestion failure (e.g. an image-only PDF needing OCR).
-        file_name = conn.cursor().execute(
-            "SELECT file_name FROM documents WHERE document_id = ?",
-            (document_id,),
-        ).fetchone()[0]
-        console.warn(
-            f"{file_name}: no summary — no extractable content (0 chunks). "
-            f"The document may be image-only and need OCR/re-ingest."
-        )
-        return
-    if on_stage is not None:
-        on_stage("summarizing")
-    summary_input = _build_summary_input(conn, document_id, full_text)
-    result = summarize(
-        summary_input,
-        provider=provider,
-        model=model,
-        temperature=temperature,
-        max_summarize_tokens=max_summarize_tokens,
-    )
-    _write_summary(conn, document_id, result)
-
-
-# -------------------- image ingestion (the inner loop) --------------------
-
-
-@dataclass
 class _ImageRoute:
     """One image (embedded or page-render) ready for the pipeline."""
-    bytes_: bytes
-    page_number: int | None       # None for standalone files
-    image_index_on_page: int      # 0 for page-renders, 1+ for embedded; 0 for standalone too
-    # For sparse-page renders we already ran Tesseract at the page level — pass
-    # that result down so the image pipeline can skip its own Tesseract pre-pass.
-    prefetched_ocr: ocr_module.OcrResult | None = None
+
+    def __init__(
+        self,
+        bytes_: bytes,
+        page_number: int | None,
+        image_index_on_page: int,
+        prefetched_ocr: ocr_module.OcrResult | None = None,
+    ):
+        self.bytes_ = bytes_
+        self.page_number = page_number              # None for standalone files
+        self.image_index_on_page = image_index_on_page  # 0 for page-renders/standalone
+        # For sparse-page renders we already ran Tesseract at the page level —
+        # pass that result down so caption can skip its own Tesseract pre-pass.
+        self.prefetched_ocr = prefetched_ocr
 
 
-def _process_image(
-    conn,
-    document_id: int,
-    route: _ImageRoute,
+def _parse_image_routes(
+    routes: list[_ImageRoute],
     *,
     archive_root: Path,
-    vision_provider: Provider,
-    vision_model: str,
+    vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
-) -> None:
-    """Run the §7 image pipeline on one image and persist it.
+) -> list[ParsedImage]:
+    """Scale + archive each route into a ParsedImage (no VLM, no DB).
 
-    Dedupes on the image's source-byte hash: if we have already analyzed an
-    identical image (across any document), reuse the ``images`` row and add a
-    new ``document_images`` join. Chunks come along automatically since they
-    point at ``image_id``.
-
-    Images with an edge below ``vision_min_dimension`` are skipped entirely —
-    no analysis, no archive, no rows — because VLMs crash on sub-patch-size
-    images and such slivers carry no describable content anyway.
+    Sub-minimum images are dropped here, exactly as before: VLM image processors
+    crash on sub-patch-size edges and such slivers carry no describable content.
+    With no vision provider there's nothing to caption, so routes produce no
+    rows (a warning, then skipped).
     """
-    prepared = image_pipeline.prepare_image(
-        route.bytes_, max_dimension=vision_max_dimension,
-    )
-    if image_pipeline.is_below_vlm_minimum(
-        prepared, min_dimension=vision_min_dimension
-    ):
-        page_str = f" (page {route.page_number})" if route.page_number else ""
+    if not routes:
+        return []
+    if not vision_enabled:
         console.warn(
-            f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
-            f"is below the {vision_min_dimension}px vision minimum."
+            f"Skipping {len(routes)} image(s) — no vision provider configured."
         )
-        return
-    cur = conn.cursor()
-
-    existing = cur.execute(
-        "SELECT image_id FROM images WHERE file_hash = ?", (prepared.hash,)
-    ).fetchone()
-
-    if existing is not None:
-        image_id = existing[0]
-    else:
+        return []
+    parsed: list[ParsedImage] = []
+    for route in routes:
+        prepared = image_pipeline.prepare_image(
+            route.bytes_, max_dimension=vision_max_dimension,
+        )
+        if image_pipeline.is_below_vlm_minimum(
+            prepared, min_dimension=vision_min_dimension
+        ):
+            page_str = f" (page {route.page_number})" if route.page_number else ""
+            console.warn(
+                f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
+                f"is below the {vision_min_dimension}px vision minimum."
+            )
+            continue
         archived = image_pipeline.archive_image(prepared, archive_root)
-        analysis = image_pipeline.analyze(
-            vision_provider, prepared, model=vision_model,
+        parsed.append(ParsedImage(
+            hash=prepared.hash,
+            archive_path=archived,
+            width=prepared.width,
+            height=prepared.height,
+            page_number=route.page_number,
+            image_index_on_page=route.image_index_on_page,
+            jpeg_bytes=prepared.jpeg_bytes,
             prefetched_ocr=route.prefetched_ocr,
-        )
-        cur.execute(
-            "INSERT INTO images "
-            "(file_hash, file_path, width, height, analysis_json, analysis_model) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (prepared.hash, str(archived), prepared.width, prepared.height,
-             analysis.model_dump_json(), vision_model),
-        )
-        image_id = conn.last_insert_rowid()
-        chunk_inputs = image_pipeline.analysis_to_chunk_inputs(analysis)
-        if chunk_inputs:
-            insert_image_chunks(conn, image_id, chunk_inputs)
+        ))
+    return parsed
 
-    # OR IGNORE: re-ingest after delete can legitimately replay the same
-    # (doc, image, page, index) tuple; no-op rather than crash the whole file.
-    cur.execute(
-        "INSERT OR IGNORE INTO document_images "
-        "(document_id, image_id, page_number, image_index_on_page) "
-        "VALUES (?, ?, ?, ?)",
-        (document_id, image_id, route.page_number, route.image_index_on_page),
+
+def _caption_image(
+    pending: PendingImage,
+    jpeg_bytes: bytes,
+    *,
+    vision_provider: Provider,
+    vision_model: str,
+    prefetched_ocr: ocr_module.OcrResult | None = None,
+) -> ImageCaption:
+    """Run the §7 image pipeline on one already-recorded image row.
+
+    Decides text-image vs scene-image (Tesseract first; VLM only for scenes),
+    producing the analysis JSON and at most one searchable chunk. The prepared
+    JPEG is supplied by the caller — in-process from the parse hint, or reloaded
+    from the archive on a resume.
+    """
+    prepared = image_pipeline.PreparedImage(
+        hash=pending.file_hash,
+        jpeg_bytes=jpeg_bytes,
+        width=pending.width,
+        height=pending.height,
+    )
+    analysis = image_pipeline.analyze(
+        vision_provider, prepared, model=vision_model,
+        prefetched_ocr=prefetched_ocr,
+    )
+    return ImageCaption(
+        image_id=pending.image_id,
+        analysis_json=analysis.model_dump_json(),
+        analysis_model=vision_model,
+        chunks=image_pipeline.analysis_to_chunk_inputs(analysis),
     )
 
 
-# -------------------- per-file dispatch --------------------
+# -------------------- per-type parse (no DB writes) --------------------
 
 
-def _ingest_text_document(
-    conn,
+def _parse_text_document(
     archived: Path,
     *,
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
-) -> tuple[int, str]:
+) -> ParsedDocument:
     """txt / html / md via the existing convert_and_chunk path."""
     if on_stage is not None:
         on_stage("extracting")
     result = convert_and_chunk(archived)
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=result.page_count,
-        full_text=result.full_text,
-    )
+    chunks: list[ChunkInput] = []
     if result.chunks:
         embeddings = embed_texts([row.text for row in result.chunks])
-        insert_document_chunks(
-            conn, document_id, _build_chunk_inputs(result.chunks, embeddings),
-        )
-    return document_id, result.full_text
+        chunks = _build_chunk_inputs(result.chunks, embeddings)
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=result.page_count, token_count=_token_count(result.full_text),
+        document_chunks=chunks, images=[],
+    )
 
 
 def _sec2md_chunk_to_row(chunk, *, fallback_heading: str | None = None) -> ChunkRow:
@@ -500,45 +339,38 @@ def _sec2md_chunk_to_row(chunk, *, fallback_heading: str | None = None) -> Chunk
     )
 
 
-def _ingest_html_sec2md(
-    conn,
+def _parse_html_sec2md(
     archived: Path,
     *,
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
-) -> tuple[int, str]:
+) -> ParsedDocument:
     """iXBRL EDGAR filing via sec2md."""
     if on_stage is not None:
         on_stage("extracting")
     result = sec2md_pipeline.convert(archived)
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=result.page_count,
-        full_text=result.full_text,
-    )
+    chunks: list[ChunkInput] = []
     if result.chunks:
         if on_stage is not None:
             on_stage("embedding")
         rows = [_sec2md_chunk_to_row(c) for c in result.chunks]
         embeddings = embed_texts([r.text for r in rows])
-        insert_document_chunks(
-            conn, document_id, _build_chunk_inputs(rows, embeddings),
-        )
-    return document_id, result.full_text
+        chunks = _build_chunk_inputs(rows, embeddings)
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=result.page_count, token_count=_token_count(result.full_text),
+        document_chunks=chunks, images=[],
+    )
 
 
-def _ingest_edgar_submission(
-    conn,
+def _parse_edgar_submission(
     archived: Path,
     *,
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
-) -> tuple[int, str]:
+) -> ParsedDocument:
     """EDGAR full-submission `.txt`: unwrap the SGML envelope and route each
     inner document to its converter, landing as one document row.
 
@@ -574,26 +406,20 @@ def _ingest_edgar_submission(
             )
 
     full_text = "\n\f\n".join(part for part in full_text_parts if part)
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=None,
-        full_text=full_text,
-    )
+    chunks: list[ChunkInput] = []
     if rows:
         if on_stage is not None:
             on_stage("embedding")
         embeddings = embed_texts([r.text for r in rows])
-        insert_document_chunks(
-            conn, document_id, _build_chunk_inputs(rows, embeddings),
-        )
-    return document_id, full_text
+        chunks = _build_chunk_inputs(rows, embeddings)
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=None, token_count=_token_count(full_text),
+        document_chunks=chunks, images=[],
+    )
 
 
-def _ingest_pdf_pdfplumber(
-    conn,
+def _parse_pdf_pdfplumber(
     archived: Path,
     *,
     file_hash: str,
@@ -601,15 +427,13 @@ def _ingest_pdf_pdfplumber(
     archive_root: Path,
     sparse_text_threshold: int,
     ocr_min_confidence: int,
-    vision_provider: Provider | None,
-    vision_model: str | None,
+    vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
     on_page_progress: Callable[[int, int], None] | None = None,
-    on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_page_count: Callable[[int | None], None] | None = None,
-) -> tuple[int, str]:
+) -> ParsedDocument:
     if on_stage is not None:
         on_stage("extracting")
     result = pdfplumber_pipeline.convert(
@@ -620,22 +444,13 @@ def _ingest_pdf_pdfplumber(
     )
     if on_page_count is not None:
         on_page_count(result.page_count)
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=result.page_count,
-        full_text=result.full_text,
-    )
 
-    doc_chunks: list[ChunkRow] = []
+    doc_rows: list[ChunkRow] = []
     image_routes: list[_ImageRoute] = []
-
     for page in result.pages:
         if page.content_type is not None:
             for piece in chunk_text(page.text):
-                doc_chunks.append(ChunkRow(
+                doc_rows.append(ChunkRow(
                     text=piece,
                     section_heading=None,
                     content_type=page.content_type,
@@ -643,8 +458,8 @@ def _ingest_pdf_pdfplumber(
                 ))
         elif page.page_render_png is not None:
             # Sparse page where OCR didn't clear the bar — fall back to VLM.
-            # Page-level Tesseract already ran; hand the result down so the
-            # image pipeline doesn't re-OCR the same bytes.
+            # Page-level Tesseract already ran; hand the result down so caption
+            # doesn't re-OCR the same bytes.
             image_routes.append(_ImageRoute(
                 bytes_=page.page_render_png,
                 page_number=page.page_number,
@@ -659,61 +474,48 @@ def _ingest_pdf_pdfplumber(
                 image_index_on_page=emb.image_index_on_page,
             ))
 
-    if on_stage is not None:
-        on_stage("embedding")
-    if doc_chunks:
-        embeddings = embed_texts([r.text for r in doc_chunks])
-        insert_document_chunks(
-            conn, document_id, _build_chunk_inputs(doc_chunks, embeddings),
-        )
+    chunks: list[ChunkInput] = []
+    if doc_rows:
+        if on_stage is not None:
+            on_stage("embedding")
+        embeddings = embed_texts([r.text for r in doc_rows])
+        chunks = _build_chunk_inputs(doc_rows, embeddings)
 
-    if on_stage is not None and image_routes:
-        on_stage("analyzing images")
-    _run_image_routes(
-        conn, document_id, image_routes,
-        archive_root=archive_root,
-        vision_provider=vision_provider,
-        vision_model=vision_model,
+    images = _parse_image_routes(
+        image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
-        on_progress=on_image_progress,
+    )
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=result.page_count, token_count=_token_count(result.full_text),
+        document_chunks=chunks, images=images,
     )
 
-    return document_id, result.full_text
 
-
-def _ingest_pdf_docling(
-    conn,
+def _parse_pdf_docling(
     archived: Path,
     *,
     file_hash: str,
     file_name: str,
     archive_root: Path,
-    vision_provider: Provider | None,
-    vision_model: str | None,
+    vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
-    on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_page_count: Callable[[int | None], None] | None = None,
-) -> tuple[int, str]:
+) -> ParsedDocument:
     from bartleby.ingest import docling as docling_pipeline
 
     if on_stage is not None:
         on_stage("extracting")
     docling_result = docling_pipeline.convert(
-        archived, extract_images=vision_provider is not None
+        archived, extract_images=vision_enabled,
     )
     if on_page_count is not None:
         on_page_count(docling_result.page_count)
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=docling_result.page_count,
-        full_text=docling_result.full_text,
-    )
+
+    chunks: list[ChunkInput] = []
     if docling_result.chunks:
         if on_stage is not None:
             on_stage("embedding")
@@ -723,14 +525,11 @@ def _ingest_pdf_docling(
             for c in docling_result.chunks
         ]
         embeddings = embed_texts([r.text for r in rows])
-        insert_document_chunks(
-            conn, document_id, _build_chunk_inputs(rows, embeddings),
-        )
+        chunks = _build_chunk_inputs(rows, embeddings)
 
     # Embedded images come out of the same docling pass (no second parse).
-    if vision_provider is not None and docling_result.images:
-        if on_stage is not None:
-            on_stage("analyzing images")
+    image_routes: list[_ImageRoute] = []
+    if vision_enabled and docling_result.images:
         image_routes = [
             _ImageRoute(
                 bytes_=img.png_bytes,
@@ -739,109 +538,240 @@ def _ingest_pdf_docling(
             )
             for img in docling_result.images
         ]
-        _run_image_routes(
-            conn, document_id, image_routes,
-            archive_root=archive_root,
-            vision_provider=vision_provider,
-            vision_model=vision_model,
-            vision_max_dimension=vision_max_dimension,
-            vision_min_dimension=vision_min_dimension,
-            on_progress=on_image_progress,
-        )
+    images = _parse_image_routes(
+        image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
+        vision_max_dimension=vision_max_dimension,
+        vision_min_dimension=vision_min_dimension,
+    )
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=docling_result.page_count,
+        token_count=_token_count(docling_result.full_text),
+        document_chunks=chunks, images=images,
+    )
 
-    return document_id, docling_result.full_text
 
-
-def _ingest_image_file(
-    conn,
+def _parse_image_file(
     archived: Path,
     *,
     file_hash: str,
     file_name: str,
     archive_root: Path,
-    vision_provider: Provider,
-    vision_model: str,
     vision_max_dimension: int,
     vision_min_dimension: int,
-    on_stage: Callable[[str], None] | None = None,
-) -> tuple[int, str]:
-    if on_stage is not None:
-        on_stage("analyzing image")
-    document_id = _insert_document(
-        conn,
-        file_hash=file_hash,
-        file_name=file_name,
-        archive_path=archived,
-        page_count=None,
-        full_text="",
-    )
+) -> ParsedDocument:
+    """A standalone image: one route, no document chunks. The summarizer (if
+    enabled) builds its input from the image chunk once captioned."""
     route = _ImageRoute(
-        bytes_=archived.read_bytes(),
-        page_number=None,
-        image_index_on_page=0,
+        bytes_=archived.read_bytes(), page_number=None, image_index_on_page=0,
     )
-    _process_image(
-        conn, document_id, route,
-        archive_root=archive_root,
-        vision_provider=vision_provider,
-        vision_model=vision_model,
+    images = _parse_image_routes(
+        [route], archive_root=archive_root, vision_enabled=True,
         vision_max_dimension=vision_max_dimension,
         vision_min_dimension=vision_min_dimension,
     )
-    # No full_text to return: a standalone image has no document chunks, so the
-    # summarizer builds its input from the image chunks directly
-    # (_build_summary_input). The fallback_text is never reached here.
-    return document_id, ""
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=None, token_count=0, document_chunks=[], images=images,
+    )
 
 
-def _run_image_routes(
-    conn,
-    document_id: int,
-    routes: list[_ImageRoute],
+def _parse_document(
+    archived: Path,
+    ext: str,
     *,
-    archive_root: Path,
-    vision_provider: Provider | None,
-    vision_model: str | None,
+    file_hash: str,
+    file_name: str,
+    pdf_converter: str,
+    html_converter: str,
+    sparse_text_threshold: int,
+    ocr_min_confidence: int,
+    vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> None:
-    if not routes:
-        return
-    if vision_provider is None or not vision_model:
-        console.warn(
-            f"Skipping {len(routes)} image(s) — no vision provider configured."
+    archive_root: Path,
+    on_page_progress: Callable[[int, int], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    on_page_count: Callable[[int | None], None] | None = None,
+) -> ParsedDocument:
+    """Route an archived file to its converter and return a parsed result."""
+    if ext in IMAGE_EXTENSIONS:
+        return _parse_image_file(
+            archived, file_hash=file_hash, file_name=file_name,
+            archive_root=archive_root,
+            vision_max_dimension=vision_max_dimension,
+            vision_min_dimension=vision_min_dimension,
         )
-        return
-    total = len(routes)
-    if on_progress is not None:
-        on_progress(0, total)
-    for i, route in enumerate(routes, start=1):
-        try:
-            _process_image(
-                conn, document_id, route,
-                archive_root=archive_root,
-                vision_provider=vision_provider,
-                vision_model=vision_model,
+    if ext in PDF_EXTENSIONS:
+        if pdf_converter == "docling":
+            return _parse_pdf_docling(
+                archived, file_hash=file_hash, file_name=file_name,
+                archive_root=archive_root, vision_enabled=vision_enabled,
                 vision_max_dimension=vision_max_dimension,
                 vision_min_dimension=vision_min_dimension,
+                on_stage=on_stage, on_page_count=on_page_count,
             )
+        return _parse_pdf_pdfplumber(
+            archived, file_hash=file_hash, file_name=file_name,
+            archive_root=archive_root,
+            sparse_text_threshold=sparse_text_threshold,
+            ocr_min_confidence=ocr_min_confidence,
+            vision_enabled=vision_enabled,
+            vision_max_dimension=vision_max_dimension,
+            vision_min_dimension=vision_min_dimension,
+            on_page_progress=on_page_progress,
+            on_stage=on_stage, on_page_count=on_page_count,
+        )
+    if edgar_pipeline.detect(archived):
+        # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
+        # wrapper is caught here instead of falling to the character chunker.
+        return _parse_edgar_submission(
+            archived, file_hash=file_hash, file_name=file_name, on_stage=on_stage,
+        )
+    if (
+        ext in HTML_EXTENSIONS
+        and html_converter == "sec2md"
+        and sec2md_pipeline.is_ixbrl(archived)
+    ):
+        return _parse_html_sec2md(
+            archived, file_hash=file_hash, file_name=file_name, on_stage=on_stage,
+        )
+    return _parse_text_document(
+        archived, file_hash=file_hash, file_name=file_name, on_stage=on_stage,
+    )
+
+
+# -------------------- per-file orchestration --------------------
+
+
+def _is_complete(writer: Writer, document_id: int, *, summaries_enabled: bool) -> bool:
+    """Per-unit completeness: parsed ∧ every image captioned ∧ summary settled.
+
+    "Summary settled" means a summary row exists, summaries are disabled, or the
+    document has no summarizable content (0 chunks → nothing to summarize).
+    """
+    if writer.uncaptioned_images(document_id):
+        return False
+    if (
+        summaries_enabled
+        and not writer.summary_exists(document_id)
+        and writer.summarizable_chunk_count(document_id) > 0
+    ):
+        return False
+    return True
+
+
+def _caption_missing(
+    writer: Writer,
+    document_id: int,
+    file_name: str,
+    hints: dict[str, ParsedImage],
+    *,
+    vision_provider: Provider | None,
+    vision_model: str | None,
+    vision_enabled: bool,
+    on_stage: Callable[[str], None] | None,
+    on_image_progress: Callable[[int, int], None] | None,
+) -> bool:
+    """Caption every uncaptioned image row of a document. Returns True if any
+    image is still uncaptioned afterwards (failed this run or capped)."""
+    pending = writer.uncaptioned_images(document_id)
+    if not pending:
+        return False
+    if not vision_enabled:
+        console.warn(
+            f"Skipping {len(pending)} uncaptioned image(s) in {file_name} — "
+            f"no vision provider configured."
+        )
+        return True
+
+    if on_stage is not None:
+        on_stage("analyzing images")
+    total = len(pending)
+    if on_image_progress is not None:
+        on_image_progress(0, total)
+
+    incomplete = False
+    for i, pi in enumerate(pending, start=1):
+        page_str = f" (page {pi.page_number})" if pi.page_number else ""
+        try:
+            if writer.is_capped(pi.file_hash, "caption"):
+                incomplete = True
+                console.warn(
+                    f"{file_name}: skipping image{page_str} — failed "
+                    f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
+                )
+                continue
+            hint = hints.get(pi.file_hash)
+            jpeg = hint.jpeg_bytes if hint is not None else Path(pi.file_path).read_bytes()
+            prefetched = hint.prefetched_ocr if hint is not None else None
+            caption = _caption_image(
+                pi, jpeg, vision_provider=vision_provider,
+                vision_model=vision_model, prefetched_ocr=prefetched,
+            )
+            writer.persist_caption(caption)
+            writer.clear_failure(pi.file_hash, "caption")
         except Exception as e:
-            page_str = f" (page {route.page_number})" if route.page_number else ""
+            incomplete = True
             console.warn(f"Image analysis failed{page_str}: {e}")
+            writer.record_failure(pi.file_hash, file_name, "caption", e)
         finally:
-            if on_progress is not None:
-                on_progress(i, total)
+            if on_image_progress is not None:
+                on_image_progress(i, total)
+    return incomplete
 
 
-# -------------------- top-level orchestrator --------------------
-
-
-HTML_EXTENSIONS = {".html", ".htm"}
+def _summarize_if_missing(
+    writer: Writer,
+    document_id: int,
+    file_hash: str,
+    file_name: str,
+    *,
+    summaries_enabled: bool,
+    llm_provider: Provider | None,
+    llm_model: str | None,
+    temperature: float,
+    max_summarize_tokens: int,
+    on_stage: Callable[[str], None] | None,
+) -> bool:
+    """Summarize a document if it has none yet. Returns True if a summary was
+    owed but did not land (failed this run or capped)."""
+    if not summaries_enabled or writer.summary_exists(document_id):
+        return False
+    if writer.summarizable_chunk_count(document_id) == 0:
+        # No indexed chunks → nothing real to summarize. Handing the model trace
+        # text (page labels, form-feed separators from an image-only/sub-threshold
+        # doc) makes it confabulate (issue #80). Counts as settled; surface it.
+        console.warn(
+            f"{file_name}: no summary — no extractable content (0 chunks). "
+            f"The document may be image-only and need OCR/re-ingest."
+        )
+        return False
+    if writer.is_capped(file_hash, "summary"):
+        console.warn(
+            f"{file_name}: skipping summary — failed {MAX_INGEST_ATTEMPTS}× "
+            f"already; not retrying."
+        )
+        return True
+    try:
+        if on_stage is not None:
+            on_stage("summarizing")
+        result = summarize(
+            writer.summary_input(document_id),
+            provider=llm_provider, model=llm_model,
+            temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+        )
+        writer.persist_summary(document_id, result, _summary_chunks(result.text))
+        writer.clear_failure(file_hash, "summary")
+        return False
+    except Exception as e:
+        console.warn(f"{file_name}: summary failed: {e}")
+        writer.record_failure(file_hash, file_name, "summary", e)
+        return True
 
 
 def _process_one(
-    conn,
+    writer: Writer,
     path: Path,
     ext: str,
     archive_root: Path,
@@ -862,93 +792,70 @@ def _process_one(
     on_image_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
     on_page_count: Callable[[int | None], None] | None = None,
-) -> bool:
-    """Returns True if a new document was ingested, False if the file was
-    already ingested and skipped. Caller handles the user-facing message."""
+) -> str:
+    """Ingest one file, resuming only the units that are missing.
+
+    Returns one of the module-level outcome constants. A parse failure is
+    recorded and re-raised (the run loop reports it); caption and summary
+    failures are recorded but not raised — they leave the document incomplete,
+    to be resumed on a later run until they succeed or hit the retry cap.
+    """
     file_hash = _hash_file(path)
-    if _document_already_ingested(conn, file_hash) is not None:
-        return False
+    summaries_enabled = llm_provider is not None and bool(llm_model)
+    vision_enabled = vision_provider is not None and bool(vision_model)
 
-    # If a stranded partial row exists for this hash (interrupted run), drop
-    # it so the upcoming INSERT doesn't trip the file_hash UNIQUE constraint.
-    stranded = conn.cursor().execute(
-        "SELECT document_id FROM documents WHERE file_hash = ?", (file_hash,)
-    ).fetchone()
-    if stranded is not None:
-        _cleanup_partial_document(conn, stranded[0])
+    document_id = writer.document_id_for(file_hash)
+    if document_id is not None and _is_complete(
+        writer, document_id, summaries_enabled=summaries_enabled,
+    ):
+        return SKIPPED
 
-    archived = _archive(path, archive_root, file_hash, ext)
-
-    if ext in IMAGE_EXTENSIONS:
-        if vision_provider is None:
+    # PARSE — only when the document hasn't been parsed yet. The parse result
+    # commits as one transaction, so this never re-parses an existing document.
+    if document_id is None:
+        if ext in IMAGE_EXTENSIONS and not vision_enabled:
             console.warn(
                 f"{path.name}: skipping image (no vision provider configured)."
             )
-            return
-        document_id, full_text = _ingest_image_file(
-            conn, archived,
-            file_hash=file_hash, file_name=path.name,
-            archive_root=archive_root,
-            vision_provider=vision_provider, vision_model=vision_model,
-            vision_max_dimension=vision_max_dimension,
-            vision_min_dimension=vision_min_dimension,
-            on_stage=on_stage,
-        )
-    elif ext in PDF_EXTENSIONS:
-        if pdf_converter == "docling":
-            document_id, full_text = _ingest_pdf_docling(
-                conn, archived,
-                file_hash=file_hash, file_name=path.name,
-                archive_root=archive_root,
-                vision_provider=vision_provider, vision_model=vision_model,
-                vision_max_dimension=vision_max_dimension,
-                vision_min_dimension=vision_min_dimension,
-                on_image_progress=on_image_progress,
-                on_stage=on_stage,
-                on_page_count=on_page_count,
-            )
-        else:
-            document_id, full_text = _ingest_pdf_pdfplumber(
-                conn, archived,
-                file_hash=file_hash, file_name=path.name,
-                archive_root=archive_root,
+            return NO_VISION_SKIP
+        archived = _archive(path, archive_root, file_hash, ext)
+        try:
+            parsed = _parse_document(
+                archived, ext, file_hash=file_hash, file_name=path.name,
+                pdf_converter=pdf_converter, html_converter=html_converter,
                 sparse_text_threshold=sparse_text_threshold,
                 ocr_min_confidence=ocr_min_confidence,
-                vision_provider=vision_provider, vision_model=vision_model,
+                vision_enabled=vision_enabled,
                 vision_max_dimension=vision_max_dimension,
                 vision_min_dimension=vision_min_dimension,
+                archive_root=archive_root,
                 on_page_progress=on_page_progress,
-                on_image_progress=on_image_progress,
-                on_stage=on_stage,
-                on_page_count=on_page_count,
+                on_stage=on_stage, on_page_count=on_page_count,
             )
-    elif edgar_pipeline.detect(archived):
-        # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
-        # wrapper is caught here instead of falling to the character chunker.
-        document_id, full_text = _ingest_edgar_submission(
-            conn, archived,
-            file_hash=file_hash, file_name=path.name,
-            on_stage=on_stage,
-        )
-    elif ext in HTML_EXTENSIONS and html_converter == "sec2md" and sec2md_pipeline.is_ixbrl(archived):
-        document_id, full_text = _ingest_html_sec2md(
-            conn, archived,
-            file_hash=file_hash, file_name=path.name,
-            on_stage=on_stage,
-        )
+        except Exception as e:
+            writer.record_failure(file_hash, path.name, "parse", e)
+            raise
+        document_id = writer.persist_parse(parsed)
+        writer.clear_failure(file_hash, "parse")
+        hints = {img.hash: img for img in parsed.images}
     else:
-        document_id, full_text = _ingest_text_document(
-            conn, archived, file_hash=file_hash, file_name=path.name,
-            on_stage=on_stage,
-        )
+        hints = {}
 
-    _maybe_summarize(
-        conn, document_id, full_text,
-        provider=llm_provider, model=llm_model,
+    incomplete = _caption_missing(
+        writer, document_id, path.name, hints,
+        vision_provider=vision_provider, vision_model=vision_model,
+        vision_enabled=vision_enabled,
+        on_stage=on_stage, on_image_progress=on_image_progress,
+    )
+    incomplete = _summarize_if_missing(
+        writer, document_id, file_hash, path.name,
+        summaries_enabled=summaries_enabled,
+        llm_provider=llm_provider, llm_model=llm_model,
         temperature=temperature, max_summarize_tokens=max_summarize_tokens,
         on_stage=on_stage,
-    )
-    return True
+    ) or incomplete
+
+    return INCOMPLETE if incomplete else INGESTED
 
 
 # -------------------- resolution / entry --------------------
@@ -998,6 +905,32 @@ def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, .
     if "docling" in (pdf_converter, html_converter):
         models.extend(DOCLING_HF_REPOS)
     return tuple(models)
+
+
+def _report_failures(writer: Writer) -> None:
+    """Surface every still-unresolved ingest unit so a skipped one never reads
+    as a green run. Capped units won't be retried; the rest resume next run."""
+    failures = writer.failures()
+    if not failures:
+        return
+    capped = sum(1 for f in failures if f.capped)
+    console.warn(
+        f"{len(failures)} ingest unit(s) did not complete "
+        f"({capped} capped after {MAX_INGEST_ATTEMPTS} attempts, "
+        f"the rest will retry on the next run):"
+    )
+    DISPLAY_LIMIT = 10
+    for f in failures[:DISPLAY_LIMIT]:
+        flag = (
+            "capped — not retried" if f.capped
+            else f"will retry (attempt {f.attempts}/{MAX_INGEST_ATTEMPTS})"
+        )
+        console.warn(f"  [{f.stage}] {f.file_name}: {f.error} — {flag}")
+    if len(failures) > DISPLAY_LIMIT:
+        console.warn(
+            f"  … and {len(failures) - DISPLAY_LIMIT} more "
+            f"(see `bartleby project info`)"
+        )
 
 
 def main(
@@ -1085,6 +1018,7 @@ def main(
     console.big(f"Ingesting {len(sources)} file(s) into project '{project_name}'")
 
     conn = open_db(project_name)
+    writer = Writer(conn)
     try:
         temperature = float(config.get("temperature", 0))
         max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
@@ -1131,6 +1065,7 @@ def main(
 
             SKIP_DISPLAY_LIMIT = 3
             skipped_count = 0
+            incomplete_count = 0
 
             # --timings: collect per-doc per-stage wall-clock and aggregate it
             # after the loop. Off by default — `timer` stays None and the loop
@@ -1173,8 +1108,8 @@ def main(
 
                 _render()
                 try:
-                    was_ingested = _process_one(
-                        conn, src, src_ext, archive_root,
+                    outcome = _process_one(
+                        writer, src, src_ext, archive_root,
                         pdf_converter=pdf_converter_name,
                         html_converter=html_converter_name,
                         sparse_text_threshold=sparse_text_threshold,
@@ -1191,21 +1126,27 @@ def main(
                         on_stage=_set_stage,
                         on_page_count=_set_page_count,
                     )
-                    if not was_ingested:
+                    if outcome == SKIPPED:
                         skipped_count += 1
                         if skipped_count <= SKIP_DISPLAY_LIMIT:
                             console.info(
                                 f"Skipping {src.name} (already ingested)"
                             )
-                    elif timer is not None:
-                        timer.finish()
-                        timing_records.append(timing.DocTiming(
-                            page_count=state["pages"],
-                            stages=dict(timer.totals),
-                        ))
-                        console.info(timing.render_doc_line(
-                            src.name, timer.total, timer.totals,
-                        ))
+                    elif outcome in (INGESTED, INCOMPLETE):
+                        # A document that did real work this run (whether it
+                        # finished or is resumable) — count incompletes, and
+                        # record its per-stage timing when --timings is on.
+                        if outcome == INCOMPLETE:
+                            incomplete_count += 1
+                        if timer is not None:
+                            timer.finish()
+                            timing_records.append(timing.DocTiming(
+                                page_count=state["pages"],
+                                stages=dict(timer.totals),
+                            ))
+                            console.info(timing.render_doc_line(
+                                src.name, timer.total, timer.totals,
+                            ))
                 except Exception as e:
                     from bartleby.lib.quiet import OFFLINE_HINT, offline_blocked
                     message = f"Failed: {src.name}: {e}"
@@ -1223,6 +1164,13 @@ def main(
                 console.info(
                     f"… and {extra_skipped} more file(s) skipped as already ingested"
                 )
+            if incomplete_count:
+                console.warn(
+                    f"{incomplete_count} file(s) ingested but incomplete — "
+                    f"some unit(s) still missing (see below)."
+                )
+
+        _report_failures(writer)
     finally:
         conn.close()
 

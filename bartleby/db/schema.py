@@ -5,7 +5,7 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 EMBEDDING_DIM = 768
 
@@ -126,6 +126,16 @@ CREATE TABLE document_tags (
 );
 
 CREATE INDEX idx_document_tags_tag ON document_tags(tag_id);
+
+CREATE TABLE failed_ingests (
+    file_hash TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    stage TEXT NOT NULL CHECK (stage IN ('parse', 'caption', 'summary')),
+    error TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    last_attempt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (file_hash, stage)
+);
 
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text,

@@ -109,6 +109,7 @@ def get_project_info(name: str) -> dict:
         "session_count": 0,
         "finding_count": 0,
         "chunk_counts": {kind: 0 for kind in ALLOWED_SOURCE_KINDS},
+        "failed_ingests": {"total": 0, "capped": 0},
     }
 
     if not db_path.exists():
@@ -134,6 +135,19 @@ def get_project_info(name: str) -> dict:
             "SELECT source_kind, COUNT(*) FROM chunks GROUP BY source_kind"
         ):
             info["chunk_counts"][kind] = count
+
+        # Per-unit ingest failures (parse/caption/summary) that never resolved.
+        # Surfaced so a capped, permanently-skipped unit can't read as done.
+        from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+        info["failed_ingests"] = {
+            "total": cur.execute(
+                "SELECT COUNT(*) FROM failed_ingests"
+            ).fetchone()[0],
+            "capped": cur.execute(
+                "SELECT COUNT(*) FROM failed_ingests WHERE attempts >= ?",
+                (MAX_INGEST_ATTEMPTS,),
+            ).fetchone()[0],
+        }
     finally:
         conn.close()
 
