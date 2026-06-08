@@ -29,6 +29,7 @@ import os
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -78,6 +79,7 @@ from bartleby.ingest.writer import (
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
+    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
@@ -266,28 +268,39 @@ def _parse_image_routes(
     return parsed
 
 
-def _caption_image(
+def _analyze_image(
     pending: PendingImage,
-    jpeg_bytes: bytes,
     *,
     vision_provider: Provider,
     vision_model: str,
-) -> ImageCaption:
-    """Run the §7 image pipeline on one already-recorded image row.
+) -> image_pipeline.ImageAnalysis:
+    """Run the §7 image pipeline (Tesseract → VLM) on one recorded image row.
 
-    Decides text-image vs scene-image (Tesseract first; VLM only for scenes),
-    producing the analysis JSON and at most one searchable chunk. The prepared
-    JPEG is reloaded from the archive by the caller.
+    Reloads the prepared JPEG from the archive and classifies text-image vs
+    scene-image (VLM only for scenes). Pure analysis: no embedding, no DB — the
+    OCR subprocess and VLM network call both release the GIL, so this is the
+    half of captioning that runs off the writer thread in the caption pool.
     """
     prepared = image_pipeline.PreparedImage(
         hash=pending.file_hash,
-        jpeg_bytes=jpeg_bytes,
+        jpeg_bytes=Path(pending.file_path).read_bytes(),
         width=pending.width,
         height=pending.height,
     )
-    analysis = image_pipeline.analyze(
-        vision_provider, prepared, model=vision_model,
-    )
+    return image_pipeline.analyze(vision_provider, prepared, model=vision_model)
+
+
+def _caption_from_analysis(
+    pending: PendingImage,
+    analysis: image_pipeline.ImageAnalysis,
+    vision_model: str,
+) -> ImageCaption:
+    """Package an analysis into a writer-ready caption, embedding its chunk.
+
+    Runs on the writer thread: ``analysis_to_chunk_inputs`` embeds via the one
+    per-process SentenceTransformer, which isn't safe to call from several
+    caption threads at once — so embedding stays here, next to the DB write.
+    """
     return ImageCaption(
         image_id=pending.image_id,
         analysis_json=analysis.model_dump_json(),
@@ -642,61 +655,133 @@ def _is_complete(writer: Writer, document_id: int, *, summaries_enabled: bool) -
     return True
 
 
-def _caption_missing(
+@dataclass
+class _DocUnit:
+    """A document parsed + persisted this run (or resumed from an earlier one),
+    carried through the caption and summarize phases. ``stages`` accumulates
+    per-stage seconds only under ``--timings`` — it's None on the fast path."""
+    document_id: int
+    file_name: str
+    file_hash: str
+    page_count: int | None = None
+    stages: dict[str, float] | None = None
+
+
+def _caption_all(
     writer: Writer,
-    document_id: int,
-    file_name: str,
+    units: list[_DocUnit],
     *,
     vision_provider: Provider | None,
     vision_model: str | None,
     vision_enabled: bool,
-    on_stage: Callable[[str], None] | None,
-    on_image_progress: Callable[[int, int], None] | None,
-) -> bool:
-    """Caption every uncaptioned image row of a document. Returns True if any
-    image is still uncaptioned afterwards (failed this run or capped)."""
-    pending = writer.uncaptioned_images(document_id)
+    caption_workers: int,
+    timings: bool,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """Phase 2: caption every still-uncaptioned image across all parsed units.
+
+    Captioning is decoupled from parse (#166): parse only records image rows
+    (deduped by byte-hash, ``analysis_json IS NULL``); this stage analyzes them
+    and joins the captions back through the single Writer. Rows are keyed by id,
+    so one image shared by several documents is captioned once. Idempotent: only
+    rows still lacking a caption are touched, so a resumed run fills gaps.
+
+    Analysis (OCR + VLM) runs concurrently across ``caption_workers`` threads —
+    the network-bound work the GIL releases — while embedding and the DB write
+    stay on this thread, the Writer's sole owner. At ``caption_workers <= 1`` the
+    work runs inline: the path ``--timings`` forces, for a clean sequential
+    baseline with per-document caption seconds.
+
+    Mutates nothing on the units except their ``stages`` (under timings); each
+    document's remaining incompleteness is recomputed from the DB in phase 3.
+    """
+    # Unique uncaptioned rows across every unit; the first unit referencing a row
+    # owns its timing. A row shared across documents appears once.
+    pending: dict[int, PendingImage] = {}
+    owner: dict[int, _DocUnit] = {}
+    for unit in units:
+        for pi in writer.uncaptioned_images(unit.document_id):
+            if pi.image_id not in pending:
+                pending[pi.image_id] = pi
+                owner[pi.image_id] = unit
     if not pending:
-        return False
+        return
     if not vision_enabled:
         console.warn(
-            f"Skipping {len(pending)} uncaptioned image(s) in {file_name} — "
-            f"no vision provider configured."
+            f"Skipping {len(pending)} uncaptioned image(s) — no vision provider "
+            f"configured."
         )
-        return True
+        return
 
-    if on_stage is not None:
-        on_stage("analyzing images")
     total = len(pending)
-    if on_image_progress is not None:
-        on_image_progress(0, total)
+    done = 0
+    if on_progress is not None:
+        on_progress(0, total)
 
-    incomplete = False
-    for i, pi in enumerate(pending, start=1):
-        page_str = f" (page {pi.page_number})" if pi.page_number else ""
-        try:
-            if writer.is_capped(pi.file_hash, "caption"):
-                incomplete = True
-                console.warn(
-                    f"{file_name}: skipping image{page_str} — failed "
-                    f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
-                )
-                continue
-            jpeg = Path(pi.file_path).read_bytes()
-            caption = _caption_image(
-                pi, jpeg, vision_provider=vision_provider,
-                vision_model=vision_model,
+    def _advance() -> None:
+        nonlocal done
+        done += 1
+        if on_progress is not None:
+            on_progress(done, total)
+
+    # Capped rows (failed MAX_INGEST_ATTEMPTS× already) are skipped, not retried.
+    to_caption: dict[int, PendingImage] = {}
+    for image_id, pi in pending.items():
+        if writer.is_capped(pi.file_hash, "caption"):
+            console.warn(
+                f"{owner[image_id].file_name}: skipping image — failed "
+                f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
             )
-            writer.persist_caption(caption)
-            writer.clear_failure(pi.file_hash, "caption")
-        except Exception as e:
-            incomplete = True
-            console.warn(f"Image analysis failed{page_str}: {e}")
-            writer.record_failure(pi.file_hash, file_name, "caption", e)
-        finally:
-            if on_image_progress is not None:
-                on_image_progress(i, total)
-    return incomplete
+            _advance()
+        else:
+            to_caption[image_id] = pi
+
+    def _persist(image_id: int, analysis: image_pipeline.ImageAnalysis) -> None:
+        pi = to_caption[image_id]
+        writer.persist_caption(_caption_from_analysis(pi, analysis, vision_model))
+        writer.clear_failure(pi.file_hash, "caption")
+
+    def _fail(image_id: int, exc: Exception) -> None:
+        unit = owner[image_id]
+        console.warn(f"{unit.file_name}: image analysis failed: {exc}")
+        writer.record_failure(
+            to_caption[image_id].file_hash, unit.file_name, "caption", exc
+        )
+
+    if caption_workers <= 1:
+        # Inline: one image at a time on this thread. Same analyze/persist calls
+        # as the pool, but with clean per-document caption seconds for --timings.
+        for image_id, pi in to_caption.items():
+            t0 = time.perf_counter() if timings else None
+            try:
+                _persist(image_id, _analyze_image(
+                    pi, vision_provider=vision_provider, vision_model=vision_model,
+                ))
+            except Exception as e:
+                _fail(image_id, e)
+            unit = owner[image_id]
+            if t0 is not None and unit.stages is not None:
+                unit.stages["caption"] = (
+                    unit.stages.get("caption", 0.0) + (time.perf_counter() - t0)
+                )
+            _advance()
+        return
+
+    with ThreadPoolExecutor(max_workers=caption_workers) as pool:
+        futures = {
+            pool.submit(
+                _analyze_image, pi,
+                vision_provider=vision_provider, vision_model=vision_model,
+            ): image_id
+            for image_id, pi in to_caption.items()
+        }
+        for fut in as_completed(futures):
+            image_id = futures[fut]
+            try:
+                _persist(image_id, fut.result())
+            except Exception as e:
+                _fail(image_id, e)
+            _advance()
 
 
 def _summarize_if_missing(
@@ -946,6 +1031,25 @@ def _resolve_max_workers(config: dict, *, timings: bool) -> int:
     return n
 
 
+def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
+    """Resolve how many images caption concurrently in the post-parse stage.
+
+    Unlike parse workers (RAM-bound, auto-sized), captioning is network/IO-bound,
+    so this is a plain configured count defaulting to ``DEFAULT_CAPTION_WORKERS``.
+    ``--timings`` forces 1: the per-stage breakdown is a sequential baseline,
+    meaningless once captions overlap (same rationale as ``max_workers``).
+    """
+    configured = int(config.get("caption_workers") or DEFAULT_CAPTION_WORKERS)
+    if timings:
+        if configured > 1:
+            console.warn(
+                "--timings captions sequentially (caption_workers=1) for a "
+                "clean baseline."
+            )
+        return 1
+    return max(1, configured)
+
+
 def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, ...]:
     """HF repos this ingest run will load, used to gate offline mode (#88).
 
@@ -1128,6 +1232,7 @@ def main(
             )
 
         max_workers = _resolve_max_workers(config, timings=timings) if to_parse else 1
+        caption_workers = _resolve_caption_workers(config, timings=timings)
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
@@ -1135,13 +1240,16 @@ def main(
 
         timing_records: list[timing.DocTiming] = []
         run_start = time.perf_counter() if timings else None
-        incomplete_count = 0
 
+        # Three sequential phases behind the single Writer: parse (pooled or
+        # inline) → caption every image at once (#166: a concurrent stage decoupled
+        # from parse) → summarize. The barriers between them keep the Writer the
+        # connection's sole owner on one thread; only parse and caption fan out,
+        # each to its own kind of worker (parse processes, caption threads).
         # Share the console module's Rich Console so messages printed via
-        # console.info/error during the bar's lifetime are inserted above the
-        # Live display rather than colliding with it. That Console is on stderr,
-        # which also keeps stdout-redirect captures around Docling/RapidOCR from
-        # breaking the bar.
+        # console.info/error during the bar's lifetime insert above the Live
+        # display rather than colliding with it (and keep stdout-redirect captures
+        # around Docling/RapidOCR from breaking the bar).
         with Progress(
             TextColumn("[bold]{task.fields[label]}"),
             BarColumn(),
@@ -1149,77 +1257,19 @@ def main(
             TimeElapsedColumn(),
             console=console.get_console(),
         ) as bar:
-            task = bar.add_task(
-                "files", total=len(to_parse) + len(to_resume), label="Ingesting",
-            )
-            sub = bar.add_task("sub", total=None, label="", visible=False)
+            task = bar.add_task("phase", total=len(to_parse), label="Parsing")
 
-            def _images_progress(done: int, total: int) -> None:
-                if done == 0:
-                    bar.reset(sub, total=total, completed=0, visible=True,
-                              label="  images")
-                else:
-                    bar.update(sub, completed=done, total=total)
-
-            def _drain(
-                document_id: int, file_name: str, file_hash: str,
-                *, parse_stages: dict[str, float] | None = None,
-                page_count: int | None = None,
-            ) -> None:
-                """Caption + summarize one parsed document on the main process —
-                the post-parse half, behind the single Writer. Used for both
-                freshly-parsed and resumed documents."""
-                nonlocal incomplete_count
-
-                def on_stage(stage: str) -> None:
-                    bar.update(
-                        task,
-                        label=f"Ingesting {console.truncate_filename(file_name)} "
-                              f"· {stage}",
-                    )
-
-                cap_t = time.perf_counter()
-                cap_incomplete = _caption_missing(
-                    writer, document_id, file_name,
-                    vision_provider=vision_provider, vision_model=vision_model,
-                    vision_enabled=parse_config.vision_enabled,
-                    on_stage=on_stage, on_image_progress=_images_progress,
+            # ---- Phase 1: parse + persist ------------------------------------
+            # Resumed docs were parsed by an earlier run — no parse, just the
+            # missing caption/summary units the later phases fill. Their timing
+            # record starts empty (caption/summarize get added downstream).
+            units: list[_DocUnit] = [
+                _DocUnit(
+                    item.document_id, item.file_name, item.file_hash,
+                    stages={} if timings else None,
                 )
-                sum_t = time.perf_counter()
-                sum_incomplete = _summarize_if_missing(
-                    writer, document_id, file_hash, file_name,
-                    summaries_enabled=summaries_enabled,
-                    llm_provider=llm_provider, llm_model=llm_model,
-                    temperature=temperature, max_summarize_tokens=max_summarize_tokens,
-                    on_stage=on_stage,
-                )
-                end_t = time.perf_counter()
-
-                if cap_incomplete or sum_incomplete:
-                    incomplete_count += 1
-                if timings:
-                    # `parse_stages` arrives partially built: for a fresh parse it
-                    # carries prep/parse/embed (incl. the persist top-up added at
-                    # the call site); for a resume it's None. Here we add the
-                    # caption + summarize seconds measured on this process.
-                    stages = dict(parse_stages or {})
-                    stages["caption"] = stages.get("caption", 0.0) + (sum_t - cap_t)
-                    stages["summarize"] = stages.get("summarize", 0.0) + (end_t - sum_t)
-                    timing_records.append(
-                        timing.DocTiming(page_count=page_count, stages=stages)
-                    )
-                    console.info(
-                        timing.render_doc_line(file_name, sum(stages.values()), stages)
-                    )
-                bar.update(sub, visible=False)
-                bar.advance(task)
-
-            # Resume bucket first: already parsed, just fill the missing units.
-            for item in to_resume:
-                _drain(item.document_id, item.file_name, item.file_hash)
-
-            # Parse bucket: parse across the pool (or inline at 1 worker); drain
-            # each result through the single Writer as it completes, unordered.
+                for item in to_resume
+            ]
             for outcome in pool.parse_stream(
                 to_parse,
                 parse_fn=_parse_request,
@@ -1247,18 +1297,65 @@ def main(
                 writer.clear_failure(req.file_hash, "parse")
                 persist_t = time.perf_counter()
                 document_id = writer.persist_parse(outcome.parsed)
-                stages = outcome.parse_stages
-                if timings and stages is not None:
+                stages = None
+                if timings and outcome.parse_stages is not None:
                     # Chunk INSERTs fold into `embed`, per #162 — they land here,
                     # just after the worker's embed step, under the same bucket.
-                    stages = dict(stages)
+                    stages = dict(outcome.parse_stages)
                     stages["embed"] = (
                         stages.get("embed", 0.0) + (time.perf_counter() - persist_t)
                     )
-                _drain(
+                units.append(_DocUnit(
                     document_id, req.file_name, req.file_hash,
-                    parse_stages=stages, page_count=outcome.parsed.page_count,
+                    page_count=outcome.parsed.page_count, stages=stages,
+                ))
+                bar.advance(task)
+
+            # ---- Phase 2: caption every uncaptioned image, concurrently ------
+            def _caption_progress(done: int, total: int) -> None:
+                if done == 0:
+                    bar.reset(task, total=total, label="Captioning images")
+                else:
+                    bar.update(task, completed=done)
+
+            _caption_all(
+                writer, units,
+                vision_provider=vision_provider, vision_model=vision_model,
+                vision_enabled=parse_config.vision_enabled,
+                caption_workers=caption_workers, timings=timings,
+                on_progress=_caption_progress,
+            )
+
+            # ---- Phase 3: summarize + settle per-document completeness --------
+            bar.reset(task, total=len(units), label="Summarizing")
+            incomplete_count = 0
+            for unit in units:
+                sum_t = time.perf_counter()
+                sum_incomplete = _summarize_if_missing(
+                    writer, unit.document_id, unit.file_hash, unit.file_name,
+                    summaries_enabled=summaries_enabled,
+                    llm_provider=llm_provider, llm_model=llm_model,
+                    temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+                    on_stage=None,
                 )
+                # Incomplete if any image is still uncaptioned (failed / capped /
+                # no provider — recomputed from the DB so a shared image counts
+                # against every document holding it) or the summary is still owed.
+                cap_incomplete = bool(writer.uncaptioned_images(unit.document_id))
+                if cap_incomplete or sum_incomplete:
+                    incomplete_count += 1
+                if timings and unit.stages is not None:
+                    unit.stages["summarize"] = (
+                        unit.stages.get("summarize", 0.0)
+                        + (time.perf_counter() - sum_t)
+                    )
+                    timing_records.append(timing.DocTiming(
+                        page_count=unit.page_count, stages=unit.stages,
+                    ))
+                    console.info(timing.render_doc_line(
+                        unit.file_name, sum(unit.stages.values()), unit.stages,
+                    ))
+                bar.advance(task)
 
             if incomplete_count:
                 console.warn(

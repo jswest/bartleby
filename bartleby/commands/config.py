@@ -6,6 +6,7 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
 from bartleby.lib.consts import (
+    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
@@ -330,10 +331,18 @@ def main():
             help_text="Tesseract average confidence (0-100); pages scoring below "
             "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more.",
         )
+        config["caption_workers"] = _prompt_positive_int(
+            "Caption workers",
+            int(existing.get("caption_workers", DEFAULT_CAPTION_WORKERS)),
+            help_text="How many images caption in parallel after parsing — VLM "
+            "calls are network-bound, so this runs separately from parse workers."
+            "\nRaise it for a rate-tolerant cloud provider; keep it low for a "
+            "single-GPU local Ollama, which serializes anyway.",
+        )
     else:
         for k in ("vision_provider", "vision_model",
                  "vision_max_dimension", "vision_min_dimension",
-                 "ocr_min_confidence"):
+                 "ocr_min_confidence", "caption_workers"):
             config.pop(k, None)
 
     console.print("\n[bold]Document reading[/bold]")
