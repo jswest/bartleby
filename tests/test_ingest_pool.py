@@ -10,6 +10,7 @@ end-to-end `test_scribe.py` suite covers on the inline path.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from bartleby.ingest import pool
@@ -29,6 +30,11 @@ class _Req:
 def _square(request: _Req, config: dict, report) -> dict:
     report("squaring")
     return {"n": request.n, "sq": request.n * request.n, "bias": config["bias"]}
+
+
+def _pid(request: _Req, config: dict, report) -> dict:
+    # Reports the serving worker's PID so a test can see workers get recycled.
+    return {"n": request.n, "pid": os.getpid()}
 
 
 def _boom_on_three(request: _Req, config: dict, report) -> dict | None:
@@ -64,6 +70,20 @@ def test_parse_stream_pool_spawns_and_returns_all():
     assert sorted(o["n"] for o in out) == list(range(8))
     assert sorted(o["sq"] for o in out) == [i * i for i in range(8)]
     assert all(o["bias"] == 10 for o in out)
+
+
+def test_parse_stream_pool_recycles_workers(monkeypatch):
+    # maxtasksperchild recycles a worker after WORKER_MAX_TASKS docs so a long run
+    # can't grow RSS unbounded (#213). With a cap of 2 over 8 tasks, more than
+    # max_workers distinct processes must have served them — and every task still
+    # comes back exactly once across the recycles.
+    monkeypatch.setattr(pool, "WORKER_MAX_TASKS", 2)
+    requests = [_Req(i) for i in range(8)]
+    out = list(pool.parse_stream(
+        requests, parse_fn=_pid, config={}, max_workers=2,
+    ))
+    assert sorted(o["n"] for o in out) == list(range(8))
+    assert len({o["pid"] for o in out}) > 2
 
 
 def test_parse_stream_pool_does_not_break_on_one_bad_item():

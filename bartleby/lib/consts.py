@@ -52,14 +52,23 @@ DEFAULT_VISION_MIN_DIMENSION = 64
 # memory can hold and OOM, and the auto-pick always leaves a couple of cores for
 # the OS and the rest of the machine instead of pinning every core for hours.
 # Each worker loads the embedding model and, for docling ingests, the layout/table
-# models; PER_WORKER_GB is a deliberately conservative resident-set estimate for
-# that footprint. `max_workers` in config overrides the auto-pick (and may use
-# every core).
-PER_WORKER_GB = 2.5
+# models, then grows as it parses; PER_WORKER_GB is a conservative resident-set
+# estimate for that footprint under load (image/table-heavy docling PDFs run well
+# above the bare model load). It's an estimate, not a measurement — revisit with a
+# measured docling RSS (#213). `max_workers` in config overrides the auto-pick
+# (and may use every core).
+PER_WORKER_GB = 4.0
 
 # Held back by the auto-pick only (#211); an explicit `max_workers` can still use
 # every core. (The why — OS/machine headroom — is in the PER_WORKER_GB block.)
 RESERVED_CORES = 2
+
+# Recycle a parse worker after this many documents (#213): the pool tears it down
+# and spawns a fresh one, releasing the RSS that docling/torch accrete over a long
+# run (model/layout caches, allocator fragmentation) instead of growing until OOM.
+# A recycle re-runs the worker initializer (re-loading the parse models), so this
+# is tuned high enough to amortize that warmup against the memory it reclaims.
+WORKER_MAX_TASKS = 100
 
 # Caption-pool sizing (#166). Captioning runs after parse as its own concurrent
 # stage: many VLM/OCR calls per document, network/IO-bound rather than RAM-bound,

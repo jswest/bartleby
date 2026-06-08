@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 
 from rich.console import Group
@@ -140,7 +140,9 @@ class ScribeProgress:
             for _ in range(n_lanes)
         ]
         self._free: list[int] = list(range(len(self._lane_tasks)))
-        self._by_key: dict[object, int] = {}
+        # Insertion-ordered so the oldest-active key can be evicted (LRU) when a
+        # new worker needs a lane and none are free — see _lane_update.
+        self._by_key: "OrderedDict[object, int]" = OrderedDict()
 
         # crop (don't stack) if the region still overshoots — e.g. the window is
         # resized shorter mid-run. Header + overall sit atop the group, so crop
@@ -208,9 +210,16 @@ class ScribeProgress:
             idx = self._by_key.get(key)
             if idx is None:
                 if not self._free:
-                    return        # more live workers than lanes — shouldn't happen
-                idx = self._free.pop(0)
+                    # No free lane: a recycled parse worker (#213) reports under a
+                    # new process name while a dead worker still holds a lane. Evict
+                    # the least-recently-updated key — the dead worker, which has
+                    # stopped reporting — and reuse its lane for this live one.
+                    _, idx = self._by_key.popitem(last=False)
+                else:
+                    idx = self._free.pop(0)
                 self._by_key[key] = idx
+            else:
+                self._by_key.move_to_end(key)   # mark recently-active for LRU
             label = f"{console.truncate_filename(item)} · {stage}"
         # Updated outside the lock (Rich has its own); safe because each key is a
         # single worker reporting serially, so two updates for one lane can't race.
