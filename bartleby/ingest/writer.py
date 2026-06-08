@@ -21,11 +21,13 @@ methods inline, in order.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import apsw
 
+from bartleby import __version__
 from bartleby.db.chunks import (
     ChunkInput,
     delete_chunks_for,
@@ -33,6 +35,7 @@ from bartleby.db.chunks import (
     insert_image_chunks,
     insert_summary_chunks,
 )
+from bartleby.db.schema import SCHEMA_VERSION
 from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest.summarize import SummaryResult
 
@@ -119,6 +122,56 @@ class Writer:
 
     def __init__(self, conn: apsw.Connection):
         self.conn = conn
+        # The open ingest run, set by begin_run(); every persist_* below stamps
+        # its document / summary / chunk rows with it. None until a run opens
+        # (and for skill-side writes that never call begin_run), which is why
+        # ingest_run_id is nullable.
+        self.run_id: int | None = None
+
+    # ---- run provenance: stamp each unit with its producing invocation ----
+
+    def begin_run(self, config: dict) -> int:
+        """Open an ingest run, recording its resolved config snapshot.
+
+        ``config`` is the run's resolved configuration with secrets already
+        stripped (see :func:`bartleby.config.redact_config`) — it is stored
+        verbatim, so never hand this method anything containing an API key.
+        Serialized with sorted keys so a later run's drift check is a plain
+        string compare. Returns (and stores as ``self.run_id``) the new run id.
+        """
+        config_json = json.dumps(config, sort_keys=True)
+        with self.conn:
+            self.conn.cursor().execute(
+                "INSERT INTO ingests "
+                "(config_json, bartleby_version, schema_version) "
+                "VALUES (?, ?, ?)",
+                (config_json, __version__, SCHEMA_VERSION),
+            )
+            self.run_id = self.conn.last_insert_rowid()
+        return self.run_id
+
+    def finish_run(self) -> None:
+        """Mark the open run finished. No-op if no run was opened."""
+        if self.run_id is None:
+            return
+        with self.conn:
+            self.conn.cursor().execute(
+                "UPDATE ingests SET finished_at = CURRENT_TIMESTAMP "
+                "WHERE run_id = ?",
+                (self.run_id,),
+            )
+
+    def latest_config(self) -> dict | None:
+        """The resolved config snapshot of the most recent prior run, or None.
+
+        Call this *before* :meth:`begin_run` so the current run isn't compared
+        against itself; the caller diffs it against the new snapshot to warn on
+        config drift across a resume/re-run.
+        """
+        row = self.conn.cursor().execute(
+            "SELECT config_json FROM ingests ORDER BY run_id DESC LIMIT 1"
+        ).fetchone()
+        return json.loads(row[0]) if row else None
 
     # ---- state: resume by what's missing ----
 
@@ -235,14 +288,18 @@ class Writer:
             cur = self.conn.cursor()
             cur.execute(
                 "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "(file_hash, file_name, file_path, page_count, token_count, "
+                " ingest_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (parsed.file_hash, parsed.file_name, str(parsed.archive_path),
-                 parsed.page_count, parsed.token_count),
+                 parsed.page_count, parsed.token_count, self.run_id),
             )
             document_id = self.conn.last_insert_rowid()
             if parsed.document_chunks:
-                insert_document_chunks(self.conn, document_id, parsed.document_chunks)
+                insert_document_chunks(
+                    self.conn, document_id, parsed.document_chunks,
+                    ingest_run_id=self.run_id,
+                )
             for img in parsed.images:
                 existing = cur.execute(
                     "SELECT image_id FROM images WHERE file_hash = ?", (img.hash,)
@@ -283,7 +340,10 @@ class Writer:
                 (caption.analysis_json, caption.analysis_model, caption.image_id),
             )
             if caption.chunks:
-                insert_image_chunks(self.conn, caption.image_id, caption.chunks)
+                insert_image_chunks(
+                    self.conn, caption.image_id, caption.chunks,
+                    ingest_run_id=self.run_id,
+                )
 
     def persist_summary(
         self,
@@ -305,14 +365,19 @@ class Writer:
                 )
             cur.execute(
                 "INSERT INTO summaries "
-                "(document_id, title, description, text, model, authored_date) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(document_id, title, description, text, model, authored_date, "
+                " ingest_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (document_id, summary.title, summary.description,
-                 summary.text, summary.model, summary.authored_date),
+                 summary.text, summary.model, summary.authored_date,
+                 self.run_id),
             )
             summary_id = self.conn.last_insert_rowid()
             if summary_chunks:
-                insert_summary_chunks(self.conn, summary_id, summary_chunks)
+                insert_summary_chunks(
+                    self.conn, summary_id, summary_chunks,
+                    ingest_run_id=self.run_id,
+                )
         return summary_id
 
     # ---- failure tracking: cap retries, stay visible ----
