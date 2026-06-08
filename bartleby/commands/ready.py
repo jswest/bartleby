@@ -72,13 +72,23 @@ def _looks_like_skill_dir(dest: Path) -> bool:
     return (dest / "SKILL.md").is_file() or (dest / MARKER_NAME).is_file()
 
 
+def _write_marker(dest: Path, src_hash: str) -> None:
+    """Stamp the destination with this tool's version and the content hash.
+
+    Cheap enough to call on its own when only the version stamp is stale —
+    the skill content is already byte-identical, so a full reinstall would be
+    wasted work.
+    """
+    (dest / MARKER_NAME).write_text(
+        json.dumps({"version": __version__, "hash": src_hash}) + "\n"
+    )
+
+
 def _install(src: Path, dest: Path, src_hash: str) -> None:
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
-    (dest / MARKER_NAME).write_text(
-        json.dumps({"version": __version__, "hash": src_hash}) + "\n"
-    )
+    _write_marker(dest, src_hash)
 
 
 def main(*, dest: Path | None = None, check: bool = False, force: bool = False) -> None:
@@ -112,7 +122,17 @@ def main(*, dest: Path | None = None, check: bool = False, force: bool = False) 
         sys.exit(1)
 
     if up_to_date and not force:
-        console.complete(f"Skill already up to date (v{__version__}) at {dest}.")
+        if installed_version != __version__:
+            # Content is byte-identical but the marker predates this tool
+            # version (the common case — SKILL.md rarely changes across a bump).
+            # Refresh just the stamp so the version line stays truthful and
+            # `--check`, which reads it back, agrees. No full reinstall needed.
+            _write_marker(dest, src_hash)
+            console.big(
+                f"Updated skill marker v{installed_version or '?'} → v{__version__} at {dest}"
+            )
+        else:
+            console.complete(f"Skill already up to date (v{__version__}) at {dest}.")
         return
 
     if dest.exists() and any(dest.iterdir()) and not _looks_like_skill_dir(dest):

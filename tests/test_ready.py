@@ -64,6 +64,45 @@ def test_drift_is_repaired_on_plain_rerun(dest):
     assert ready._hash_dir(dest) == ready._hash_dir(ready._source_dir())
 
 
+def test_stale_marker_refreshes_without_reinstall(dest, monkeypatch):
+    ready.main(dest=dest)
+    # Simulate a content-identical version bump: the skill files are byte-for-byte
+    # the same, but the marker was written by an older bartleby.
+    marker = _marker(dest)
+    (dest / ready.MARKER_NAME).write_text(
+        json.dumps({"version": "0.0.1", "hash": marker["hash"]}) + "\n"
+    )
+
+    calls = []
+    monkeypatch.setattr(ready, "_install", lambda *a, **k: calls.append(1))
+    ready.main(dest=dest)
+
+    assert calls == []  # marker-only refresh, never a full reinstall
+    assert _marker(dest)["version"] == ready.__version__
+
+
+def test_check_agrees_with_default_after_refresh(dest, monkeypatch):
+    ready.main(dest=dest)
+    marker = _marker(dest)
+    (dest / ready.MARKER_NAME).write_text(
+        json.dumps({"version": "0.0.1", "hash": marker["hash"]}) + "\n"
+    )
+
+    messages = []
+    for name in ("complete", "big", "warn"):
+        monkeypatch.setattr(ready.console, name, lambda m, _m=messages: _m.append(m))
+
+    ready.main(dest=dest)  # default path heals the stamp to the running version
+    assert messages == [
+        f"Updated skill marker v0.0.1 → v{ready.__version__} at {dest}"
+    ]
+
+    messages.clear()
+    ready.main(dest=dest, check=True)  # read-only; now reports the healed version
+
+    assert messages == [f"Skill is up to date (v{ready.__version__}) at {dest}."]
+
+
 def test_check_up_to_date_returns_without_error(dest):
     ready.main(dest=dest)
     ready.main(dest=dest, check=True)  # does not raise
