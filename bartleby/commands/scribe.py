@@ -1058,16 +1058,24 @@ def _classify(
     sources: list[tuple[Path, str]],
     *,
     vision_enabled: bool,
-) -> tuple[list[ParseRequest], list[_ResumeItem], list[str]]:
+) -> tuple[list[ParseRequest], list[_ResumeItem], list[str], list[str]]:
     """Bucket each source by what the parse/caption drain still needs, all from
     DB state: already parsed+captioned (skip), parsed-but-uncaptioned (resume —
     no parse), or never parsed (hand to the pool). Summaries are not considered
     here — they're settled by their own pass over whatever the DB still lacks.
     Hashing + the resume lookups run here on the main process; only the parse
-    bucket crosses to workers."""
+    bucket crosses to workers.
+
+    A fourth bucket, ``duplicates``, catches two byte-identical files *within one
+    run*: ``documents.file_hash`` is UNIQUE, so only the first can persist. The
+    DB lookup can't see the in-run twin (neither is committed yet), so we track
+    hashes queued this run and divert the rest here rather than let the second
+    crash ``persist_parse`` (#225)."""
     to_parse: list[ParseRequest] = []
     to_resume: list[_ResumeItem] = []
     skipped: list[str] = []
+    duplicates: list[str] = []
+    queued_hashes: set[str] = set()
     for path, ext in sources:
         file_hash = _hash_file(path)
         document_id = writer.document_id_for(file_hash)
@@ -1077,15 +1085,19 @@ def _classify(
             else:
                 to_resume.append(_ResumeItem(document_id, path.name, file_hash))
             continue
+        if file_hash in queued_hashes:
+            duplicates.append(path.name)
+            continue
         if ext in IMAGE_EXTENSIONS and not vision_enabled:
             console.warn(
                 f"{path.name}: skipping image (no vision provider configured)."
             )
             continue
+        queued_hashes.add(file_hash)
         to_parse.append(
             ParseRequest(path=path, ext=ext, file_hash=file_hash, file_name=path.name)
         )
-    return to_parse, to_resume, skipped
+    return to_parse, to_resume, skipped, duplicates
 
 
 # -------------------- resolution / entry --------------------
@@ -1364,18 +1376,20 @@ def main(
         # that have never been parsed cross to the workers. Parsed-but-uncaptioned
         # docs resume on the main process — they need no parse, just the missing
         # captions. Summaries are settled afterwards by their own pass.
-        to_parse, to_resume, skipped = _classify(
+        to_parse, to_resume, skipped, duplicates = _classify(
             writer, sources,
             vision_enabled=parse_config.vision_enabled,
         )
         SKIP_DISPLAY_LIMIT = 3
-        for name in skipped[:SKIP_DISPLAY_LIMIT]:
-            console.info(f"Skipping {name} (already ingested)")
-        if len(skipped) > SKIP_DISPLAY_LIMIT:
-            console.info(
-                f"… and {len(skipped) - SKIP_DISPLAY_LIMIT} more file(s) "
-                f"skipped as already ingested"
-            )
+        for names, reason in ((skipped, "already ingested"),
+                              (duplicates, "duplicate content within this run")):
+            for name in names[:SKIP_DISPLAY_LIMIT]:
+                console.info(f"Skipping {name} ({reason})")
+            if len(names) > SKIP_DISPLAY_LIMIT:
+                console.info(
+                    f"… and {len(names) - SKIP_DISPLAY_LIMIT} more file(s) "
+                    f"skipped as {reason}"
+                )
 
         max_workers = _resolve_max_workers(config, timings=timings) if to_parse else 1
         caption_workers = _resolve_caption_workers(config, timings=timings)

@@ -187,6 +187,53 @@ def test_scribe_dedupes_identical_files(isolated_project, tmp_path, mock_embed):
         conn.close()
 
 
+def test_scribe_skips_within_run_duplicate(isolated_project, tmp_path, mock_embed):
+    """Two byte-identical files (different names) in ONE run persist a single
+    document instead of crashing on documents.file_hash UNIQUE (#225). The DB
+    lookup can't catch the in-run twin (neither is committed yet) — _classify's
+    queued-hash dedup does."""
+    a = _write_txt(tmp_path / "a.txt", "Same content")
+    b = _write_txt(tmp_path / "b.txt", "Same content")
+    scribe.main(project="test_proj", files=[str(a), str(b)])
+
+    conn = open_db("test_proj")
+    try:
+        n = conn.cursor().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
+def test_persist_parse_reuses_existing_file_hash(
+    isolated_project, tmp_path, mock_embed
+):
+    """persist_parse on a file_hash already in documents returns the existing id
+    rather than tripping the UNIQUE constraint — the write-site guard behind
+    _classify's dedup (#225)."""
+    from bartleby.commands import scribe as scribe_module
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="dup", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        first = writer.persist_parse(parsed)
+        second = writer.persist_parse(parsed)
+        assert second == first
+        n = conn.cursor().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_writes_summary_when_provider_configured(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
