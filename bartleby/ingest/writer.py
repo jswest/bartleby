@@ -6,17 +6,19 @@ commits in its own transaction, so a failure in one (an expensive VLM caption,
 say) never rolls back another (the parse that produced the text chunks before
 it). That per-unit atomicity is what makes ingest restartable: a run that dies
 mid-captioning leaves the parse durable, and the next run resumes only the
-*missing* units — see :func:`bartleby.commands.scribe._process_one`, which reads
-this Writer's state queries to compute what's left.
+*missing* units — see :mod:`bartleby.commands.scribe`, which reads this Writer's
+state queries to compute what's left.
 
 All chunk / FTS5 / sqlite-vec writes go through the typed ``bartleby.db.chunks``
 helpers — never raw INSERTs — keeping the polymorphic-chunks invariant at one
 chokepoint.
 
-The parse pool (#165) will put a real queue and a dedicated writer thread in
-front of this Writer (it must stay the connection's sole owner, since apsw
-connections aren't thread-safe). For now the producer (``scribe``) drives these
-methods inline, in order.
+The parse pool (#165) parses many documents at once across worker *processes*,
+but every one of them only parses — none touch the database. Each parsed result
+returns to the main process, which drains them through this Writer one at a
+time. So the Writer stays the connection's single owner on a single thread
+(apsw connections aren't thread-safe), and the concurrency lives entirely
+upstream in parsing.
 """
 
 from __future__ import annotations
@@ -36,7 +38,6 @@ from bartleby.db.chunks import (
     insert_summary_chunks,
 )
 from bartleby.db.schema import SCHEMA_VERSION
-from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest.summarize import SummaryResult
 
 
@@ -53,10 +54,9 @@ MAX_INGEST_ATTEMPTS = 3
 class ParsedImage:
     """An image extracted, scaled, and archived during parse — not yet captioned.
 
-    ``jpeg_bytes`` and ``prefetched_ocr`` are in-process captioning *hints*:
-    when parse and caption run in the same process they spare a re-read and a
-    re-OCR. They are never persisted; on a fresh-process resume the caption
-    stage reloads the prepared JPEG from ``archive_path`` instead.
+    Pure metadata: the prepared JPEG lives on disk at ``archive_path``, and the
+    caption stage reloads it there (and OCRs it) when it runs. The parse result
+    therefore crosses the parse-pool queue cheaply — no image bytes ride along.
     """
     hash: str
     archive_path: Path
@@ -64,8 +64,6 @@ class ParsedImage:
     height: int
     page_number: int | None
     image_index_on_page: int
-    jpeg_bytes: bytes
-    prefetched_ocr: ocr_module.OcrResult | None = None
 
 
 @dataclass

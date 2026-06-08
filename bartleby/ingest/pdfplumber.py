@@ -58,10 +58,6 @@ class PdfPage:
     is_sparse: bool
     page_render_png: bytes | None  # populated only when is_sparse
     embedded_images: list[EmbeddedImage] = field(default_factory=list)
-    # The raw Tesseract output when OCR was run on the page render. Surfaced
-    # so the image pipeline can reuse it instead of re-Tesseract'ing the same
-    # bytes when a sparse page's render gets routed through as an image.
-    ocr_result: ocr_module.OcrResult | None = None
 
 
 @dataclass
@@ -136,7 +132,6 @@ def convert(
                 is_sparse=is_sparse,
                 page_render_png=page_render_png,
                 embedded_images=embedded_images,
-                ocr_result=ocr_result,
             ))
 
             if on_progress is not None:

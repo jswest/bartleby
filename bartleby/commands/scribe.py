@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -50,8 +52,8 @@ from bartleby.db.chunks import ChunkInput
 from bartleby.db.connection import open_db, resolve_project_name
 from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
-from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
+from bartleby.ingest import pool
 from bartleby.ingest import sec2md as sec2md_pipeline
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
@@ -84,16 +86,11 @@ from bartleby.lib.consts import (
     DEFAULT_VISION_MIN_DIMENSION,
     DOCLING_HF_REPOS,
     EMBEDDING_MODEL,
+    PER_WORKER_GB,
 )
 from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
 
-
-# Per-file outcomes the orchestrator reports back to the run loop.
-INGESTED = "ingested"          # parsed and/or resumed to completion this run
-SKIPPED = "skipped"            # already complete — nothing to do
-INCOMPLETE = "incomplete"      # work done, but some unit is still missing
-NO_VISION_SKIP = "no_vision"   # standalone image with no vision provider (warned)
 
 HTML_EXTENSIONS = {".html", ".htm"}
 
@@ -215,14 +212,10 @@ class _ImageRoute:
         bytes_: bytes,
         page_number: int | None,
         image_index_on_page: int,
-        prefetched_ocr: ocr_module.OcrResult | None = None,
     ):
         self.bytes_ = bytes_
         self.page_number = page_number              # None for standalone files
         self.image_index_on_page = image_index_on_page  # 0 for page-renders/standalone
-        # For sparse-page renders we already ran Tesseract at the page level —
-        # pass that result down so caption can skip its own Tesseract pre-pass.
-        self.prefetched_ocr = prefetched_ocr
 
 
 def _parse_image_routes(
@@ -269,8 +262,6 @@ def _parse_image_routes(
             height=prepared.height,
             page_number=route.page_number,
             image_index_on_page=route.image_index_on_page,
-            jpeg_bytes=prepared.jpeg_bytes,
-            prefetched_ocr=route.prefetched_ocr,
         ))
     return parsed
 
@@ -281,14 +272,12 @@ def _caption_image(
     *,
     vision_provider: Provider,
     vision_model: str,
-    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageCaption:
     """Run the §7 image pipeline on one already-recorded image row.
 
     Decides text-image vs scene-image (Tesseract first; VLM only for scenes),
     producing the analysis JSON and at most one searchable chunk. The prepared
-    JPEG is supplied by the caller — in-process from the parse hint, or reloaded
-    from the archive on a resume.
+    JPEG is reloaded from the archive by the caller.
     """
     prepared = image_pipeline.PreparedImage(
         hash=pending.file_hash,
@@ -298,7 +287,6 @@ def _caption_image(
     )
     analysis = image_pipeline.analyze(
         vision_provider, prepared, model=vision_model,
-        prefetched_ocr=prefetched_ocr,
     )
     return ImageCaption(
         image_id=pending.image_id,
@@ -435,9 +423,7 @@ def _parse_pdf_pdfplumber(
     vision_enabled: bool,
     vision_max_dimension: int,
     vision_min_dimension: int,
-    on_page_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
-    on_page_count: Callable[[int | None], None] | None = None,
 ) -> ParsedDocument:
     if on_stage is not None:
         on_stage("extracting")
@@ -445,10 +431,7 @@ def _parse_pdf_pdfplumber(
         archived,
         sparse_text_threshold=sparse_text_threshold,
         ocr_min_confidence=ocr_min_confidence,
-        on_progress=on_page_progress,
     )
-    if on_page_count is not None:
-        on_page_count(result.page_count)
 
     doc_rows: list[ChunkRow] = []
     image_routes: list[_ImageRoute] = []
@@ -463,13 +446,12 @@ def _parse_pdf_pdfplumber(
                 ))
         elif page.page_render_png is not None:
             # Sparse page where OCR didn't clear the bar — fall back to VLM.
-            # Page-level Tesseract already ran; hand the result down so caption
-            # doesn't re-OCR the same bytes.
+            # The caption stage runs its own Tesseract pre-pass on the archived
+            # render (parse no longer forwards page-level OCR across the queue).
             image_routes.append(_ImageRoute(
                 bytes_=page.page_render_png,
                 page_number=page.page_number,
                 image_index_on_page=0,
-                prefetched_ocr=page.ocr_result,
             ))
 
         for emb in page.embedded_images:
@@ -508,7 +490,6 @@ def _parse_pdf_docling(
     vision_max_dimension: int,
     vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
-    on_page_count: Callable[[int | None], None] | None = None,
 ) -> ParsedDocument:
     from bartleby.ingest import docling as docling_pipeline
 
@@ -517,8 +498,6 @@ def _parse_pdf_docling(
     docling_result = docling_pipeline.convert(
         archived, extract_images=vision_enabled,
     )
-    if on_page_count is not None:
-        on_page_count(docling_result.page_count)
 
     chunks: list[ChunkInput] = []
     if docling_result.chunks:
@@ -595,9 +574,7 @@ def _parse_document(
     vision_max_dimension: int,
     vision_min_dimension: int,
     archive_root: Path,
-    on_page_progress: Callable[[int, int], None] | None = None,
     on_stage: Callable[[str], None] | None = None,
-    on_page_count: Callable[[int | None], None] | None = None,
 ) -> ParsedDocument:
     """Route an archived file to its converter and return a parsed result."""
     if ext in IMAGE_EXTENSIONS:
@@ -614,7 +591,7 @@ def _parse_document(
                 archive_root=archive_root, vision_enabled=vision_enabled,
                 vision_max_dimension=vision_max_dimension,
                 vision_min_dimension=vision_min_dimension,
-                on_stage=on_stage, on_page_count=on_page_count,
+                on_stage=on_stage,
             )
         return _parse_pdf_pdfplumber(
             archived, file_hash=file_hash, file_name=file_name,
@@ -624,8 +601,7 @@ def _parse_document(
             vision_enabled=vision_enabled,
             vision_max_dimension=vision_max_dimension,
             vision_min_dimension=vision_min_dimension,
-            on_page_progress=on_page_progress,
-            on_stage=on_stage, on_page_count=on_page_count,
+            on_stage=on_stage,
         )
     if edgar_pipeline.detect(archived):
         # EDGAR full-submission SGML envelope — detected by content, so a `.txt`
@@ -670,7 +646,6 @@ def _caption_missing(
     writer: Writer,
     document_id: int,
     file_name: str,
-    hints: dict[str, ParsedImage],
     *,
     vision_provider: Provider | None,
     vision_model: str | None,
@@ -707,12 +682,10 @@ def _caption_missing(
                     f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
                 )
                 continue
-            hint = hints.get(pi.file_hash)
-            jpeg = hint.jpeg_bytes if hint is not None else Path(pi.file_path).read_bytes()
-            prefetched = hint.prefetched_ocr if hint is not None else None
+            jpeg = Path(pi.file_path).read_bytes()
             caption = _caption_image(
                 pi, jpeg, vision_provider=vision_provider,
-                vision_model=vision_model, prefetched_ocr=prefetched,
+                vision_model=vision_model,
             )
             writer.persist_caption(caption)
             writer.clear_failure(pi.file_hash, "caption")
@@ -775,92 +748,132 @@ def _summarize_if_missing(
         return True
 
 
-def _process_one(
-    writer: Writer,
-    path: Path,
-    ext: str,
-    archive_root: Path,
-    *,
-    pdf_converter: str,
-    html_converter: str,
-    sparse_text_threshold: int,
-    ocr_min_confidence: int,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
-    llm_provider: Provider | None,
-    llm_model: str | None,
-    temperature: float,
-    max_summarize_tokens: int,
-    vision_provider: Provider | None,
-    vision_model: str | None,
-    on_page_progress: Callable[[int, int], None] | None = None,
-    on_image_progress: Callable[[int, int], None] | None = None,
-    on_stage: Callable[[str], None] | None = None,
-    on_page_count: Callable[[int | None], None] | None = None,
-) -> str:
-    """Ingest one file, resuming only the units that are missing.
+# -------------------- parse pool: requests, config, worker fn --------------------
 
-    Returns one of the module-level outcome constants. A parse failure is
-    recorded and re-raised (the run loop reports it); caption and summary
-    failures are recorded but not raised — they leave the document incomplete,
-    to be resumed on a later run until they succeed or hit the retry cap.
+
+@dataclass(frozen=True)
+class ParseConfig:
+    """Run-wide parse settings — identical for every document, shipped to each
+    worker once. Picklable scalars only (it crosses the spawn boundary)."""
+    pdf_converter: str
+    html_converter: str
+    sparse_text_threshold: int
+    ocr_min_confidence: int
+    vision_enabled: bool
+    vision_max_dimension: int
+    vision_min_dimension: int
+    archive_root: Path
+    timings: bool = False
+
+
+@dataclass
+class ParseRequest:
+    """One file to parse — the per-document unit the pool schedules."""
+    path: Path
+    ext: str
+    file_hash: str
+    file_name: str
+
+
+@dataclass
+class ParseOutcome:
+    """A parse result (or the failure that stood in for it), returned to the
+    main-process drain. ``parsed`` is None exactly when ``error`` is set."""
+    request: ParseRequest
+    parsed: ParsedDocument | None = None
+    parse_stages: dict[str, float] | None = None  # canonical stage→seconds (--timings)
+    error: str | None = None
+    offline: bool = False  # the error was an offline-mode block (hint the user)
+
+
+@dataclass
+class _ResumeItem:
+    """A document parsed by an earlier run that still has missing units."""
+    document_id: int
+    file_name: str
+    file_hash: str
+
+
+def _parse_request(request: ParseRequest, config: ParseConfig) -> ParseOutcome:
+    """Archive + parse one file into a ParsedDocument — the pool's ``parse_fn``.
+
+    DB-free, so it runs anywhere the pool puts it (a spawn worker, or inline at
+    ``max_workers <= 1``). It never raises: a parse failure comes back as an
+    ``error`` outcome so one bad file can't tear down the result stream. With
+    ``--timings`` it captures its own parse/embed wall-clock (the timer is built
+    here, in whatever process runs the parse) and returns it as data.
     """
-    file_hash = _hash_file(path)
-    summaries_enabled = llm_provider is not None and bool(llm_model)
-    vision_enabled = vision_provider is not None and bool(vision_model)
+    timer = timing.StageTimer() if config.timings else None
+    try:
+        parsed = _parse_document(
+            _archive(request.path, config.archive_root, request.file_hash, request.ext),
+            request.ext, file_hash=request.file_hash, file_name=request.file_name,
+            pdf_converter=config.pdf_converter, html_converter=config.html_converter,
+            sparse_text_threshold=config.sparse_text_threshold,
+            ocr_min_confidence=config.ocr_min_confidence,
+            vision_enabled=config.vision_enabled,
+            vision_max_dimension=config.vision_max_dimension,
+            vision_min_dimension=config.vision_min_dimension,
+            archive_root=config.archive_root,
+            on_stage=timer.mark if timer is not None else None,
+        )
+    except Exception as e:
+        from bartleby.lib.quiet import offline_blocked
+        return ParseOutcome(request=request, error=str(e), offline=offline_blocked(e))
 
-    document_id = writer.document_id_for(file_hash)
-    if document_id is not None and _is_complete(
-        writer, document_id, summaries_enabled=summaries_enabled,
-    ):
-        return SKIPPED
+    if timer is not None:
+        timer.finish()
+    return ParseOutcome(
+        request=request, parsed=parsed,
+        parse_stages=dict(timer.totals) if timer is not None else None,
+    )
 
-    # PARSE — only when the document hasn't been parsed yet. The parse result
-    # commits as one transaction, so this never re-parses an existing document.
-    if document_id is None:
+
+def _warm_worker(config: ParseConfig) -> None:
+    """Pool-initializer hook: load the models this run needs, once, up front, so
+    a worker's first document doesn't pay the load. Embeddings always; docling's
+    layout/table models only when a docling converter is active."""
+    from bartleby.ingest import embed
+
+    embed.prewarm()
+    if "docling" in (config.pdf_converter, config.html_converter):
+        from bartleby.ingest import docling as docling_pipeline
+
+        docling_pipeline.prewarm(config.vision_enabled)
+
+
+def _classify(
+    writer: Writer,
+    sources: list[tuple[Path, str]],
+    *,
+    summaries_enabled: bool,
+    vision_enabled: bool,
+) -> tuple[list[ParseRequest], list[_ResumeItem], list[str]]:
+    """Bucket each source by what it still needs, all from DB state: already
+    complete (skip), parsed-but-incomplete (resume — no parse), or never parsed
+    (hand to the pool). Hashing + the resume lookups run here on the main
+    process; only the parse bucket crosses to workers."""
+    to_parse: list[ParseRequest] = []
+    to_resume: list[_ResumeItem] = []
+    skipped: list[str] = []
+    for path, ext in sources:
+        file_hash = _hash_file(path)
+        document_id = writer.document_id_for(file_hash)
+        if document_id is not None:
+            if _is_complete(writer, document_id, summaries_enabled=summaries_enabled):
+                skipped.append(path.name)
+            else:
+                to_resume.append(_ResumeItem(document_id, path.name, file_hash))
+            continue
         if ext in IMAGE_EXTENSIONS and not vision_enabled:
             console.warn(
                 f"{path.name}: skipping image (no vision provider configured)."
             )
-            return NO_VISION_SKIP
-        archived = _archive(path, archive_root, file_hash, ext)
-        try:
-            parsed = _parse_document(
-                archived, ext, file_hash=file_hash, file_name=path.name,
-                pdf_converter=pdf_converter, html_converter=html_converter,
-                sparse_text_threshold=sparse_text_threshold,
-                ocr_min_confidence=ocr_min_confidence,
-                vision_enabled=vision_enabled,
-                vision_max_dimension=vision_max_dimension,
-                vision_min_dimension=vision_min_dimension,
-                archive_root=archive_root,
-                on_page_progress=on_page_progress,
-                on_stage=on_stage, on_page_count=on_page_count,
-            )
-        except Exception as e:
-            writer.record_failure(file_hash, path.name, "parse", e)
-            raise
-        document_id = writer.persist_parse(parsed)
-        writer.clear_failure(file_hash, "parse")
-        hints = {img.hash: img for img in parsed.images}
-    else:
-        hints = {}
-
-    incomplete = _caption_missing(
-        writer, document_id, path.name, hints,
-        vision_provider=vision_provider, vision_model=vision_model,
-        vision_enabled=vision_enabled,
-        on_stage=on_stage, on_image_progress=on_image_progress,
-    )
-    incomplete = _summarize_if_missing(
-        writer, document_id, file_hash, path.name,
-        summaries_enabled=summaries_enabled,
-        llm_provider=llm_provider, llm_model=llm_model,
-        temperature=temperature, max_summarize_tokens=max_summarize_tokens,
-        on_stage=on_stage,
-    ) or incomplete
-
-    return INCOMPLETE if incomplete else INGESTED
+            continue
+        to_parse.append(
+            ParseRequest(path=path, ext=ext, file_hash=file_hash, file_name=path.name)
+        )
+    return to_parse, to_resume, skipped
 
 
 # -------------------- resolution / entry --------------------
@@ -897,6 +910,40 @@ def _resolve_vision_provider(
         return None, None
     ensure_provider_env(name, config)
     return get_provider(name, ollama_base_url=config.get("ollama_base_url")), model
+
+
+def _resolve_max_workers(config: dict, *, timings: bool) -> int:
+    """Resolve how many parse workers to run.
+
+    An explicit ``max_workers`` in config wins (warning when it exceeds what the
+    machine can safely hold); otherwise auto-pick ``min(cpu_count, free_ram_gb //
+    PER_WORKER_GB)``, floored at 1, so a CPU-rich but RAM-poor box doesn't launch
+    more workers than memory can hold and OOM. ``--timings`` forces 1: the
+    per-stage breakdown it produces is a sequential baseline, meaningless once
+    documents parse concurrently and overlap.
+    """
+    if timings:
+        if int(config.get("max_workers") or 1) > 1:
+            console.warn("--timings runs sequentially (max_workers=1) for a clean baseline.")
+        return 1
+
+    import psutil
+
+    cores = os.cpu_count() or 1
+    free_gb = psutil.virtual_memory().available / 1024**3
+    auto = max(1, min(cores, int(free_gb // PER_WORKER_GB)))
+
+    configured = config.get("max_workers")
+    if configured is None:
+        return auto
+    n = max(1, int(configured))
+    if n > auto:
+        console.warn(
+            f"max_workers={n} exceeds what this machine can comfortably run "
+            f"({cores} cores, ~{free_gb:.0f}GB free → {auto} by the RAM cap); "
+            f"proceeding, but watch for memory pressure."
+        )
+    return n
 
 
 def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, ...]:
@@ -1022,6 +1069,29 @@ def main(
 
     console.big(f"Ingesting {len(sources)} file(s) into project '{project_name}'")
 
+    parse_config = ParseConfig(
+        pdf_converter=pdf_converter_name,
+        html_converter=html_converter_name,
+        sparse_text_threshold=int(
+            config.get("sparse_text_threshold", DEFAULT_SPARSE_TEXT_THRESHOLD)
+        ),
+        ocr_min_confidence=int(
+            config.get("ocr_min_confidence", DEFAULT_OCR_MIN_CONFIDENCE)
+        ),
+        vision_enabled=vision_provider is not None and bool(vision_model),
+        vision_max_dimension=int(
+            config.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)
+        ),
+        vision_min_dimension=int(
+            config.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)
+        ),
+        archive_root=archive_root,
+        timings=timings,
+    )
+    temperature = float(config.get("temperature", 0))
+    max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
+    summaries_enabled = llm_provider is not None and bool(llm_model)
+
     conn = open_db(project_name)
     writer = Writer(conn)
     try:
@@ -1039,26 +1109,39 @@ def main(
             console.warn(f"Config drift since last ingest — {line}")
         writer.begin_run(config_snapshot)
 
-        temperature = float(config.get("temperature", 0))
-        max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
-        sparse_text_threshold = int(
-            config.get("sparse_text_threshold", DEFAULT_SPARSE_TEXT_THRESHOLD)
+        # Classify up front (hash + resume lookups, on this process): only files
+        # that have never been parsed cross to the workers. Parsed-but-incomplete
+        # docs resume on the main process — they need no parse, just the missing
+        # captions/summary.
+        to_parse, to_resume, skipped = _classify(
+            writer, sources,
+            summaries_enabled=summaries_enabled,
+            vision_enabled=parse_config.vision_enabled,
         )
-        ocr_min_confidence = int(
-            config.get("ocr_min_confidence", DEFAULT_OCR_MIN_CONFIDENCE)
-        )
-        vision_max_dimension = int(
-            config.get("vision_max_dimension", DEFAULT_VISION_MAX_DIMENSION)
-        )
-        vision_min_dimension = int(
-            config.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)
-        )
+        SKIP_DISPLAY_LIMIT = 3
+        for name in skipped[:SKIP_DISPLAY_LIMIT]:
+            console.info(f"Skipping {name} (already ingested)")
+        if len(skipped) > SKIP_DISPLAY_LIMIT:
+            console.info(
+                f"… and {len(skipped) - SKIP_DISPLAY_LIMIT} more file(s) "
+                f"skipped as already ingested"
+            )
+
+        max_workers = _resolve_max_workers(config, timings=timings) if to_parse else 1
+        if len(to_parse) > 1 and max_workers > 1:
+            console.info(
+                f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
+            )
+
+        timing_records: list[timing.DocTiming] = []
+        run_start = time.perf_counter() if timings else None
+        incomplete_count = 0
 
         # Share the console module's Rich Console so messages printed via
-        # console.info/error during the bar's lifetime are inserted above
-        # the Live display rather than colliding with it. That Console is
-        # on stderr, which also keeps stdout-redirect captures around
-        # Docling/RapidOCR from breaking the bar.
+        # console.info/error during the bar's lifetime are inserted above the
+        # Live display rather than colliding with it. That Console is on stderr,
+        # which also keeps stdout-redirect captures around Docling/RapidOCR from
+        # breaking the bar.
         with Progress(
             TextColumn("[bold]{task.fields[label]}"),
             BarColumn(),
@@ -1066,123 +1149,117 @@ def main(
             TimeElapsedColumn(),
             console=console.get_console(),
         ) as bar:
-            task = bar.add_task("files", total=len(sources), label="Ingesting")
-            sub = bar.add_task(
-                "sub", total=None, label="", visible=False,
+            task = bar.add_task(
+                "files", total=len(to_parse) + len(to_resume), label="Ingesting",
             )
+            sub = bar.add_task("sub", total=None, label="", visible=False)
 
-            def _phase_callback(phase: str) -> Callable[[int, int], None]:
-                def cb(done: int, total: int) -> None:
-                    if done == 0:
-                        bar.reset(
-                            sub, total=total, completed=0,
-                            visible=True, label=phase,
-                        )
-                    else:
-                        bar.update(sub, completed=done, total=total)
-                return cb
+            def _images_progress(done: int, total: int) -> None:
+                if done == 0:
+                    bar.reset(sub, total=total, completed=0, visible=True,
+                              label="  images")
+                else:
+                    bar.update(sub, completed=done, total=total)
 
-            SKIP_DISPLAY_LIMIT = 3
-            skipped_count = 0
-            incomplete_count = 0
+            def _drain(
+                document_id: int, file_name: str, file_hash: str,
+                *, parse_stages: dict[str, float] | None = None,
+                page_count: int | None = None,
+            ) -> None:
+                """Caption + summarize one parsed document on the main process —
+                the post-parse half, behind the single Writer. Used for both
+                freshly-parsed and resumed documents."""
+                nonlocal incomplete_count
 
-            # --timings: collect per-doc per-stage wall-clock and aggregate it
-            # after the loop. Off by default — `timer` stays None and the loop
-            # runs unchanged. `run_start` brackets the whole loop so docs/sec
-            # and pages/sec count inter-doc overhead, not just stage time.
-            timing_records: list[timing.DocTiming] = []
-            run_start = time.perf_counter() if timings else None
-
-            for src, src_ext in sources:
-                # Render the main row from the active stage + page count. The
-                # filename is truncated so a long name can't squeeze the bar
-                # (issue #85); the page count is appended once extraction knows
-                # it, for whichever converter ran.
-                state = {"stage": "starting", "pages": None}
-                timer = timing.StageTimer() if timings else None
-
-                def _render(_src=src, _state=state) -> None:
-                    name = console.truncate_filename(_src.name)
-                    pages = _state["pages"]
-                    page_str = (
-                        f" · {pages} page{'' if pages == 1 else 's'}"
-                        if pages else ""
-                    )
+                def on_stage(stage: str) -> None:
                     bar.update(
                         task,
-                        label=f"Ingesting {name}{page_str} · {_state['stage']}",
+                        label=f"Ingesting {console.truncate_filename(file_name)} "
+                              f"· {stage}",
                     )
 
-                def _set_stage(
-                    stage: str, _state=state, _render=_render, _timer=timer,
-                ) -> None:
-                    _state["stage"] = stage
-                    _render()
-                    if _timer is not None:
-                        _timer.mark(stage)
+                cap_t = time.perf_counter()
+                cap_incomplete = _caption_missing(
+                    writer, document_id, file_name,
+                    vision_provider=vision_provider, vision_model=vision_model,
+                    vision_enabled=parse_config.vision_enabled,
+                    on_stage=on_stage, on_image_progress=_images_progress,
+                )
+                sum_t = time.perf_counter()
+                sum_incomplete = _summarize_if_missing(
+                    writer, document_id, file_hash, file_name,
+                    summaries_enabled=summaries_enabled,
+                    llm_provider=llm_provider, llm_model=llm_model,
+                    temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+                    on_stage=on_stage,
+                )
+                end_t = time.perf_counter()
 
-                def _set_page_count(count: int | None, _state=state, _render=_render) -> None:
-                    _state["pages"] = count
-                    _render()
-
-                _render()
-                try:
-                    outcome = _process_one(
-                        writer, src, src_ext, archive_root,
-                        pdf_converter=pdf_converter_name,
-                        html_converter=html_converter_name,
-                        sparse_text_threshold=sparse_text_threshold,
-                        ocr_min_confidence=ocr_min_confidence,
-                        vision_max_dimension=vision_max_dimension,
-                        vision_min_dimension=vision_min_dimension,
-                        llm_provider=llm_provider, llm_model=llm_model,
-                        temperature=temperature,
-                        max_summarize_tokens=max_summarize_tokens,
-                        vision_provider=vision_provider,
-                        vision_model=vision_model,
-                        on_page_progress=_phase_callback("  pages"),
-                        on_image_progress=_phase_callback("  images"),
-                        on_stage=_set_stage,
-                        on_page_count=_set_page_count,
+                if cap_incomplete or sum_incomplete:
+                    incomplete_count += 1
+                if timings:
+                    # `parse_stages` arrives partially built: for a fresh parse it
+                    # carries prep/parse/embed (incl. the persist top-up added at
+                    # the call site); for a resume it's None. Here we add the
+                    # caption + summarize seconds measured on this process.
+                    stages = dict(parse_stages or {})
+                    stages["caption"] = stages.get("caption", 0.0) + (sum_t - cap_t)
+                    stages["summarize"] = stages.get("summarize", 0.0) + (end_t - sum_t)
+                    timing_records.append(
+                        timing.DocTiming(page_count=page_count, stages=stages)
                     )
-                    if outcome == SKIPPED:
-                        skipped_count += 1
-                        if skipped_count <= SKIP_DISPLAY_LIMIT:
-                            console.info(
-                                f"Skipping {src.name} (already ingested)"
-                            )
-                    elif outcome in (INGESTED, INCOMPLETE):
-                        # A document that did real work this run (whether it
-                        # finished or is resumable) — count incompletes, and
-                        # record its per-stage timing when --timings is on.
-                        if outcome == INCOMPLETE:
-                            incomplete_count += 1
-                        if timer is not None:
-                            timer.finish()
-                            timing_records.append(timing.DocTiming(
-                                page_count=state["pages"],
-                                stages=dict(timer.totals),
-                            ))
-                            console.info(timing.render_doc_line(
-                                src.name, timer.total, timer.totals,
-                            ))
-                except Exception as e:
-                    from bartleby.lib.quiet import OFFLINE_HINT, offline_blocked
-                    message = f"Failed: {src.name}: {e}"
-                    if offline_blocked(e):
+                    console.info(
+                        timing.render_doc_line(file_name, sum(stages.values()), stages)
+                    )
+                bar.update(sub, visible=False)
+                bar.advance(task)
+
+            # Resume bucket first: already parsed, just fill the missing units.
+            for item in to_resume:
+                _drain(item.document_id, item.file_name, item.file_hash)
+
+            # Parse bucket: parse across the pool (or inline at 1 worker); drain
+            # each result through the single Writer as it completes, unordered.
+            for outcome in pool.parse_stream(
+                to_parse,
+                parse_fn=_parse_request,
+                config=parse_config,
+                max_workers=max_workers,
+                warmup=_warm_worker,
+                verbose=verbose,
+                required_models=_required_hf_models(
+                    pdf_converter_name, html_converter_name
+                ),
+            ):
+                req = outcome.request
+                if outcome.error is not None:
+                    writer.record_failure(
+                        req.file_hash, req.file_name, "parse", outcome.error
+                    )
+                    message = f"Failed: {req.file_name}: {outcome.error}"
+                    if outcome.offline:
+                        from bartleby.lib.quiet import OFFLINE_HINT
                         message += f"\n  {OFFLINE_HINT}"
                     console.error(message)
-                    if verbose:
-                        logger.exception(e)
-                finally:
-                    bar.update(sub, visible=False)
                     bar.advance(task)
+                    continue
 
-            extra_skipped = skipped_count - SKIP_DISPLAY_LIMIT
-            if extra_skipped > 0:
-                console.info(
-                    f"… and {extra_skipped} more file(s) skipped as already ingested"
+                writer.clear_failure(req.file_hash, "parse")
+                persist_t = time.perf_counter()
+                document_id = writer.persist_parse(outcome.parsed)
+                stages = outcome.parse_stages
+                if timings and stages is not None:
+                    # Chunk INSERTs fold into `embed`, per #162 — they land here,
+                    # just after the worker's embed step, under the same bucket.
+                    stages = dict(stages)
+                    stages["embed"] = (
+                        stages.get("embed", 0.0) + (time.perf_counter() - persist_t)
+                    )
+                _drain(
+                    document_id, req.file_name, req.file_hash,
+                    parse_stages=stages, page_count=outcome.parsed.page_count,
                 )
+
             if incomplete_count:
                 console.warn(
                     f"{incomplete_count} file(s) ingested but incomplete — "

@@ -126,13 +126,10 @@ def analyze(
     prepared: PreparedImage,
     *,
     model: str,
-    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageAnalysis:
     """Decide text-image vs scene-image and produce the merged analysis.
 
-    Runs Tesseract first (or reuses ``prefetched_ocr`` when the caller has
-    already OCR'd the same bytes — sparse-page renders pass theirs down to
-    avoid double-Tesseracting). If the OCR clears the text-image threshold,
+    Runs Tesseract first. If the OCR clears the text-image threshold,
     classification is ``'text'`` and the VLM is skipped entirely. Otherwise
     classification is ``'scene'`` and the VLM produces a bounded description.
 
@@ -141,12 +138,11 @@ def analyze(
     → not a text image" and fall through to the VLM rather than dropping the
     image. A busted Tesseract just means everything routes to the VLM.
     """
-    ocr_result = prefetched_ocr
-    if ocr_result is None:
-        try:
-            ocr_result = ocr_module.run(prepared.jpeg_bytes)
-        except Exception as exc:
-            _warn_ocr_degraded_once(exc)
+    try:
+        ocr_result = ocr_module.run(prepared.jpeg_bytes)
+    except Exception as exc:
+        _warn_ocr_degraded_once(exc)
+        ocr_result = None
     if ocr_result is not None and _is_text_image(ocr_result):
         return ImageAnalysis(
             kind="text",

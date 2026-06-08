@@ -126,7 +126,6 @@ def test_persist_summary_and_caption_stamp_run(project_conn):
         images=[ParsedImage(
             hash="imghash", archive_path=Path("/a/img.jpg"),
             width=100, height=80, page_number=1, image_index_on_page=0,
-            jpeg_bytes=b"",
         )],
     ))
     image_id = project_conn.cursor().execute(

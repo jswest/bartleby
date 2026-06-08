@@ -166,6 +166,21 @@ def _prompt_positive_int(prompt: str, default: int, *, help_text: str) -> int:
         console.print("[red]Must be a positive integer[/red]")
 
 
+def _prompt_max_workers(existing: dict) -> int | None:
+    """Returns the worker count, or None for auto (omit the key from config)."""
+    _help(
+        "How many documents scribe parses in parallel. 0 = auto: the min of your "
+        "CPU cores and what free RAM allows.\nRaise it for a faster bulk ingest "
+        "on a big machine; lower it if memory is tight."
+    )
+    current = existing.get("max_workers")
+    while True:
+        n = IntPrompt.ask("Parse workers (0 = auto)", default=int(current) if current else 0)
+        if n >= 0:
+            return n or None
+        console.print("[red]Must be 0 (auto) or a positive integer[/red]")
+
+
 def main():
     console.print(Panel.fit(
         "[bold cyan]Bartleby Configuration[/bold cyan]\n"
@@ -260,6 +275,9 @@ def main():
         "treated as scanned and routed to OCR/VLM.\nLower = more pages OCR'd "
         "(slower, catches more).",
     )
+    max_workers = _prompt_max_workers(existing)
+    if max_workers is not None:
+        config["max_workers"] = max_workers
 
     console.print("\n[bold]Image analysis[/bold] (VLM captions/OCR for embedded + standalone images)")
     _help(

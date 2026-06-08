@@ -92,6 +92,16 @@ def _converter(with_picture_images: bool = False):
     )
 
 
+def prewarm(with_picture_images: bool = False) -> None:
+    """Build the converter + chunker now (idempotent; cached per process).
+
+    The parse pool calls this in each docling worker's initializer so the heavy
+    layout/table models load once at startup, not on the worker's first PDF.
+    """
+    _converter(with_picture_images)
+    _chunker()
+
+
 @lru_cache(maxsize=1)
 def _chunker():
     _require_docling()
