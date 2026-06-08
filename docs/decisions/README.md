@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0222 — Never send temperature to the OpenAI provider; GPT-5 rejects non-default values (issue #222)](GH-0222-omit-temperature-openai-0001.md)
 - [GH-0212 — Complete the v7→v8 additive upgrade rather than force a re-ingest (issue #212)](GH-0212-complete-v7-to-v8-additive-upgrade-0001.md)
 - [GH-0213 — Bound parse-worker memory so a long ingest doesn't OOM (issue #213)](GH-0213-bound-parse-worker-memory-0001.md)
 - [GH-0170 — Scribe progress UX under the worker pool (issue #170)](GH-0170-scribe-progress-ux-worker-pool-0001.md)
