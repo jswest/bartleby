@@ -6,11 +6,10 @@ text. Adding a fourth provider means writing one class plus an entry here.
 
 from __future__ import annotations
 
+from bartleby.lib.consts import ALLOWED_PROVIDERS
 from bartleby.providers.base import (
     DocumentSummary, ImageAnalysis, Provider, VlmDescription,
 )
-
-ALLOWED_PROVIDERS = ("anthropic", "openai", "ollama", "wsjpt")
 
 
 def get_provider(name: str, *, ollama_base_url: str | None = None) -> Provider:
