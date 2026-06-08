@@ -90,6 +90,7 @@ from bartleby.lib.consts import (
     DOCLING_HF_REPOS,
     EMBEDDING_MODEL,
     PER_WORKER_GB,
+    RESERVED_CORES,
 )
 from bartleby.project import get_project_dir
 from bartleby.providers import Provider, get_provider
@@ -1100,11 +1101,11 @@ def _resolve_max_workers(config: dict, *, timings: bool) -> int:
     """Resolve how many parse workers to run.
 
     An explicit ``max_workers`` in config wins (warning when it exceeds what the
-    machine can safely hold); otherwise auto-pick ``min(cpu_count, free_ram_gb //
-    PER_WORKER_GB)``, floored at 1, so a CPU-rich but RAM-poor box doesn't launch
-    more workers than memory can hold and OOM. ``--timings`` forces 1: the
-    per-stage breakdown it produces is a sequential baseline, meaningless once
-    documents parse concurrently and overlap.
+    machine can safely hold); otherwise auto-pick ``min(cpu_count -
+    RESERVED_CORES, free_ram_gb // PER_WORKER_GB)``, floored at 1 (see those
+    consts for the why). ``--timings`` forces 1: the per-stage breakdown it
+    produces is a sequential baseline, meaningless once documents parse
+    concurrently and overlap.
     """
     if timings:
         if int(config.get("max_workers") or 1) > 1:
@@ -1115,7 +1116,8 @@ def _resolve_max_workers(config: dict, *, timings: bool) -> int:
 
     cores = os.cpu_count() or 1
     free_gb = psutil.virtual_memory().available / 1024**3
-    auto = max(1, min(cores, int(free_gb // PER_WORKER_GB)))
+    usable = max(1, cores - RESERVED_CORES)
+    auto = max(1, min(usable, int(free_gb // PER_WORKER_GB)))
 
     configured = config.get("max_workers")
     if configured is None:
@@ -1124,8 +1126,8 @@ def _resolve_max_workers(config: dict, *, timings: bool) -> int:
     if n > auto:
         console.warn(
             f"max_workers={n} exceeds what this machine can comfortably run "
-            f"({cores} cores, ~{free_gb:.0f}GB free → {auto} by the RAM cap); "
-            f"proceeding, but watch for memory pressure."
+            f"({cores} cores − {RESERVED_CORES} reserved, ~{free_gb:.0f}GB free "
+            f"→ {auto}); proceeding, but watch for memory pressure."
         )
     return n
 
