@@ -52,7 +52,7 @@ Almost all work starts from a GitHub issue and ends as a PR that closes it. Typi
    `uv run pytest` (must pass) → run the `simplify-refactor` agent over the touched
    files → apply the suggestions worth taking → re-run the tests → commit.
 5. **Docs sweep.** Check whether the change needs README / `ARCHITECTURE.md` /
-   `SKILL.md` updates (a new flag, changed behavior, a decision-log entry).
+   `SKILL.md` updates (a new flag, changed behavior, a new `docs/decisions/` entry).
 6. **Reconcile** with `origin/main` so any merge conflict surfaces now, not in the PR,
    then run the full test suite again.
 7. **PAUSE — PR.** Claude shows you the PR body and a final diff summary and waits
@@ -81,7 +81,7 @@ what looks wrong. It's **off by default** because browser automation is slow and
 burns image tokens, so you opt in per run when a change is actually worth eyeballing.
 Backend-only issues ignore the token even if you pass it.
 
-### Skipping the test gates (docs-only changes)
+### Skipping the test gates
 
 The `uv run pytest` runs that otherwise gate every commit are skipped down two
 paths — both a convenience for diffs that can't affect tests, **not** a way to land
@@ -91,11 +91,15 @@ untested code:
   `LICENSE`, or under `docs/` — README wording, an `ARCHITECTURE.md` note, a
   `SKILL.md` tweak — Claude skips the gates on its own. A pure prose change can't
   move the suite, so there's nothing to gate and no token to remember.
-- **`skip-tests` — opt-in, for docs-adjacent files outside that set.** For a change
-  that's still test-irrelevant but touches something other than docs (a shell
-  script, a `.txt` asset), append a `skip-tests` token (`/ship #<N> skip-tests`).
-  Claude honors it only when the branch diff touches no `*.py`, `pyproject.toml`, or
-  `bartleby/web/` file — otherwise it runs the tests anyway and tells you why.
+- **`skip-tests` — opt-in, for test-irrelevant files outside that set.** For a change
+  that can't affect the suite but touches something other than docs — a frontend-only
+  edit under `bartleby/web/` (that tree is all Svelte/vite, no Python), a shell
+  script, a `.txt` asset — append a `skip-tests` token (`/ship #<N> skip-tests`).
+  Claude honors it only when the branch diff touches no `*.py` or `pyproject.toml`
+  file — otherwise it runs the tests anyway and tells you why. (One caveat: a
+  *structural* `bartleby/web/` change (moving `src/`, dropping `package.json`) can
+  still break the Python suite via `tests/test_serve.py`, which checks the packaged
+  UI layout — don't `skip-tests` a web restructure.)
 
 Either way, Claude re-checks at every gate, so a docs PR that grows a code change
 mid-stream starts running tests from that point. When tests are genuinely skipped,
@@ -114,9 +118,19 @@ new long-lived branch. From there the whole loop retargets from `main` to the
 omnibus branch: worktree base, collision scan, reconcile, and PR base. The sub-PR
 says *"Part of #169"* rather than `Closes #170`, because GitHub only auto-closes
 from the default branch; the sub-issues all close when the omnibus → main PR (which
-lists every `Closes #<N>`) finally merges. The `main`-only guard rail is unchanged,
-so the omnibus branch itself isn't hook-protected — keeping work on sub-PRs is
-discipline, not enforcement. Composes with the two tokens above.
+lists every `Closes #<N>`) finally merges. As it opens that sub-PR, Claude ticks
+the issue's box on the omnibus checklist and notes the PR number, so the bundle's
+tracking stays current instead of drifting. The `main`-only guard rail is
+unchanged, so the omnibus branch itself isn't hook-protected — keeping work on
+sub-PRs is discipline, not enforcement. Composes with the two tokens above.
+
+When the bundle is ready, `/ship #169` — the omnibus issue **on its own, no
+`onto`** — opens that omnibus → main PR. Claude recognizes the omnibus issue (a
+`vX.Y.Z — …` title with a branch ahead of `main`), skips the implement machinery —
+the work already landed on the branch — and drafts the PR with a `Closes #<N>`
+line for every sub-issue, cross-checked against the PRs actually merged onto the
+branch. You approve and merge it; that one merge closes the whole bundle. Cutting
+the release is the later, separate `/release` step.
 
 ### The helper agents
 
@@ -130,9 +144,11 @@ Two subagents do focused jobs so the main thread stays on the problem:
 
 ## Working agreements
 
-The full set of invariants and the decision log live in
+The full set of invariants lives in
 [`ARCHITECTURE.md`](./ARCHITECTURE.md) — read that before changing anything
-load-bearing. The two that shape day-to-day work most:
+load-bearing; the decision log behind past calls lives one-per-file under
+[`docs/decisions/`](./docs/decisions/). The two invariants that shape day-to-day
+work most:
 
 - **No backwards compatibility, by default.** We delete old code rather than leaving
   dormant compat shims or feature-flagged old paths. The one sanctioned exception is
