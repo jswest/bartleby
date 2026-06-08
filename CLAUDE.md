@@ -29,6 +29,8 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
   error with `{"error": ..., "code": ...}`. Prose and progress go to stderr only.
 - **When unsure, stop and ask.** Most choices here have a prior conversation behind
   them. If something is ambiguous or uncovered, ask rather than wing it.
+- **Smallest fix that fits.** Prefer the simplest change that satisfies the
+  requirement; don't add abstractions, flags, or migrations unless asked.
 
 ## Workflow rails
 
