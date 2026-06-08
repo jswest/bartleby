@@ -316,8 +316,16 @@ class Writer:
         separate unit. Image dedup is by byte-hash: an image already recorded
         by another document is reused, only the ``document_images`` join is
         added. Returns the new document_id.
+
+        Document dedup mirrors the image case: ``documents.file_hash`` is UNIQUE,
+        so a byte-identical document already persisted is reused rather than
+        crashed on the INSERT (#225). ``_classify`` already diverts in-run
+        duplicates up front; this is the belt-and-braces guard at the write itself.
         """
         with self.conn:
+            existing = self.document_id_for(parsed.file_hash)
+            if existing is not None:
+                return existing
             cur = self.conn.cursor()
             cur.execute(
                 "INSERT INTO documents "
