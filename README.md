@@ -297,6 +297,7 @@ Interactive configuration wizard. Asks for:
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
+| Summarize workers | 4 | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
@@ -304,6 +305,7 @@ Interactive configuration wizard. Asks for:
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
+| Min image dimension | 64 | Images with a shorter edge than this are skipped — avoids wasting VLM calls (and crashes) on thin slivers |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
 | Caption workers | 4 | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
