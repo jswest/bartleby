@@ -1,0 +1,3 @@
+# Schema v5 — `summaries.authored_date`
+
+nullable `TEXT` column populated by the summarizer (additional field on the `DocumentSummary` Pydantic model). One LLM call still produces title/description/text/authored_date — no extra inference cost. Strict `YYYY-MM-DD` validation lives in `bartleby.ingest.summarize.normalize_authored_date`; malformed inputs (`"Q3 2024"`, `"2024-13-01"`, partial dates) silently become NULL rather than failing the ingest. Surfaced in `list_documents` (brief mode) and accepted by `save_summary --authored-date`. Shipped with `_upgrade_v4_to_v5` in `bartleby/db/upgrades.py` so existing corpora can opt in via `bartleby project upgrade <name>`; the column stays NULL until the user re-summarizes.

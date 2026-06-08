@@ -1,0 +1,3 @@
+# Additive-only schema upgrades allowed (relaxation of "no backwards compat")
+
+schema bumps may ship with an entry in `bartleby/db/upgrades.py` if the change is purely additive (new tables, new indexes, new nullable columns). Users invoke `bartleby project upgrade <name>` explicitly; the strict version check in `open_db` is unchanged and still rejects mismatched DBs without that step. Non-additive bumps still force re-ingest (no chain entry). The codebase never branches on schema version — `SCHEMA_VERSION` stays pinned. Rationale: existing users with multi-hour ingests get a graceful path for genuinely safe changes (e.g. `summaries.authored_date` from #15, `tags` table from #16) without us paying the ongoing migration-code tax.

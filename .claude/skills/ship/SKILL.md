@@ -196,10 +196,17 @@ code-producing commit, in this exact order:
 
 ## 9. Docs sweep
 Check README / ARCHITECTURE.md / skill `SKILL.md` for updates the change
-requires (new flags, changed behavior, a decision-log entry). If you change docs,
-re-run the step-8 gates before continuing (the skip condition from step 8 applies
-to the pytest run here too — note a docs-sweep edit that stays within the
-documentation set keeps a diff docs-only, so path 1 still skips).
+requires (new flags, changed behavior, a decision worth recording). **A decision
+goes in `docs/decisions/` as its own additive file**, never appended to
+ARCHITECTURE.md (which holds current state only): add
+`docs/decisions/GH-<issue:0000>-<slug>-0001.md` — the issue number four-zero-padded
+(`<index>` climbs past `0001` only when one issue yields more than one decision),
+the decision written as a standalone note — plus a newest-first line in
+`docs/decisions/README.md`. Existing decisions are never edited or pruned; a new
+call that overrides an old one says "supersedes GH-NNNN" in its own file. If you
+change docs, re-run the step-8 gates before continuing (the skip condition from
+step 8 applies to the pytest run here too — note a docs-sweep edit that stays
+within the documentation set keeps a diff docs-only, so path 1 still skips).
 
 ## 10. Reconcile before the PR
 Bring the branch up to date so conflicts surface here, not in the PR:
