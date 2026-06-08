@@ -43,6 +43,45 @@ def load_config() -> dict:
     return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
 
 
+# Substrings that mark a config key as secret. Match by name so a newly-added
+# credential field is stripped by default, rather than leaking until someone
+# remembers to denylist it.
+_SECRET_KEY_MARKERS = ("api_key", "token", "secret", "password", "credential")
+
+
+def redact_config(config: dict) -> dict:
+    """A copy of ``config`` with every secret-bearing key removed.
+
+    Ingest provenance (the ``ingests`` table) snapshots the resolved config so
+    a re-run can warn on drift — but API keys and credentials must never land
+    in the project DB. This is the single chokepoint that strips them.
+    """
+    return {
+        k: v
+        for k, v in config.items()
+        if not any(marker in k.lower() for marker in _SECRET_KEY_MARKERS)
+    }
+
+
+def config_drift(prior: dict | None, current: dict) -> list[str]:
+    """One ``key: before → after`` line per field that differs between two
+    resolved config snapshots.
+
+    Empty when ``prior`` is None (no earlier run to compare against). Compares
+    *every* field, not a curated subset, so any knob that changed across a
+    resume surfaces. Warn-only — the caller never blocks on the result.
+    """
+    if prior is None:
+        return []
+    drift: list[str] = []
+    for key in sorted(set(prior) | set(current)):
+        before = prior.get(key, "<unset>")
+        after = current.get(key, "<unset>")
+        if before != after:
+            drift.append(f"{key}: {before!r} → {after!r}")
+    return drift
+
+
 def save_config(config: dict) -> None:
     BARTLEBY_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(
