@@ -1041,8 +1041,14 @@ def _classify(
     to_parse: list[ParseRequest] = []
     to_resume: list[_ResumeItem] = []
     skipped: list[str] = []
+    seen_hashes: set[str] = set()
     for path, ext in sources:
         file_hash = _hash_file(path)
+        # Deduplicate within this run: skip byte-identical files
+        if file_hash in seen_hashes:
+            skipped.append(path.name)
+            continue
+        seen_hashes.add(file_hash)
         document_id = writer.document_id_for(file_hash)
         if document_id is not None:
             if _is_complete(writer, document_id):
