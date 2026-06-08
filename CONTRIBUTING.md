@@ -42,23 +42,31 @@ else's clone.
 Almost all work starts from a GitHub issue and ends as a PR that closes it. Typing
 `/ship #141` walks Claude through this, in order:
 
-1. **Sync `main`** and make sure the tree is clean.
+1. **Sync `main`, check the tree is clean, and scan for collisions** — a quick look
+   at the other open worktrees and PRs so you can spot overlapping in-flight work on
+   the same files and coordinate before two branches diverge.
 2. **Create a sibling worktree** for the issue — `../bartleby-issue-<N>-<slug>` on a
    branch `issue/<N>-<slug>`. We work in worktrees *next to* the main checkout,
    never nested inside it, and never `git checkout -b` on `main` itself.
-3. **PAUSE — plan.** For anything non-trivial, Claude lays out the plan (files,
+3. **Flesh out a thin issue.** If the body is empty or sketchy, Claude writes a
+   problem/approach/scope back to it with `gh issue edit` before touching code — so
+   the plan has something concrete to anchor to.
+4. **PAUSE — plan.** For anything non-trivial, Claude lays out the plan (files,
    approach, trade-offs) and waits for your OK before writing code.
-4. **Implement in logical units.** For *every* commit, in this exact order:
-   `uv run pytest` (must pass) → run the `simplify-refactor` agent over the touched
-   files → apply the suggestions worth taking → re-run the tests → commit.
-5. **Docs sweep.** Check whether the change needs README / `ARCHITECTURE.md` /
+5. **Implement in logical units.** For *every* commit, in this exact order:
+   `uv run pytest` (must pass — except down the two [skip paths](#skipping-the-test-gates)
+   below) → run the `simplify-refactor` agent over the touched files → apply the
+   suggestions worth taking → re-run the tests → commit.
+6. **Docs sweep.** Check whether the change needs README / `ARCHITECTURE.md` /
    `SKILL.md` updates (a new flag, changed behavior, a new `docs/decisions/` entry).
-6. **Reconcile** with `origin/main` so any merge conflict surfaces now, not in the PR,
+7. **Reconcile** with `origin/main` so any merge conflict surfaces now, not in the PR,
    then run the full test suite again.
-7. **PAUSE — PR.** Claude shows you the PR body and a final diff summary and waits
+8. **PAUSE — PR.** Claude shows you the PR body and a final diff summary and waits
    for your OK, then opens a PR with a `Closes #<N>` line.
 
-**Claude opens the PR; a human merges it.** That last step is always ours.
+**Claude opens the PR; a human merges it.** That last step is always ours. Once
+you've merged, Claude closes the loop — removing the sibling worktree, deleting the
+issue branch, and re-syncing the base.
 
 The two **PAUSE** points are real stops — Claude won't blow past them without your
 say-so. They're where you catch a wrong approach before it's code, and a wrong PR
