@@ -29,6 +29,7 @@ lanes so caption rows don't show leftover parse files.
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 
 from rich.console import Group
 from rich.live import Live
@@ -89,7 +90,9 @@ class ScribeProgress:
             for _ in range(max(1, n_lanes))
         ]
         self._free: list[int] = list(range(len(self._lane_tasks)))
-        self._by_key: dict[object, int] = {}
+        # Insertion-ordered so the oldest-active key can be evicted (LRU) when a
+        # new worker needs a lane and none are free — see _lane_update.
+        self._by_key: "OrderedDict[object, int]" = OrderedDict()
 
         self._live = Live(self, console=shared, refresh_per_second=8)
 
@@ -147,9 +150,16 @@ class ScribeProgress:
             idx = self._by_key.get(key)
             if idx is None:
                 if not self._free:
-                    return        # more live workers than lanes — shouldn't happen
-                idx = self._free.pop(0)
+                    # No free lane: a recycled parse worker (#213) reports under a
+                    # new process name while a dead worker still holds a lane. Evict
+                    # the least-recently-updated key — the dead worker, which has
+                    # stopped reporting — and reuse its lane for this live one.
+                    _, idx = self._by_key.popitem(last=False)
+                else:
+                    idx = self._free.pop(0)
                 self._by_key[key] = idx
+            else:
+                self._by_key.move_to_end(key)   # mark recently-active for LRU
             label = f"{console.truncate_filename(item)} · {stage}"
         # Updated outside the lock (Rich has its own); safe because each key is a
         # single worker reporting serially, so two updates for one lane can't race.

@@ -68,12 +68,26 @@ def test_lanes_are_sticky_per_key_and_reset_between_phases():
     assert sp._by_key == {}
 
 
-def test_lane_overflow_is_dropped_not_fatal():
-    # More live workers than lanes can't happen (lanes ≥ widest phase), but if it
-    # did the extra worker is silently dropped rather than crashing the render.
+def test_lane_reclaim_evicts_lru_when_out_of_lanes():
+    # No free lane → the least-recently-updated key is evicted and its lane reused
+    # (the dead recycled worker, #213), so a live worker is never dropped.
     sp = ScribeProgress(n_lanes=1)
     par = sp.phase("parse")
     par.start(3)
     par.lane("w1", "a", "x")
-    par.lane("w2", "b", "x")
     assert set(sp._by_key) == {"w1"}
+    par.lane("w2", "b", "x")           # no free lane → evict w1 (LRU), reuse its lane
+    assert set(sp._by_key) == {"w2"}
+
+
+def test_lane_reclaim_keeps_the_most_recently_active_workers():
+    # Eviction is least-recently-*updated*, not least-recently-added: touching a
+    # worker keeps its lane, so the rows always track the currently-active workers.
+    sp = ScribeProgress(n_lanes=2)
+    par = sp.phase("parse")
+    par.start(5)
+    par.lane("w1", "a", "x")
+    par.lane("w2", "b", "x")
+    par.lane("w1", "a", "embedding")   # touch w1 → w2 is now the LRU
+    par.lane("w3", "c", "x")           # full → evict w2, not w1
+    assert set(sp._by_key) == {"w1", "w3"}
