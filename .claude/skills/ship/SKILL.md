@@ -1,24 +1,57 @@
 ---
 name: ship
 description: >-
-  Implement a GitHub issue end-to-end the way this repo expects: sync main,
-  sibling worktree, pre-commit gates, conflict reconciliation, and a PR that
-  closes the issue. Invoke as `/ship #<N>` (or `/ship <N>`). Use whenever asked
-  to ship, implement, or do a numbered issue in bartleby.
+  Implement a GitHub issue end-to-end the way this repo expects: sync the base
+  branch, sibling worktree, pre-commit gates, conflict reconciliation, and a PR
+  that closes the issue. Invoke as `/ship #<N>` (or `/ship <N>`); add `onto
+  #<omnibus>` to ship onto an omnibus branch instead of `main`. Use whenever
+  asked to ship, implement, or do a numbered issue in bartleby.
 ---
 
 # ship — issue → tested PR
 
-Argument is one GitHub issue number (`#118`, `118`), optionally followed by one
-or both opt-in tokens — `with-playwright` and `skip-tests` (e.g. `/ship #134
-with-playwright`, `/ship #142 skip-tests`, or both in either order) — see below.
-Run the steps in order. Two hard stops are marked **PAUSE**: do not pass them
-without the user's OK.
+Argument is one GitHub issue number (`#118`, `118`), optionally followed by any
+of three opt-in tokens — `onto #<omnibus>`, `with-playwright`, and `skip-tests`
+(e.g. `/ship #134 with-playwright`, `/ship #170 onto #169 skip-tests`, in any
+order) — see below. Run the steps in order. Two hard stops are marked **PAUSE**:
+do not pass them without the user's OK.
+
+Throughout, **base** is the integration branch this issue targets: `main` by
+default, or the omnibus branch when `onto #<omnibus>` is given (see below).
+Wherever a step says `origin/<base>`, read `origin/main` in the normal case.
 
 Repo specifics: tests are `uv run pytest`; the main checkout is
 `/Users/johnwest/Code/spot/bartleby`; worktrees are **siblings** of it. A
 PreToolUse hook (`guard-main-write.sh`) blocks commits/pushes on `main` — treat
 a block as a signal you're on the wrong branch, not an error to route around.
+
+**Optional `onto #<omnibus>`.** Ship onto an *omnibus/integration branch* instead
+of `main`, for landing several sub-issues of a bundle (e.g. a release) before it
+reaches `main` as one unit. The token is the **omnibus issue number**, not a
+branch name. When present:
+- **Resolve the branch.** Read the omnibus issue (`gh issue view <omnibus>`) and
+  derive its branch from the title's leading version: a title `vX.Y.Z — …` yields
+  `omnibus/vX.Y.Z` (bartleby omnibus issues are titled this way). If the title
+  has no parseable leading `vX.Y.Z`, **refuse** — "#<omnibus> isn't titled `vX.Y.Z
+  — …`; can't derive an omnibus branch" — don't invent a name.
+- **Ensure the branch exists.** `git ls-remote --exit-code --heads origin
+  <omnibus-branch>`. If it exists, use it. If not, this is the bundle's first
+  ship: **confirm with the user**, then create it from `origin/main` and push it
+  (`git branch <omnibus-branch> origin/main && git push -u origin
+  <omnibus-branch>`) so the remote ref exists for the worktree base and later
+  sub-ships. Report whichever happened — pushing a new long-lived branch is a
+  remote mutation, never create it silently.
+- **`base` becomes `<omnibus-branch>`** for every step below: sync, collision
+  scan, worktree start-point, the `skip-tests` guard, reconcile, and the PR base,
+  diff-stat, and cleanup all retarget from `origin/main` to
+  `origin/<omnibus-branch>`.
+- **Closure differs.** GitHub only auto-closes from the default branch, so a
+  sub-PR merged into the omnibus branch closes nothing. The sub-PR body says
+  **"Part of #<omnibus>"** with **no `Closes` keyword**; sub-issues close when the
+  omnibus → main PR (which enumerates `Closes #<N>` for the bundle) merges. Do not
+  put `Closes #<N>` on a sub-PR in this mode.
+- The guard hook still protects `main` only; the omnibus branch is not
+  hook-protected. Composes with `with-playwright` and `skip-tests`.
 
 **Optional `with-playwright`.** The argument may carry a `with-playwright` token
 after the issue number (only that exact token). It turns on a visual-verification
@@ -39,7 +72,7 @@ Don't edit the built-in `verify`/`run` skills; this flag lives entirely here.
 exact token). It omits the `uv run pytest` runs in steps 8, 9, and 10 — a
 convenience for docs-only work, **not** a way to land untested code. It is
 honored **only if this issue's diff touches no test-affecting source**: if
-`git diff --name-only origin/main...HEAD` shows any `*.py`, `pyproject.toml`, or
+`git diff --name-only origin/<base>...HEAD` shows any `*.py`, `pyproject.toml`, or
 a file under `bartleby/web/`, **ignore the token and run the tests anyway**, and
 say why ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py`
 — running tests anyway"). Re-check this at **each** gate, not just once: a docs
@@ -53,8 +86,13 @@ a green one. The simplify-refactor pass (step 8) still runs regardless.
   uncommitted changes, stop and report — don't proceed on a dirty tree.
 - Confirm `gh auth status` is good.
 
-## 2. Sync main
-From the main checkout: `git fetch origin && git pull --ff-only origin main`.
+## 2. Sync the base
+From the main checkout: `git fetch origin`. In the normal case also fast-forward
+main: `git pull --ff-only origin main`. The worktree (step 5) is always based on
+the freshly-fetched `origin/<base>`, so onto-mode needs only the fetch — don't
+check out the omnibus branch in the main checkout (creating it, if it didn't
+exist, already happened during `onto` flag-resolution above — that's a separate
+`git branch`/`push`, not a checkout).
 
 ## 3. Read the issue
 `gh issue view <N>`. Derive a kebab slug from the title → branch
@@ -64,14 +102,16 @@ From the main checkout: `git fetch origin && git pull --ff-only origin main`.
 Surface overlapping in-flight work so a conflict is known up front:
 - `git worktree list` and `gh pr list --state open` — note other active
   branches/PRs.
-- For each, compare its changed files (`git diff --name-only origin/main...<branch>`
+- For each, compare its changed files (`git diff --name-only origin/<base>...<branch>`
   / `gh pr diff <n> --name-only`) against the files this issue will likely touch.
 - If there's overlap, **report it** ("PR #128 also edits `scan.py`") and let the
   user decide whether to proceed, reorder, or coordinate. Don't silently barrel in.
 
 ## 5. Create the worktree
-`git worktree add ../bartleby-issue-<N>-<slug> -b issue/<N>-<slug>`.
-Never `git checkout -b` inside the main checkout; never nest the worktree in the repo.
+`git worktree add ../bartleby-issue-<N>-<slug> -b issue/<N>-<slug> origin/<base>`
+— the explicit `origin/<base>` start-point bases the branch on the integration
+target (`main` normally, the omnibus branch under `onto`). Never `git checkout -b`
+inside the main checkout; never nest the worktree in the repo.
 
 ## 6. Flesh out a terse issue
 If the body is empty/thin, once the approach is settled write it back with
@@ -102,19 +142,26 @@ applies to the pytest run here too).
 
 ## 10. Reconcile before the PR
 Bring the branch up to date so conflicts surface here, not in the PR:
-`git fetch origin && git merge origin/main` (or rebase). Resolve any conflicts,
+`git fetch origin && git merge origin/<base>` (or rebase). Resolve any conflicts,
 then run the **full** suite (`uv run pytest`) again — unless `skip-tests` is
-active and its guard still holds. Re-run the same `origin/main...HEAD` check from
+active and its guard still holds. Re-run the same `origin/<base>...HEAD` check from
 the flag note; because it's three-dot (the diff since the merge-base), merging
-`origin/main` in doesn't change what it sees.
+`origin/<base>` in doesn't change what it sees.
 
 ## 11. PAUSE — PR
 Show the user the **PR body draft + a final diff summary** (`git diff --stat
-origin/main...HEAD`) and wait for their OK. Then push and
-`gh pr create` with a `Closes #<N>` line. **Do not merge** — the user merges.
+origin/<base>...HEAD`) and wait for their OK. Then push and `gh pr create`.
+**Do not merge** — the user merges.
+- Normal case: target `main` (the default) with a `Closes #<N>` line.
+- Under `onto`: pass `--base <omnibus-branch>`, and write **"Part of #<omnibus>"**
+  with **no `Closes`** (see the flag note) — the sub-issue closes at the omnibus →
+  main merge, not here.
 
 ## 12. Cleanup (only after the user confirms the merge)
 From the main checkout: `git worktree remove ../bartleby-issue-<N>-<slug>`,
 `git branch -D issue/<N>-<slug>` (squash-merge leaves it "unmerged"; `-D` is
-expected), then `git pull --ff-only origin main`. **Touch only this issue's
-worktree/branch** — never remove others' even if they look stale; flag them instead.
+expected). Then refresh: normally `git pull --ff-only origin main`; under `onto`
+this issue's sub-PR merged into the omnibus branch (not main — the omnibus → main
+merge is a separate, later act), so just `git fetch origin` to update
+`origin/<base>`. **Touch only this issue's worktree/branch** — never remove
+others' even if they look stale; flag them instead.
