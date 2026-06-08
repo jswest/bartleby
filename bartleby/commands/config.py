@@ -6,6 +6,8 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
 from bartleby.lib.consts import (
+    ALLOWED_HTML_CONVERTERS,
+    ALLOWED_PDF_CONVERTERS,
     DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
@@ -17,8 +19,6 @@ from bartleby.lib.consts import (
 from bartleby.providers import ALLOWED_PROVIDERS
 
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
-ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
-ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
 
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
