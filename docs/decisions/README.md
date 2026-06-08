@@ -4,8 +4,11 @@ Settled judgment calls, kept so we don't re-derive them. Each decision is one
 file, named `GH-<issue>-<slug>-<index>.md` — the issue number four-zero-padded
 (`GH-XXXX` when a decision predates the issue-tracked workflow or lands out of
 band), and a per-stem `<index>` that climbs only for phases of one issue or
-repeated hotfixes. The `GH-XXXX` bucket sorts last on disk, so **this index is
-the source of truth for chronological order**, newest first.
+repeated hotfixes. A hotfix folds into the `<slug>` as `hotfix-<descriptive-slug>` —
+`GH-XXXX-hotfix-embedding-oom-0003.md` out of band,
+`GH-0181-hotfix-vlm-fallback-0001.md` when it mends a specific issue's regression —
+never the bare `hotfix` token. The `GH-XXXX` bucket sorts last on disk, so **this
+index is the source of truth for chronological order**, newest first.
 
 Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
