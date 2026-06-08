@@ -7,11 +7,28 @@ import base64
 from openai import OpenAI
 from pydantic import BaseModel
 
+from bartleby.lib import console
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
     IMAGE_DESCRIPTION_INSTRUCTIONS,
     build_summary_messages,
 )
+
+# OpenAI's models (the GPT-5 family) accept only the default temperature (1.0);
+# any other value is rejected outright. We never send the parameter — the API
+# default stands — and warn once per process if the caller configured a value
+# we're dropping, so a non-default temperature in config doesn't read as honored.
+_temperature_warned = False
+
+
+def _drop_temperature(temperature: float) -> None:
+    global _temperature_warned
+    if temperature != 1.0 and not _temperature_warned:
+        _temperature_warned = True
+        console.warn(
+            "OpenAI models accept only the default temperature (1.0); "
+            f"ignoring configured temperature={temperature}."
+        )
 
 
 class OpenAIProvider:
@@ -27,9 +44,9 @@ class OpenAIProvider:
         model: str,
         temperature: float,
     ) -> DocumentSummary:
+        _drop_temperature(temperature)
         response = self._client.chat.completions.parse(
             model=model,
-            temperature=temperature,
             messages=build_summary_messages(document_text),
             response_format=DocumentSummary,
         )
@@ -43,9 +60,9 @@ class OpenAIProvider:
         schema: type[BaseModel],
         temperature: float = 0.0,
     ) -> BaseModel:
+        _drop_temperature(temperature)
         response = self._client.chat.completions.parse(
             model=model,
-            temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
             response_format=schema,
         )
