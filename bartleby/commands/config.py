@@ -172,8 +172,9 @@ def _prompt_max_workers(existing: dict) -> int | None:
     """Returns the worker count, or None for auto (omit the key from config)."""
     _help(
         "How many documents scribe parses in parallel. 0 = auto: the min of your "
-        "CPU cores and what free RAM allows.\nRaise it for a faster bulk ingest "
-        "on a big machine; lower it if memory is tight."
+        "CPU cores (less a couple held back for the OS) and what free RAM allows."
+        "\nRaise it for a faster bulk ingest on a big machine — note a value you "
+        "set here can use every core; lower it if memory is tight."
     )
     current = existing.get("max_workers")
     while True:
