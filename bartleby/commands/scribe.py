@@ -32,6 +32,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
@@ -39,13 +40,6 @@ from pathlib import Path
 from typing import Callable
 
 from loguru import logger
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-)
 
 from bartleby.config import (
     config_drift,
@@ -60,6 +54,7 @@ from bartleby.ingest import images as image_pipeline
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
 from bartleby.ingest import pool
 from bartleby.ingest import sec2md as sec2md_pipeline
+from bartleby.ingest.progress import ScribeProgress
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
     PDF_EXTENSIONS,
@@ -676,6 +671,7 @@ def _caption_all(
     caption_workers: int,
     timings: bool,
     on_progress: Callable[[int, int], None] | None,
+    on_lane: Callable[[object, str, str], None] | None = None,
 ) -> None:
     """Phase 2: caption every still-uncaptioned image across all parsed units.
 
@@ -747,15 +743,22 @@ def _caption_all(
             to_caption[image_id].file_hash, unit.file_name, "caption", exc
         )
 
+    def _analyze(image_id: int, pi: PendingImage) -> image_pipeline.ImageAnalysis:
+        # Claim this thread's lane for the owning document, then run the analysis.
+        # Keyed by thread id, so the pool's N threads map to N sticky lanes.
+        if on_lane is not None:
+            on_lane(threading.get_ident(), owner[image_id].file_name, "captioning")
+        return _analyze_image(
+            pi, vision_provider=vision_provider, vision_model=vision_model,
+        )
+
     if caption_workers <= 1:
         # Inline: one image at a time on this thread. Same analyze/persist calls
         # as the pool, but with clean per-document caption seconds for --timings.
         for image_id, pi in to_caption.items():
             t0 = time.perf_counter() if timings else None
             try:
-                _persist(image_id, _analyze_image(
-                    pi, vision_provider=vision_provider, vision_model=vision_model,
-                ))
+                _persist(image_id, _analyze(image_id, pi))
             except Exception as e:
                 _fail(image_id, e)
             unit = owner[image_id]
@@ -768,10 +771,7 @@ def _caption_all(
 
     with ThreadPoolExecutor(max_workers=caption_workers) as pool:
         futures = {
-            pool.submit(
-                _analyze_image, pi,
-                vision_provider=vision_provider, vision_model=vision_model,
-            ): image_id
+            pool.submit(_analyze, image_id, pi): image_id
             for image_id, pi in to_caption.items()
         }
         for fut in as_completed(futures):
@@ -794,6 +794,7 @@ def _summarize_all(
     summarize_workers: int,
     timings: bool,
     on_progress: Callable[[int, int], None] | None,
+    on_lane: Callable[[object, str, str], None] | None = None,
 ) -> tuple[int, dict[int, tuple[str, float]]]:
     """Phase 3: summarize every document still owing one, concurrently (#188).
 
@@ -854,7 +855,11 @@ def _summarize_all(
         writer.record_failure(ps.file_hash, ps.file_name, "summary", exc)
         incomplete += 1
 
-    def _summarize(text: str):
+    def _summarize(ps: PendingSummary, text: str):
+        # Claim the running thread's lane for this document, then make the LLM
+        # call — keyed by thread id so the pool's N threads map to N sticky lanes.
+        if on_lane is not None:
+            on_lane(threading.get_ident(), ps.file_name, "summarizing")
         return summarize(
             text, provider=llm_provider, model=llm_model,
             temperature=temperature, max_summarize_tokens=max_summarize_tokens,
@@ -866,7 +871,7 @@ def _summarize_all(
         for ps in work:
             t0 = time.perf_counter() if timings else None
             try:
-                _persist(ps, _summarize(writer.summary_input(ps.document_id)))
+                _persist(ps, _summarize(ps, writer.summary_input(ps.document_id)))
             except Exception as e:
                 _fail(ps, e)
             if t0 is not None:
@@ -879,7 +884,7 @@ def _summarize_all(
     it = iter(work)
     with ThreadPoolExecutor(max_workers=summarize_workers) as pool:
         in_flight = {
-            pool.submit(_summarize, writer.summary_input(ps.document_id)): ps
+            pool.submit(_summarize, ps, writer.summary_input(ps.document_id)): ps
             for ps in itertools.islice(it, summarize_workers)
         }
         while in_flight:
@@ -894,7 +899,9 @@ def _summarize_all(
                 nxt = next(it, None)
                 if nxt is not None:
                     in_flight[
-                        pool.submit(_summarize, writer.summary_input(nxt.document_id))
+                        pool.submit(
+                            _summarize, nxt, writer.summary_input(nxt.document_id)
+                        )
                     ] = nxt
     return incomplete, times
 
@@ -945,7 +952,11 @@ class _ResumeItem:
     file_hash: str
 
 
-def _parse_request(request: ParseRequest, config: ParseConfig) -> ParseOutcome:
+def _parse_request(
+    request: ParseRequest,
+    config: ParseConfig,
+    report: Callable[[str], None],
+) -> ParseOutcome:
     """Archive + parse one file into a ParsedDocument — the pool's ``parse_fn``.
 
     DB-free, so it runs anywhere the pool puts it (a spawn worker, or inline at
@@ -953,8 +964,20 @@ def _parse_request(request: ParseRequest, config: ParseConfig) -> ParseOutcome:
     ``error`` outcome so one bad file can't tear down the result stream. With
     ``--timings`` it captures its own parse/embed wall-clock (the timer is built
     here, in whatever process runs the parse) and returns it as data.
+
+    ``report(stage)`` is the pool's progress hook: it announces the file's
+    current stage so the main process can render this worker's lane. The single
+    ``on_stage`` the parsers already emit drives both the timer and ``report`` —
+    one callback, two consumers.
     """
     timer = timing.StageTimer() if config.timings else None
+    report("preparing")          # the lane shows the file the moment we pick it up
+
+    def on_stage(label: str) -> None:
+        if timer is not None:
+            timer.mark(label)
+        report(label)
+
     try:
         parsed = _parse_document(
             _archive(request.path, config.archive_root, request.file_hash, request.ext),
@@ -966,7 +989,7 @@ def _parse_request(request: ParseRequest, config: ParseConfig) -> ParseOutcome:
             vision_max_dimension=config.vision_max_dimension,
             vision_min_dimension=config.vision_min_dimension,
             archive_root=config.archive_root,
-            on_stage=timer.mark if timer is not None else None,
+            on_stage=on_stage,
         )
     except Exception as e:
         from bartleby.lib.quiet import offline_blocked
@@ -1336,19 +1359,15 @@ def main(
         # from parse) → summarize. The barriers between them keep the Writer the
         # connection's sole owner on one thread; only parse and caption fan out,
         # each to its own kind of worker (parse processes, caption threads).
-        # Share the console module's Rich Console so messages printed via
-        # console.info/error during the bar's lifetime insert above the Live
-        # display rather than colliding with it (and keep stdout-redirect captures
-        # around Docling/RapidOCR from breaking the bar).
-        with Progress(
-            TextColumn("[bold]{task.fields[label]}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console.get_console(),
-        ) as bar:
-            task = bar.add_task("phase", total=len(to_parse), label="Parsing")
-
+        #
+        # ScribeProgress renders all three at once (#170): a run-of-show header
+        # tallying the phases, one overall bar over every pipeline unit, and one
+        # lane per worker. It shares the console module's Rich Console, so
+        # console.info/error during the run insert above the live display rather
+        # than colliding with it (and stdout-redirect captures around Docling/
+        # RapidOCR don't break it). Lanes ≥ the widest phase's worker count.
+        n_lanes = max(max_workers, caption_workers, summarize_workers)
+        with ScribeProgress(n_lanes=n_lanes) as progress:
             # ---- Phase 1: parse + persist ------------------------------------
             # Resumed docs were parsed by an earlier run — no parse, just the
             # missing captions the caption phase fills; summaries are settled by
@@ -1362,6 +1381,8 @@ def main(
                 )
                 for item in to_resume
             ]
+            parse_phase = progress.phase("parse")
+            parse_phase.start(len(to_parse))
             for outcome in pool.parse_stream(
                 to_parse,
                 parse_fn=_parse_request,
@@ -1372,6 +1393,7 @@ def main(
                 required_models=_required_hf_models(
                     pdf_converter_name, html_converter_name
                 ),
+                on_progress=lambda ev: parse_phase.lane(ev.worker, ev.item, ev.stage),
             ):
                 req = outcome.request
                 if outcome.error is not None:
@@ -1383,7 +1405,7 @@ def main(
                         from bartleby.lib.quiet import OFFLINE_HINT
                         message += f"\n  {OFFLINE_HINT}"
                     console.error(message)
-                    bar.advance(task)
+                    parse_phase.advance()
                     continue
 
                 writer.clear_failure(req.file_hash, "parse")
@@ -1401,21 +1423,21 @@ def main(
                     document_id, req.file_name, req.file_hash,
                     page_count=outcome.parsed.page_count, stages=stages,
                 ))
-                bar.advance(task)
+                parse_phase.advance()
 
             # ---- Phase 2: caption every uncaptioned image, concurrently ------
-            def _caption_progress(done: int, total: int) -> None:
-                if done == 0:
-                    bar.reset(task, total=total, label="Captioning images")
-                else:
-                    bar.update(task, completed=done)
-
+            # _caption_all drives the tally via on_progress (0,total then per
+            # image) and the lanes via on_lane (per worker thread); the phase
+            # adapts the tally contract itself and reveals the caption total the
+            # first time it hears one.
+            cap_phase = progress.phase("caption")
             _caption_all(
                 writer, units,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_enabled=parse_config.vision_enabled,
                 caption_workers=caption_workers, timings=timings,
-                on_progress=_caption_progress,
+                on_progress=cap_phase.on_progress,
+                on_lane=cap_phase.lane,
             )
             # A document is caption-incomplete if any image is still uncaptioned
             # (failed / capped / no provider — recomputed from the DB so a shared
@@ -1442,20 +1464,15 @@ def main(
             if summaries_enabled:
                 pending = writer.documents_needing_summary()
                 if pending:
-                    stask = bar.add_task(
-                        "summaries", total=len(pending), label="Summarizing",
-                    )
-
-                    def _summary_progress(done: int, total: int) -> None:
-                        bar.update(stask, completed=done, total=total)
-
+                    sum_phase = progress.phase("summarize")
                     owed, summarize_times = _summarize_all(
                         writer, pending,
                         llm_provider=llm_provider, llm_model=llm_model,
                         temperature=temperature,
                         max_summarize_tokens=max_summarize_tokens,
                         summarize_workers=summarize_workers, timings=timings,
-                        on_progress=_summary_progress,
+                        on_progress=sum_phase.on_progress,
+                        on_lane=sum_phase.lane,
                     )
                     incomplete_count += owed
                     if timings:

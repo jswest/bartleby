@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0170 — Scribe progress UX under the worker pool (issue #170)](GH-0170-scribe-progress-ux-worker-pool-0001.md)
 - [GH-0188 — Parallelize the summarize pass (issue #188)](GH-0188-parallelize-summarize-pass-0001.md)
 - [GH-0166 — Decouple captioning into its own concurrent phase (issue #166)](GH-0166-decouple-captioning-own-concurrent-phase-0001.md)
 - [GH-0167 — Decouple summarization into its own pass (issue #167)](GH-0167-decouple-summarization-own-pass-0001.md)
