@@ -1571,7 +1571,7 @@ def test_writer_persist_parse_dedupes_shared_image(isolated_project, tmp_path):
     def _img(page):
         return ParsedImage(
             hash="shared", archive_path=tmp_path / "i.jpg", width=100, height=80,
-            page_number=page, image_index_on_page=1, jpeg_bytes=b"x",
+            page_number=page, image_index_on_page=1,
         )
 
     conn = open_db("test_proj")

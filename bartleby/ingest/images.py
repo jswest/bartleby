@@ -120,17 +120,14 @@ def analyze(
     prepared: PreparedImage,
     *,
     model: str,
-    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageAnalysis:
     """Decide text-image vs scene-image and produce the merged analysis.
 
-    Runs Tesseract first (or reuses ``prefetched_ocr`` when the caller has
-    already OCR'd the same bytes — sparse-page renders pass theirs down to
-    avoid double-Tesseracting). If the OCR clears the text-image threshold,
+    Runs Tesseract first. If the OCR clears the text-image threshold,
     classification is ``'text'`` and the VLM is skipped entirely. Otherwise
     classification is ``'scene'`` and the VLM produces a bounded description.
     """
-    ocr_result = prefetched_ocr or ocr_module.run(prepared.jpeg_bytes)
+    ocr_result = ocr_module.run(prepared.jpeg_bytes)
     if _is_text_image(ocr_result):
         return ImageAnalysis(
             kind="text",

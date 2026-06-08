@@ -45,7 +45,6 @@ from bartleby.db.chunks import ChunkInput
 from bartleby.db.connection import open_db, resolve_project_name
 from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
-from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
 from bartleby.ingest import sec2md as sec2md_pipeline
 from bartleby.ingest.chunk import (
@@ -210,14 +209,10 @@ class _ImageRoute:
         bytes_: bytes,
         page_number: int | None,
         image_index_on_page: int,
-        prefetched_ocr: ocr_module.OcrResult | None = None,
     ):
         self.bytes_ = bytes_
         self.page_number = page_number              # None for standalone files
         self.image_index_on_page = image_index_on_page  # 0 for page-renders/standalone
-        # For sparse-page renders we already ran Tesseract at the page level —
-        # pass that result down so caption can skip its own Tesseract pre-pass.
-        self.prefetched_ocr = prefetched_ocr
 
 
 def _parse_image_routes(
@@ -264,8 +259,6 @@ def _parse_image_routes(
             height=prepared.height,
             page_number=route.page_number,
             image_index_on_page=route.image_index_on_page,
-            jpeg_bytes=prepared.jpeg_bytes,
-            prefetched_ocr=route.prefetched_ocr,
         ))
     return parsed
 
@@ -276,14 +269,12 @@ def _caption_image(
     *,
     vision_provider: Provider,
     vision_model: str,
-    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageCaption:
     """Run the §7 image pipeline on one already-recorded image row.
 
     Decides text-image vs scene-image (Tesseract first; VLM only for scenes),
     producing the analysis JSON and at most one searchable chunk. The prepared
-    JPEG is supplied by the caller — in-process from the parse hint, or reloaded
-    from the archive on a resume.
+    JPEG is reloaded from the archive by the caller.
     """
     prepared = image_pipeline.PreparedImage(
         hash=pending.file_hash,
@@ -293,7 +284,6 @@ def _caption_image(
     )
     analysis = image_pipeline.analyze(
         vision_provider, prepared, model=vision_model,
-        prefetched_ocr=prefetched_ocr,
     )
     return ImageCaption(
         image_id=pending.image_id,
@@ -458,13 +448,12 @@ def _parse_pdf_pdfplumber(
                 ))
         elif page.page_render_png is not None:
             # Sparse page where OCR didn't clear the bar — fall back to VLM.
-            # Page-level Tesseract already ran; hand the result down so caption
-            # doesn't re-OCR the same bytes.
+            # The caption stage runs its own Tesseract pre-pass on the archived
+            # render (parse no longer forwards page-level OCR across the queue).
             image_routes.append(_ImageRoute(
                 bytes_=page.page_render_png,
                 page_number=page.page_number,
                 image_index_on_page=0,
-                prefetched_ocr=page.ocr_result,
             ))
 
         for emb in page.embedded_images:
@@ -665,7 +654,6 @@ def _caption_missing(
     writer: Writer,
     document_id: int,
     file_name: str,
-    hints: dict[str, ParsedImage],
     *,
     vision_provider: Provider | None,
     vision_model: str | None,
@@ -702,12 +690,10 @@ def _caption_missing(
                     f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
                 )
                 continue
-            hint = hints.get(pi.file_hash)
-            jpeg = hint.jpeg_bytes if hint is not None else Path(pi.file_path).read_bytes()
-            prefetched = hint.prefetched_ocr if hint is not None else None
+            jpeg = Path(pi.file_path).read_bytes()
             caption = _caption_image(
                 pi, jpeg, vision_provider=vision_provider,
-                vision_model=vision_model, prefetched_ocr=prefetched,
+                vision_model=vision_model,
             )
             writer.persist_caption(caption)
             writer.clear_failure(pi.file_hash, "caption")
@@ -837,12 +823,9 @@ def _process_one(
             raise
         document_id = writer.persist_parse(parsed)
         writer.clear_failure(file_hash, "parse")
-        hints = {img.hash: img for img in parsed.images}
-    else:
-        hints = {}
 
     incomplete = _caption_missing(
-        writer, document_id, path.name, hints,
+        writer, document_id, path.name,
         vision_provider=vision_provider, vision_model=vision_model,
         vision_enabled=vision_enabled,
         on_stage=on_stage, on_image_progress=on_image_progress,
