@@ -6,26 +6,30 @@ commits in its own transaction, so a failure in one (an expensive VLM caption,
 say) never rolls back another (the parse that produced the text chunks before
 it). That per-unit atomicity is what makes ingest restartable: a run that dies
 mid-captioning leaves the parse durable, and the next run resumes only the
-*missing* units — see :func:`bartleby.commands.scribe._process_one`, which reads
-this Writer's state queries to compute what's left.
+*missing* units — see :mod:`bartleby.commands.scribe`, which reads this Writer's
+state queries to compute what's left.
 
 All chunk / FTS5 / sqlite-vec writes go through the typed ``bartleby.db.chunks``
 helpers — never raw INSERTs — keeping the polymorphic-chunks invariant at one
 chokepoint.
 
-The parse pool (#165) will put a real queue and a dedicated writer thread in
-front of this Writer (it must stay the connection's sole owner, since apsw
-connections aren't thread-safe). For now the producer (``scribe``) drives these
-methods inline, in order.
+The parse pool (#165) parses many documents at once across worker *processes*,
+but every one of them only parses — none touch the database. Each parsed result
+returns to the main process, which drains them through this Writer one at a
+time. So the Writer stays the connection's single owner on a single thread
+(apsw connections aren't thread-safe), and the concurrency lives entirely
+upstream in parsing.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import apsw
 
+from bartleby import __version__
 from bartleby.db.chunks import (
     ChunkInput,
     delete_chunks_for,
@@ -33,7 +37,7 @@ from bartleby.db.chunks import (
     insert_image_chunks,
     insert_summary_chunks,
 )
-from bartleby.ingest import ocr as ocr_module
+from bartleby.db.schema import SCHEMA_VERSION
 from bartleby.ingest.summarize import SummaryResult
 
 
@@ -50,10 +54,9 @@ MAX_INGEST_ATTEMPTS = 3
 class ParsedImage:
     """An image extracted, scaled, and archived during parse — not yet captioned.
 
-    ``jpeg_bytes`` and ``prefetched_ocr`` are in-process captioning *hints*:
-    when parse and caption run in the same process they spare a re-read and a
-    re-OCR. They are never persisted; on a fresh-process resume the caption
-    stage reloads the prepared JPEG from ``archive_path`` instead.
+    Pure metadata: the prepared JPEG lives on disk at ``archive_path``, and the
+    caption stage reloads it there (and OCRs it) when it runs. The parse result
+    therefore crosses the parse-pool queue cheaply — no image bytes ride along.
     """
     hash: str
     archive_path: Path
@@ -61,8 +64,6 @@ class ParsedImage:
     height: int
     page_number: int | None
     image_index_on_page: int
-    jpeg_bytes: bytes
-    prefetched_ocr: ocr_module.OcrResult | None = None
 
 
 @dataclass
@@ -101,6 +102,14 @@ class PendingImage:
 
 
 @dataclass
+class PendingSummary:
+    """A parsed document still owing a summary — a summarize-pass work item."""
+    document_id: int
+    file_hash: str
+    file_name: str
+
+
+@dataclass
 class FailedUnit:
     file_hash: str
     file_name: str
@@ -119,6 +128,56 @@ class Writer:
 
     def __init__(self, conn: apsw.Connection):
         self.conn = conn
+        # The open ingest run, set by begin_run(); every persist_* below stamps
+        # its document / summary / chunk rows with it. None until a run opens
+        # (and for skill-side writes that never call begin_run), which is why
+        # ingest_run_id is nullable.
+        self.run_id: int | None = None
+
+    # ---- run provenance: stamp each unit with its producing invocation ----
+
+    def begin_run(self, config: dict) -> int:
+        """Open an ingest run, recording its resolved config snapshot.
+
+        ``config`` is the run's resolved configuration with secrets already
+        stripped (see :func:`bartleby.config.redact_config`) — it is stored
+        verbatim, so never hand this method anything containing an API key.
+        Serialized with sorted keys so a later run's drift check is a plain
+        string compare. Returns (and stores as ``self.run_id``) the new run id.
+        """
+        config_json = json.dumps(config, sort_keys=True)
+        with self.conn:
+            self.conn.cursor().execute(
+                "INSERT INTO ingests "
+                "(config_json, bartleby_version, schema_version) "
+                "VALUES (?, ?, ?)",
+                (config_json, __version__, SCHEMA_VERSION),
+            )
+            self.run_id = self.conn.last_insert_rowid()
+        return self.run_id
+
+    def finish_run(self) -> None:
+        """Mark the open run finished. No-op if no run was opened."""
+        if self.run_id is None:
+            return
+        with self.conn:
+            self.conn.cursor().execute(
+                "UPDATE ingests SET finished_at = CURRENT_TIMESTAMP "
+                "WHERE run_id = ?",
+                (self.run_id,),
+            )
+
+    def latest_config(self) -> dict | None:
+        """The resolved config snapshot of the most recent prior run, or None.
+
+        Call this *before* :meth:`begin_run` so the current run isn't compared
+        against itself; the caller diffs it against the new snapshot to warn on
+        config drift across a resume/re-run.
+        """
+        row = self.conn.cursor().execute(
+            "SELECT config_json FROM ingests ORDER BY run_id DESC LIMIT 1"
+        ).fetchone()
+        return json.loads(row[0]) if row else None
 
     # ---- state: resume by what's missing ----
 
@@ -178,6 +237,33 @@ class Writer:
             (document_id, document_id),
         ).fetchone()[0]
 
+    def documents_needing_summary(self) -> list[PendingSummary]:
+        """Every parsed document that still owes a summary: no ``summaries`` row
+        yet, and at least one indexed (summarizable) chunk.
+
+        This is the work-list for the summarize pass (issue #167), which runs
+        after the parse/caption drain rather than inline per document. The
+        ``> 0`` chunk guard mirrors :meth:`summarizable_chunk_count`, so an
+        image-only doc with nothing extractable is never offered to the model
+        (issue #80) and isn't counted as owed. Capped documents *are* returned —
+        the pass surfaces them as still-incomplete instead of dropping them.
+        """
+        rows = self.conn.cursor().execute(
+            "SELECT d.document_id, d.file_hash, d.file_name "
+            "FROM documents d "
+            "WHERE NOT EXISTS ("
+            "    SELECT 1 FROM summaries s WHERE s.document_id = d.document_id) "
+            "  AND ("
+            "    (SELECT COUNT(*) FROM chunks "
+            "     WHERE source_kind = 'document' AND source_id = d.document_id) "
+            "  + (SELECT COUNT(*) FROM chunks c "
+            "       JOIN document_images di ON di.image_id = c.source_id "
+            "     WHERE c.source_kind = 'image' AND di.document_id = d.document_id) "
+            "  ) > 0 "
+            "ORDER BY d.document_id"
+        ).fetchall()
+        return [PendingSummary(*r) for r in rows]
+
     def summary_input(self, document_id: int) -> str:
         """Interleave document and image chunks in source order for the summarizer.
 
@@ -235,14 +321,18 @@ class Writer:
             cur = self.conn.cursor()
             cur.execute(
                 "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "(file_hash, file_name, file_path, page_count, token_count, "
+                " ingest_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (parsed.file_hash, parsed.file_name, str(parsed.archive_path),
-                 parsed.page_count, parsed.token_count),
+                 parsed.page_count, parsed.token_count, self.run_id),
             )
             document_id = self.conn.last_insert_rowid()
             if parsed.document_chunks:
-                insert_document_chunks(self.conn, document_id, parsed.document_chunks)
+                insert_document_chunks(
+                    self.conn, document_id, parsed.document_chunks,
+                    ingest_run_id=self.run_id,
+                )
             for img in parsed.images:
                 existing = cur.execute(
                     "SELECT image_id FROM images WHERE file_hash = ?", (img.hash,)
@@ -283,7 +373,10 @@ class Writer:
                 (caption.analysis_json, caption.analysis_model, caption.image_id),
             )
             if caption.chunks:
-                insert_image_chunks(self.conn, caption.image_id, caption.chunks)
+                insert_image_chunks(
+                    self.conn, caption.image_id, caption.chunks,
+                    ingest_run_id=self.run_id,
+                )
 
     def persist_summary(
         self,
@@ -305,14 +398,19 @@ class Writer:
                 )
             cur.execute(
                 "INSERT INTO summaries "
-                "(document_id, title, description, text, model, authored_date) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(document_id, title, description, text, model, authored_date, "
+                " ingest_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (document_id, summary.title, summary.description,
-                 summary.text, summary.model, summary.authored_date),
+                 summary.text, summary.model, summary.authored_date,
+                 self.run_id),
             )
             summary_id = self.conn.last_insert_rowid()
             if summary_chunks:
-                insert_summary_chunks(self.conn, summary_id, summary_chunks)
+                insert_summary_chunks(
+                    self.conn, summary_id, summary_chunks,
+                    ingest_run_id=self.run_id,
+                )
         return summary_id
 
     # ---- failure tracking: cap retries, stay visible ----

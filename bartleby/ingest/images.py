@@ -31,10 +31,16 @@ from PIL import Image
 from bartleby.db.chunks import ChunkInput
 from bartleby.ingest import ocr as ocr_module
 from bartleby.ingest.embed import embed_texts
+from bartleby.lib import console
 from bartleby.providers import ImageAnalysis, Provider
 
 
 JPEG_QUALITY = 82
+
+# Whether we've already warned that Tesseract is unusable this process. The OCR
+# pass is only a cheap text-image classifier; when it's broken every image just
+# routes to the VLM, so we surface that once rather than once per image.
+_ocr_degraded_warned = False
 
 # Tesseract-on-image dispositioning thresholds. Stricter than the page-level
 # sparse threshold (100 chars / 30 confidence) so a labeled chart — which has
@@ -120,18 +126,24 @@ def analyze(
     prepared: PreparedImage,
     *,
     model: str,
-    prefetched_ocr: ocr_module.OcrResult | None = None,
 ) -> ImageAnalysis:
     """Decide text-image vs scene-image and produce the merged analysis.
 
-    Runs Tesseract first (or reuses ``prefetched_ocr`` when the caller has
-    already OCR'd the same bytes — sparse-page renders pass theirs down to
-    avoid double-Tesseracting). If the OCR clears the text-image threshold,
+    Runs Tesseract first. If the OCR clears the text-image threshold,
     classification is ``'text'`` and the VLM is skipped entirely. Otherwise
     classification is ``'scene'`` and the VLM produces a bounded description.
+
+    OCR is only a classifier, not the captioner — so if Tesseract raises (a
+    locked-down ``TMPDIR``, a broken install), we degrade to "couldn't classify
+    → not a text image" and fall through to the VLM rather than dropping the
+    image. A busted Tesseract just means everything routes to the VLM.
     """
-    ocr_result = prefetched_ocr or ocr_module.run(prepared.jpeg_bytes)
-    if _is_text_image(ocr_result):
+    try:
+        ocr_result = ocr_module.run(prepared.jpeg_bytes)
+    except Exception as exc:
+        _warn_ocr_degraded_once(exc)
+        ocr_result = None
+    if ocr_result is not None and _is_text_image(ocr_result):
         return ImageAnalysis(
             kind="text",
             text=ocr_result.text,
@@ -146,6 +158,19 @@ def analyze(
         text="",
         description=vlm.description,
         notes=vlm.notes,
+    )
+
+
+def _warn_ocr_degraded_once(exc: Exception) -> None:
+    """Warn once per process that OCR is down and images now go straight to VLM."""
+    global _ocr_degraded_warned
+    if _ocr_degraded_warned:
+        return
+    _ocr_degraded_warned = True
+    console.warn(
+        f"OCR classification unavailable ({exc}); captioning every image via "
+        "the VLM instead. Images are still described — only the "
+        "text-image shortcut is lost."
     )
 
 

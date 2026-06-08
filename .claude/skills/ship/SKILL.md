@@ -4,8 +4,9 @@ description: >-
   Implement a GitHub issue end-to-end the way this repo expects: sync the base
   branch, sibling worktree, pre-commit gates, conflict reconciliation, and a PR
   that closes the issue. Invoke as `/ship #<N>` (or `/ship <N>`); add `onto
-  #<omnibus>` to ship onto an omnibus branch instead of `main`. Use whenever
-  asked to ship, implement, or do a numbered issue in bartleby.
+  #<omnibus>` to ship onto an omnibus branch instead of `main`, or pass an omnibus
+  issue alone to open its promotion PR to `main`. Use whenever asked to ship,
+  implement, or do a numbered issue in bartleby.
 ---
 
 # ship — issue → tested PR
@@ -14,7 +15,9 @@ Argument is one GitHub issue number (`#118`, `118`), optionally followed by any
 of three opt-in tokens — `onto #<omnibus>`, `with-playwright`, and `skip-tests`
 (e.g. `/ship #134 with-playwright`, `/ship #170 onto #169 skip-tests`, in any
 order) — see below. Run the steps in order. Two hard stops are marked **PAUSE**:
-do not pass them without the user's OK.
+do not pass them without the user's OK. One exception: if the lone issue is itself
+an *omnibus issue* (no `onto`), `/ship` runs **omnibus-promotion mode** — opening
+the omnibus → `main` PR instead of implementing anything (see below).
 
 Throughout, **base** is the integration branch this issue targets: `main` by
 default, or the omnibus branch when `onto #<omnibus>` is given (see below).
@@ -42,7 +45,7 @@ branch name. When present:
   sub-ships. Report whichever happened — pushing a new long-lived branch is a
   remote mutation, never create it silently.
 - **`base` becomes `<omnibus-branch>`** for every step below: sync, collision
-  scan, worktree start-point, the `skip-tests` guard, reconcile, and the PR base,
+  scan, worktree start-point, the pytest-skip checks (both paths), reconcile, and the PR base,
   diff-stat, and cleanup all retarget from `origin/main` to
   `origin/<omnibus-branch>`.
 - **Closure differs.** GitHub only auto-closes from the default branch, so a
@@ -50,8 +53,48 @@ branch name. When present:
   **"Part of #<omnibus>"** with **no `Closes` keyword**; sub-issues close when the
   omnibus → main PR (which enumerates `Closes #<N>` for the bundle) merges. Do not
   put `Closes #<N>` on a sub-PR in this mode.
+- **Keep the omnibus issue's tracking current.** Promotion mode draws its `Closes
+  #<N>` manifest from the omnibus issue's hand-curated sub-issue checklist, which
+  drifts unless each sub-ship updates it. So when the sub-PR is opened (step 11),
+  edit the omnibus issue (`#<omnibus>`) to reflect this landing: tick this issue's
+  box `[ ]→[x]`, annotate it with the sub-PR number and target in the existing
+  style (`— … (#NNN)`), and flip any dependency/order marker the omnibus tracks.
+  **Edit only the one checklist line, by anchored match** — never free-form rewrite
+  the hand-curated body — and show the proposed issue diff at the step-11 PAUSE next
+  to the PR draft. If the omnibus issue has no checklist line referencing `#<N>`,
+  **report it and leave the body untouched** rather than invent tracking. (Ticking
+  on sub-PR-open is safe — promotion reconciles `Closes` against actually-merged
+  PRs.)
 - The guard hook still protects `main` only; the omnibus branch is not
   hook-protected. Composes with `with-playwright` and `skip-tests`.
+
+**Omnibus-promotion mode (`/ship #<omnibus>`, no `onto`).** When the lone argument
+is itself an *omnibus issue* — its title parses as `vX.Y.Z — …` **and** an
+`omnibus/vX.Y.Z` branch exists with commits ahead of `origin/main` — `/ship`
+implements nothing (the bundle already landed on that branch). It opens the
+**omnibus → `main` PR** that promotes the whole bundle. If the title looks
+omnibus-shaped but the branch is missing or not ahead of `main`, **report and
+stop** — don't guess. The flow is reduced:
+- **Steps 1–2 only.** Preconditions (clean main) and sync (`git fetch origin`, ff
+  `main`). **No worktree, no code, no per-commit gates, no reconcile** — steps
+  3–10 are N/A.
+- **Build the `Closes` enumeration.** Take the bundle's issue numbers from the
+  omnibus issue's sub-issue checklist, then **reconcile against the sub-PRs
+  actually merged into the branch**
+  (`gh pr list --base omnibus/vX.Y.Z --state merged --json number,title`, cross-
+  checked with `git log origin/main..origin/omnibus/vX.Y.Z`). Emit `Closes #<N>`
+  for every sub-issue whose work is on the branch. If the checklist and the
+  merged-PR set disagree, **report the discrepancy** and let the user reconcile — a
+  hand-edit slip must not silently add or drop a `Closes`.
+- **PAUSE — PR (step 11).** Same PAUSE contract as step 11, but the body is the
+  `Closes #<N>` list + a one-line bundle summary and the diff is `git diff --stat
+  origin/main...origin/omnibus/vX.Y.Z`. Then `gh pr create --base main --head
+  omnibus/vX.Y.Z`. **Do not merge** — the human merge auto-closes the whole bundle
+  (every sub-issue and the omnibus issue).
+- **Cleanup (step 12).** After the user confirms the merge, there's no worktree to
+  remove; just `git pull --ff-only origin main` in the main checkout. Cutting the
+  release is the separate, later `/release` act on `main` — promotion PR → human
+  merge → `/release`, never folded into this step.
 
 **Optional `with-playwright`.** The argument may carry a `with-playwright` token
 after the issue number (only that exact token). It turns on a visual-verification
@@ -68,18 +111,34 @@ backend-only change, ignore it and ship normally. When it's active:
 
 Don't edit the built-in `verify`/`run` skills; this flag lives entirely here.
 
-**Optional `skip-tests`.** The argument may carry a `skip-tests` token (only that
-exact token). It omits the `uv run pytest` runs in steps 8, 9, and 10 — a
-convenience for docs-only work, **not** a way to land untested code. It is
-honored **only if this issue's diff touches no test-affecting source**: if
-`git diff --name-only origin/<base>...HEAD` shows any `*.py`, `pyproject.toml`, or
-a file under `bartleby/web/`, **ignore the token and run the tests anyway**, and
-say why ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py`
-— running tests anyway"). Re-check this at **each** gate, not just once: a docs
-PR that grows a code change mid-stream must start running tests from that point.
-When tests are genuinely skipped, **say so** in the step-11 PR summary and the
-final report ("Tests skipped — docs-only diff") so a skipped suite never reads as
-a green one. The simplify-refactor pass (step 8) still runs regardless.
+**Skipping the pytest gates.** The `uv run pytest` runs in steps 8, 9, and 10 are
+omitted when **either** of these holds — evaluate both against
+`git diff --name-only origin/<base>...HEAD`:
+
+1. **Docs-only (automatic, no token).** The diff touches *only* documentation —
+   every changed path is a `*.md` file, `LICENSE`, or under `docs/`. Then pytest
+   can't be affected, so the gates skip on their own; no `skip-tests` token needed.
+2. **`skip-tests` token (opt-in).** The argument carries the `skip-tests` token
+   (only that exact token) **and** the diff touches no test-affecting source — no
+   `*.py` and no `pyproject.toml`. The token is a convenience for work that's
+   test-irrelevant but falls outside the path-1 docs set: a frontend-only change
+   under `bartleby/web/` (Svelte/CSS/vite config — that tree holds no Python), a
+   top-level `.sh` script, a `.txt` asset. It is **not** a way to land untested
+   code. If the token is present but the diff *does* touch `*.py` or
+   `pyproject.toml`, **ignore the token and run the tests anyway**, and say why
+   ("`skip-tests` requested but the diff changes `bartleby/commands/ready.py` —
+   running tests anyway"). One accepted gap: a *structural* `bartleby/web/` change
+   (move `src/`, drop `package.json`) can still fail the Python suite via
+   `tests/test_serve.py`, which asserts the packaged UI layout — `skip-tests` won't
+   catch that, so don't pair the token with a web restructure.
+
+Re-check **both** paths at **each** gate, not just once: a docs PR that grows a
+code change mid-stream must start running tests from that point, and a diff that
+narrows back to docs-only resumes path-1 skipping (token or not). When tests are genuinely skipped,
+**say so** in the step-11 PR summary and the final report, naming the path —
+"Tests skipped — docs-only diff" (path 1) or "Tests skipped — `skip-tests`, no
+`.py`/`pyproject.toml` touched" (path 2) — so a skipped suite never reads as a green one. The
+simplify-refactor pass (step 8) still runs regardless.
 
 ## 1. Preconditions
 - `git -C <main-checkout> status --porcelain` must be empty. If main has
@@ -127,26 +186,35 @@ skip this — say so and proceed.
 Work in logical units. If `with-playwright` is active, bracket each web-touching
 unit with before/after screenshots (see the flag note above). For **every**
 code-producing commit, in this exact order:
-1. `uv run pytest` — must pass. (Skipped when `skip-tests` is active *and* its
-   guard holds — see the flag note above; re-check the guard here.)
+1. `uv run pytest` — must pass. (Skipped when either skip path holds — a docs-only
+   diff or `skip-tests` with no `.py`/`pyproject.toml` touched; see the "Skipping
+   the pytest gates" note above and re-check both paths here.)
 2. Run the `simplify-refactor` agent against the just-touched files.
 3. Apply the suggestions you agree with; push back on the rest.
-4. Re-run `uv run pytest` — must still pass. (Same `skip-tests` condition as 1.)
+4. Re-run `uv run pytest` — must still pass. (Same skip condition as 1.)
 5. Commit (in the worktree; the hook enforces you're off `main`).
 
 ## 9. Docs sweep
 Check README / ARCHITECTURE.md / skill `SKILL.md` for updates the change
-requires (new flags, changed behavior, a decision-log entry). If you change docs,
-re-run the step-8 gates before continuing (the `skip-tests` condition from step 8
-applies to the pytest run here too).
+requires (new flags, changed behavior, a decision worth recording). **A decision
+goes in `docs/decisions/` as its own additive file**, never appended to
+ARCHITECTURE.md (which holds current state only): add
+`docs/decisions/GH-<issue:0000>-<slug>-0001.md` — the issue number four-zero-padded
+(`<index>` climbs past `0001` only when one issue yields more than one decision),
+the decision written as a standalone note — plus a newest-first line in
+`docs/decisions/README.md`. Existing decisions are never edited or pruned; a new
+call that overrides an old one says "supersedes GH-NNNN" in its own file. If you
+change docs, re-run the step-8 gates before continuing (the skip condition from
+step 8 applies to the pytest run here too — note a docs-sweep edit that stays
+within the documentation set keeps a diff docs-only, so path 1 still skips).
 
 ## 10. Reconcile before the PR
 Bring the branch up to date so conflicts surface here, not in the PR:
 `git fetch origin && git merge origin/<base>` (or rebase). Resolve any conflicts,
-then run the **full** suite (`uv run pytest`) again — unless `skip-tests` is
-active and its guard still holds. Re-run the same `origin/<base>...HEAD` check from
-the flag note; because it's three-dot (the diff since the merge-base), merging
-`origin/<base>` in doesn't change what it sees.
+then run the **full** suite (`uv run pytest`) again — unless either skip path
+still holds (docs-only diff, or `skip-tests` with no `.py`/`pyproject.toml` touched). Re-run the same
+`origin/<base>...HEAD` check from the flag note; because it's three-dot (the diff
+since the merge-base), merging `origin/<base>` in doesn't change what it sees.
 
 ## 11. PAUSE — PR
 Show the user the **PR body draft + a final diff summary** (`git diff --stat
@@ -155,7 +223,8 @@ origin/<base>...HEAD`) and wait for their OK. Then push and `gh pr create`.
 - Normal case: target `main` (the default) with a `Closes #<N>` line.
 - Under `onto`: pass `--base <omnibus-branch>`, and write **"Part of #<omnibus>"**
   with **no `Closes`** (see the flag note) — the sub-issue closes at the omnibus →
-  main merge, not here.
+  main merge, not here. Also show and apply the omnibus-issue tracking edit here
+  (see *Keep the omnibus issue's tracking current*).
 
 ## 12. Cleanup (only after the user confirms the merge)
 From the main checkout: `git worktree remove ../bartleby-issue-<N>-<slug>`,

@@ -1,6 +1,16 @@
 import argparse
 import sys
 
+# Cheap, dependency-free constants — safe to import at module load (and thus at
+# parser-build time) without pulling the provider package's pydantic cost into
+# every `bartleby` invocation. These keep scribe's `choices=` in lockstep with
+# what the config wizard accepts.
+from bartleby.lib.consts import (
+    ALLOWED_HTML_CONVERTERS,
+    ALLOWED_PDF_CONVERTERS,
+    ALLOWED_PROVIDERS,
+)
+
 
 def main():
     # `bartleby skill <name> [args]` bypasses argparse so we can pass the
@@ -82,16 +92,16 @@ def main():
     scribe_parser.add_argument("--model", type=str, default=None)
     scribe_parser.add_argument(
         "--provider", type=str,
-        choices=["anthropic", "openai", "ollama"], default=None,
+        choices=ALLOWED_PROVIDERS, default=None,
     )
     scribe_parser.add_argument(
         "--pdf-converter", type=str,
-        choices=["pdfplumber", "docling"], default=None,
+        choices=ALLOWED_PDF_CONVERTERS, default=None,
         help="PDF converter; overrides pdf_converter in ~/.bartleby/config.yaml.",
     )
     scribe_parser.add_argument(
         "--html-converter", type=str,
-        choices=["docling", "sec2md"], default=None,
+        choices=ALLOWED_HTML_CONVERTERS, default=None,
         help=(
             "HTML converter; overrides html_converter in ~/.bartleby/config.yaml. "
             "'sec2md' routes iXBRL EDGAR filings to sec2md and other HTML to docling."

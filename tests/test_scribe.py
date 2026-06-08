@@ -64,6 +64,16 @@ def isolated_project(tmp_path, monkeypatch):
     monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
     monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
 
+    # Pin ingest to the inline parse path. These end-to-end tests mock embedder /
+    # converters / providers, and those monkeypatches don't cross into spawned
+    # parse-pool workers — so force max_workers=1 (parse in-process) at the
+    # resolver, which holds even for tests that swap in their own load_config.
+    # The pool is exercised separately in test_ingest_pool.py with a picklable,
+    # model-free parse_fn.
+    monkeypatch.setattr(
+        "bartleby.commands.scribe._resolve_max_workers", lambda *a, **k: 1,
+    )
+
     bartleby.project.create_project("test_proj")
     yield projects
 
@@ -97,7 +107,7 @@ class _StubVisionProvider:
         return self.description
 
 
-def _png_bytes(width=100, height=60, color=(20, 200, 50)) -> bytes:
+def _png_bytes(width=100, height=100, color=(20, 200, 50)) -> bytes:
     im = Image.new("RGB", (width, height), color=color)
     buf = io.BytesIO()
     im.save(buf, format="PNG")
@@ -226,6 +236,58 @@ def test_scribe_writes_summary_when_provider_configured(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='summary'"
         ).fetchone()[0]
         assert sum_chunks == 1
+    finally:
+        conn.close()
+
+
+def test_scribe_summarizes_existing_document_on_later_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Summarization is its own pass over whatever the DB still lacks (issue
+    #167): a document parsed on an earlier run with summaries off is summarized
+    on a later run with summaries on — without being re-parsed. The pass picks
+    it up from the DB even though classification skips it as already ingested."""
+    src = _write_txt(tmp_path / "doc.txt", "Hello world summarized.")
+
+    # First run: no summary provider configured → parse only, no summary.
+    scribe.main(project="test_proj", files=str(src))
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # Second run: summaries now configured. The file is already parsed (so it's
+    # classified as skipped), yet the summarize pass still summarizes it.
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "provider": "anthropic",
+            "model": "test-model", "temperature": 0.0,
+            "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    scribe.main(project="test_proj", files=str(src))
+    assert stub.calls == 1  # summarized exactly once
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Not re-parsed: still a single document row, now with one summary.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 1
     finally:
         conn.close()
 
@@ -396,6 +458,405 @@ def test_scribe_dedupes_identical_images_across_documents(
     assert vision.calls == calls_after_first
 
 
+def test_scribe_captions_many_images_concurrently_in_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#166: captioning is its own concurrent phase. Several documents parsed in
+    one run all get every image captioned through the caption thread pool — not
+    just the first — with the DB write staying on the single Writer thread."""
+    config = _vision_pdf_config()
+    config["caption_workers"] = 3
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    pdfs = []
+    for i in range(4):
+        pdf = tmp_path / f"doc{i}.pdf"
+        # A distinct colour per doc → distinct byte-hash, so no cross-doc dedup.
+        _pdf_with_image(
+            pdf, _png_bytes(color=(10 + i * 30, 80, 200 - i * 20)),
+            text=f"Body of document {i} " * 12,
+        )
+        pdfs.append(str(pdf))
+
+    scribe.main(project="test_proj", files=pdfs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 4
+        # The authoritative check (race-free, written on the writer thread):
+        # every image was captioned — none left with a NULL analysis.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NULL"
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0] == 4
+    finally:
+        conn.close()
+
+
+def test_scribe_dedupes_shared_image_within_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Two documents sharing an image, ingested in the same run, caption it once:
+    the caption phase keys pending work by image row, so a shared row is analyzed
+    a single time even though it joins two documents."""
+    config = _vision_pdf_config()
+    config["caption_workers"] = 1   # single-threaded → exact VLM call count
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
+    pdf_a = tmp_path / "a.pdf"
+    pdf_b = tmp_path / "b.pdf"
+    _pdf_with_image(pdf_a, image_bytes, text="Doc A text " * 12)
+    _pdf_with_image(pdf_b, image_bytes, text="Doc B text " * 12)
+
+    scribe.main(project="test_proj", files=[str(pdf_a), str(pdf_b)])
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM document_images").fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT analysis_json FROM images"
+        ).fetchone()[0] is not None
+    finally:
+        conn.close()
+
+    # Analyzed exactly once despite living in two documents.
+    assert vision.calls == 1
+
+
+def test_scribe_one_caption_failure_does_not_block_the_rest(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A single image whose VLM call raises is recorded as a caption failure;
+    the other images in the same concurrent run are still captioned — one bad
+    image never tears down the phase."""
+    import threading
+
+    class _OneFailVision:
+        name = "one-fail-vision"
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def summarize(self, *a, **k):  # protocol completeness
+            raise NotImplementedError
+
+        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+            # Lock so the "first call fails" rule is deterministic under the pool.
+            with self._lock:
+                self.calls += 1
+                first = self.calls == 1
+            if first:
+                raise RuntimeError("VLM unavailable")
+            return VlmDescription(description="ok", notes="")
+
+    config = _vision_pdf_config()
+    config["caption_workers"] = 3
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailVision(),
+    )
+
+    pdfs = []
+    for i in range(3):
+        pdf = tmp_path / f"d{i}.pdf"
+        # Long enough not to trip the sparse-page render (one image per doc).
+        _pdf_with_image(
+            pdf, _png_bytes(color=(20 + i * 40, 90, 150)),
+            text=f"Body of document {i} with plenty of words so it is not sparse. " * 3,
+        )
+        pdfs.append(str(pdf))
+
+    scribe.main(project="test_proj", files=pdfs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 3
+        # Exactly one image left uncaptioned (the failed call); the other two land.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NULL"
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM images WHERE analysis_json IS NOT NULL"
+        ).fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT stage FROM failed_ingests"
+        ).fetchone()[0] == "caption"
+    finally:
+        conn.close()
+
+
+def test_resolve_caption_workers_defaults_and_timings():
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
+
+    # Default when unset or zero; explicit value respected.
+    assert scribe_module._resolve_caption_workers(
+        {}, timings=False) == DEFAULT_CAPTION_WORKERS
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 0}, timings=False) == DEFAULT_CAPTION_WORKERS
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 9}, timings=False) == 9
+    # --timings forces a sequential baseline regardless of config.
+    assert scribe_module._resolve_caption_workers(
+        {"caption_workers": 9}, timings=True) == 1
+
+
+def _summary_config(**overrides):
+    """A summaries-on config for the LLM-backed ingest tests."""
+    return {
+        "summary_depth": "one-shot",
+        "provider": "anthropic", "model": "m",
+        "temperature": 0.0, "max_summarize_tokens": 50_000,
+        **overrides,
+    }
+
+
+def test_scribe_summarizes_many_documents_concurrently_in_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#188: summarization is its own concurrent pass. Several documents parsed in
+    one run all get summarized through the summarize thread pool — not just the
+    first — with the DB write staying on the single Writer thread."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: _summary_config(summarize_workers=3),
+    )
+    stub = _StubProvider(text="summary body")
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    srcs = [
+        str(_write_txt(tmp_path / f"doc{i}.txt", f"Body of document {i}."))
+        for i in range(4)
+    ]
+    scribe.main(project="test_proj", files=srcs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        # Every document summarized — race-free DB check on the writer thread.
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 4
+    finally:
+        conn.close()
+
+
+def test_scribe_one_summary_failure_does_not_block_the_rest(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A single document whose summarize call raises is recorded as a summary
+    failure; the others in the same concurrent run still summarize — one bad
+    document never tears down the pass."""
+    import threading
+
+    class _OneFailLLM:
+        name = "one-fail-llm"
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def analyze_image(self, *a, **k):  # protocol completeness
+            raise NotImplementedError
+
+        def summarize(self, document_text, *, model, temperature):
+            # Lock so the "first call fails" rule is deterministic under the pool.
+            with self._lock:
+                self.calls += 1
+                first = self.calls == 1
+            if first:
+                raise RuntimeError("LLM unavailable")
+            return DocumentSummary(
+                title="t", description="d", text="ok", authored_date=None,
+            )
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: _summary_config(summarize_workers=3),
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailLLM(),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    srcs = [
+        str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
+        for i in range(3)
+    ]
+    scribe.main(project="test_proj", files=srcs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Exactly one document left without a summary (the failed call); two land.
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT stage FROM failed_ingests"
+        ).fetchone()[0] == "summary"
+    finally:
+        conn.close()
+
+
+def test_resolve_summarize_workers_defaults_and_timings():
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
+
+    # Default when unset or zero; explicit value respected.
+    assert scribe_module._resolve_summarize_workers(
+        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 9}, timings=False) == 9
+    # --timings forces a sequential baseline regardless of config.
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 9}, timings=True) == 1
+
+
+def test_summarize_all_progress_callback_fires_per_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """The summarize pass invokes on_progress(0, N) then once per document."""
+    from bartleby.commands import scribe as scribe_module
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="h", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+
+        pending = writer.documents_needing_summary()
+        seen: list[tuple[int, int]] = []
+        owed, _times = scribe_module._summarize_all(
+            writer, pending,
+            llm_provider=_StubProvider(), llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=1, timings=False,
+            on_progress=lambda done, total: seen.append((done, total)),
+        )
+    finally:
+        conn.close()
+
+    assert seen, "expected at least one progress callback for one document"
+    assert seen[0] == (0, 1)
+    assert seen[-1] == (1, 1)
+    assert owed == 0
+
+
+def test_summarize_all_lane_callback_reports_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """on_lane fires per summarized document with its file name and stage."""
+    from bartleby.commands import scribe as scribe_module
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="h", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+
+        pending = writer.documents_needing_summary()
+        lanes: list[tuple[object, str, str]] = []
+        scribe_module._summarize_all(
+            writer, pending,
+            llm_provider=_StubProvider(), llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=1, timings=False,
+            on_progress=None,
+            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+        )
+    finally:
+        conn.close()
+
+    assert lanes == [(lanes[0][0], "doc.txt", "summarizing")]
+
+
+def test_summarize_all_skips_capped_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """A document already capped on the summary stage is surfaced as owed and
+    never re-handed to the model — counts incomplete, no provider call."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="caphash", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+        # Cap the summary stage so the pass must skip rather than retry.
+        for _ in range(MAX_INGEST_ATTEMPTS):
+            writer.record_failure("caphash", "doc.txt", "summary", RuntimeError("x"))
+
+        stub = _StubProvider()
+        owed, _times = scribe_module._summarize_all(
+            writer, writer.documents_needing_summary(),
+            llm_provider=stub, llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=2, timings=False, on_progress=None,
+        )
+    finally:
+        conn.close()
+
+    assert owed == 1            # surfaced as still-incomplete
+    assert stub.calls == 0      # never handed to the model
+
+
 def test_scribe_ingests_standalone_image_file(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -544,151 +1005,82 @@ def test_scribe_persists_page_number_for_pdfplumber_chunks(
         conn.close()
 
 
-def test_scribe_stage_callback_progresses_through_phases(
-    isolated_project, tmp_path, mock_embed, monkeypatch
+def test_parse_document_stage_callback_fires_extract_then_embed(
+    isolated_project, tmp_path, mock_embed
 ):
-    """on_stage fires through extracting → embedding → analyzing → summarizing."""
+    """Parse emits its stages in order: extracting → embedding. (Caption fires
+    downstream in the main-process drain and summarize in its own later pass —
+    not here; parse runs in a pool worker and only carries the parse-side
+    stages.)"""
     from bartleby.commands import scribe as scribe_module
-    from bartleby.db.connection import open_db
-
-    stub_summary = _StubProvider()
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "one-shot",
-            "provider": "anthropic", "model": "m",
-            "temperature": 0.0, "max_summarize_tokens": 50_000,
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100, "ocr_min_confidence": 30,
-            "vision_provider": "stub", "vision_model": "stub-vl:1",
-            "vision_max_dimension": 1024,
-        },
-    )
-    monkeypatch.setattr(
-        scribe_module, "get_provider",
-        lambda name, **kwargs: stub_summary if name == "anthropic" else _StubVisionProvider(),
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        scribe_module, "chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
-
-    pdf = tmp_path / "img.pdf"
-    _pdf_with_image(pdf, _png_bytes())
-
-    stages: list[str] = []
-    archive_root = tmp_path / "archive"
-    archive_root.mkdir()
-    conn = open_db("test_proj")
-    try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=stub_summary, llm_model="m",
-            temperature=0.0, max_summarize_tokens=50_000,
-            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
-            on_stage=stages.append,
-        )
-    finally:
-        conn.close()
-
-    # Every phase fires in order; "extracting" is set by _process_one before
-    # the pdfplumber dispatcher, then the dispatcher fires embedding +
-    # analyzing images, then _process_one tops it off with summarizing.
-    assert stages[0] == "extracting"
-    assert "embedding" in stages
-    assert "analyzing images" in stages
-    assert stages[-1] == "summarizing"
-
-
-def test_scribe_page_count_callback_fires_for_pdf(
-    isolated_project, tmp_path, mock_embed, monkeypatch
-):
-    """on_page_count receives the converter's page count (issue #85)."""
-    from bartleby.commands import scribe as scribe_module
-    from bartleby.db.connection import open_db
-
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "none",
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100,
-        },
-    )
 
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
-    counts: list[int | None] = []
-    archive_root = tmp_path / "archive"
-    archive_root.mkdir()
-    conn = open_db("test_proj")
-    try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=None, llm_model=None,
-            temperature=0.0, max_summarize_tokens=1000,
-            vision_provider=None, vision_model=None,
-            on_page_count=counts.append,
-        )
-    finally:
-        conn.close()
+    stages: list[str] = []
+    scribe_module._parse_document(
+        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+        archive_root=tmp_path / "archive",
+        on_stage=stages.append,
+    )
 
-    assert counts == [1]
+    assert stages == ["extracting", "embedding"]
 
 
-def test_scribe_image_progress_callback_fires_per_image(
-    isolated_project, tmp_path, mock_embed, monkeypatch
+def test_parse_document_reports_page_count(
+    isolated_project, tmp_path, mock_embed
 ):
-    """_run_image_routes invokes on_progress(0, N) then once per image."""
+    """The parse result carries the converter's page count (issue #85)."""
+    from bartleby.commands import scribe as scribe_module
+
+    pdf = tmp_path / "doc.pdf"
+    _text_pdf(pdf)
+
+    parsed = scribe_module._parse_document(
+        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+        archive_root=tmp_path / "archive",
+    )
+
+    assert parsed.page_count == 1
+
+
+def test_caption_all_progress_callback_fires_per_image(
+    isolated_project, tmp_path, mock_embed
+):
+    """The caption phase invokes on_progress(0, N) then once per image."""
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
-
-    monkeypatch.setattr(
-        scribe_module, "load_config",
-        lambda: {
-            "summary_depth": "none",
-            "pdf_converter": "pdfplumber",
-            "html_converter": "docling",
-            "sparse_text_threshold": 100,
-            "vision_provider": "stub", "vision_model": "stub-vl:1",
-            "vision_max_dimension": 1024,
-        },
-    )
-    monkeypatch.setattr(
-        scribe_module, "get_provider",
-        lambda name, **kwargs: _StubVisionProvider(),
-    )
 
     pdf = tmp_path / "img.pdf"
     _pdf_with_image(pdf, _png_bytes())
 
-    seen: list[tuple[int, int]] = []
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     conn = open_db("test_proj")
     try:
-        scribe_module._process_one(
-            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
-            pdf_converter="pdfplumber",
-            html_converter="docling",
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            pdf, ".pdf", file_hash="h", file_name="img.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_max_dimension=1024, vision_min_dimension=32,
-            llm_provider=None, llm_model=None,
-            temperature=0.0, max_summarize_tokens=1000,
+            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        document_id = writer.persist_parse(parsed)
+
+        seen: list[tuple[int, int]] = []
+        scribe_module._caption_all(
+            writer,
+            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
-            on_image_progress=lambda done, total: seen.append((done, total)),
+            vision_enabled=True, caption_workers=1, timings=False,
+            on_progress=lambda done, total: seen.append((done, total)),
         )
     finally:
         conn.close()
@@ -696,6 +1088,47 @@ def test_scribe_image_progress_callback_fires_per_image(
     assert seen, "expected at least one progress callback for one embedded image"
     assert seen[0] == (0, 1)
     assert seen[-1] == (1, 1)
+
+
+def test_caption_all_lane_callback_reports_owning_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """on_lane fires per analyzed image with the owning file and a stage label,
+    so the renderer can show which worker is captioning what."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    pdf = tmp_path / "img.pdf"
+    _pdf_with_image(pdf, _png_bytes())
+
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            pdf, ".pdf", file_hash="h", file_name="img.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        document_id = writer.persist_parse(parsed)
+
+        lanes: list[tuple[object, str, str]] = []
+        scribe_module._caption_all(
+            writer,
+            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_enabled=True, caption_workers=1, timings=False,
+            on_progress=None,
+            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+        )
+    finally:
+        conn.close()
+
+    assert lanes, "expected a lane update for the one embedded image"
+    assert all(item == "img.pdf" and stage == "captioning" for _, item, stage in lanes)
 
 
 def test_document_id_for_returns_parsed_document(
@@ -718,7 +1151,7 @@ def test_document_id_for_returns_parsed_document(
 
 
 def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
-    """A parsed text doc (chunks, no images, summaries off) is complete."""
+    """A parsed text doc (chunks, no images) is drain-complete — nothing to caption."""
     src = _write_txt(tmp_path / "doc.txt", "Some content for ingestion.")
     scribe.main(project="test_proj", files=str(src))
 
@@ -728,7 +1161,7 @@ def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
             "SELECT document_id FROM documents"
         ).fetchone()[0]
         writer = scribe.Writer(conn)
-        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert scribe._is_complete(writer, doc_id)
     finally:
         conn.close()
 
@@ -760,7 +1193,7 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             (doc_id, image_id, None, 0),
         )
         writer = scribe.Writer(conn)
-        assert not scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert not scribe._is_complete(writer, doc_id)
         assert [pi.image_id for pi in writer.uncaptioned_images(doc_id)] == [image_id]
 
         # Caption it → complete, and no longer pending.
@@ -768,8 +1201,53 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             "UPDATE images SET analysis_json = '{}', analysis_model = 'm' "
             "WHERE image_id = ?", (image_id,),
         )
-        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert scribe._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
+    finally:
+        conn.close()
+
+
+def test_documents_needing_summary_filters_summarized_and_empty(isolated_project):
+    """The summarize work-list (issue #167) is documents with indexed chunks and
+    no summary row; already-summarized docs and zero-chunk docs (nothing
+    extractable) are both excluded."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+
+        def _add_doc(file_hash, file_name):
+            cur.execute(
+                "INSERT INTO documents (file_hash, file_name, file_path, "
+                "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+                (file_hash, file_name, f"/tmp/{file_name}", None, 0),
+            )
+            return conn.last_insert_rowid()
+
+        def _chunk():
+            return [ChunkInput(
+                text="body", embedding=[0.0] * EMBEDDING_DIM, chunk_index=0,
+            )]
+
+        # Doc A: has a chunk, no summary → owed.
+        doc_a = _add_doc("a", "a.txt")
+        insert_document_chunks(conn, doc_a, _chunk())
+        # Doc B: has a chunk but already summarized → excluded.
+        doc_b = _add_doc("b", "b.txt")
+        insert_document_chunks(conn, doc_b, _chunk())
+        cur.execute(
+            "INSERT INTO summaries (document_id, title, description, text, model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (doc_b, "t", "d", "body", "m"),
+        )
+        # Doc C: no chunks at all → excluded (nothing to summarize).
+        _add_doc("c", "c.txt")
+
+        owed = scribe.Writer(conn).documents_needing_summary()
+        assert [p.document_id for p in owed] == [doc_a]
+        assert owed[0].file_name == "a.txt"
+        assert owed[0].file_hash == "a"
     finally:
         conn.close()
 
@@ -1011,10 +1489,10 @@ end
 """
 
 
-def test_summarize_if_missing_skips_zero_chunk_document(isolated_project):
-    """A document with no indexed chunks is never handed to the summarizer —
-    its only text would be trace garbage that makes the model confabulate
-    (issue #80). It counts as settled (returns False, no provider call)."""
+def test_documents_needing_summary_excludes_zero_chunk_document(isolated_project):
+    """A document with no indexed chunks is never offered to the summarize pass —
+    its only text would be trace garbage that makes the model confabulate (issue
+    #80). The work-list excludes it, so it's never handed to the model."""
     conn = open_db("test_proj")
     try:
         conn.cursor().execute(
@@ -1023,21 +1501,8 @@ def test_summarize_if_missing_skips_zero_chunk_document(isolated_project):
             "VALUES (?, ?, ?, ?, ?)",
             ("maphash", "annotated-map.pdf", "/tmp/map.pdf", 1, 3),
         )
-        doc_id = conn.last_insert_rowid()
-
-        stub = _StubProvider()
-        owed = scribe._summarize_if_missing(
-            scribe.Writer(conn), doc_id, "maphash", "annotated-map.pdf",
-            summaries_enabled=True, llm_provider=stub, llm_model="m",
-            temperature=0.0, max_summarize_tokens=1000, on_stage=None,
-        )
-
-        # Settled, not owed; provider never called, nothing persisted.
-        assert owed is False
-        assert stub.calls == 0
-        assert conn.cursor().execute(
-            "SELECT COUNT(*) FROM summaries"
-        ).fetchone()[0] == 0
+        # No chunks → the document owes no summarizable work and isn't pending.
+        assert scribe.Writer(conn).documents_needing_summary() == []
     finally:
         conn.close()
 
@@ -1571,7 +2036,7 @@ def test_writer_persist_parse_dedupes_shared_image(isolated_project, tmp_path):
     def _img(page):
         return ParsedImage(
             hash="shared", archive_path=tmp_path / "i.jpg", width=100, height=80,
-            page_number=page, image_index_on_page=1, jpeg_bytes=b"x",
+            page_number=page, image_index_on_page=1,
         )
 
     conn = open_db("test_proj")
@@ -1649,6 +2114,43 @@ def test_scribe_timings_emits_aggregate_json(
     assert agg["stages"]["parse"]["total_s"] >= 0
 
 
+def test_scribe_timings_includes_decoupled_summarize_stage(
+    isolated_project, tmp_path, mock_embed, monkeypatch, capsys
+):
+    """--timings folds the decoupled summarize pass back into each document's
+    record: the aggregate carries a `summarize` stage, and the doc count isn't
+    inflated by the second pass (one merged record per document, issue #167)."""
+    import json
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "provider": "anthropic",
+            "model": "test-model", "temperature": 0.0,
+            "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    _write_txt(tmp_path / "a.txt", "First doc with some words.")
+    _write_txt(tmp_path / "b.txt", "Second doc with other words.")
+    scribe.main(project="test_proj", files=str(tmp_path), timings=True)
+
+    assert stub.calls == 2
+    agg = json.loads(capsys.readouterr().out)
+    assert agg["docs"] == 2  # one record per doc, not doubled by the pass
+    assert "summarize" in agg["stages"]
+    assert agg["stages"]["summarize"]["total_s"] >= 0
+
+
 def test_scribe_without_timings_writes_nothing_to_stdout(
     isolated_project, tmp_path, mock_embed, capsys
 ):
@@ -1657,3 +2159,111 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
     scribe.main(project="test_proj", files=str(tmp_path))
 
     assert capsys.readouterr().out == ""
+
+
+# ---- _resolve_max_workers (no isolated_project: the real resolver, not the
+#      max_workers=1 pin that fixture installs) ----
+
+def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
+    from types import SimpleNamespace
+    from bartleby.commands import scribe as scribe_module
+    monkeypatch.setattr(scribe_module.os, "cpu_count", lambda: cores)
+    monkeypatch.setattr(
+        "psutil.virtual_memory",
+        lambda: SimpleNamespace(available=int(free_gb * 1024 ** 3)),
+    )
+
+
+def test_resolve_max_workers_timings_forces_one(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=16, free_gb=128)
+    assert scribe_module._resolve_max_workers({"max_workers": 8}, timings=True) == 1
+
+
+def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    # RAM-bound: 8 cores but only ~10GB free → 10 // 2.5 = 4 workers.
+    _fake_machine(monkeypatch, cores=8, free_gb=10)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 4
+    # CPU-bound: 2 cores, plenty of RAM → 2 workers.
+    _fake_machine(monkeypatch, cores=2, free_gb=128)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 2
+
+
+def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 2.5 = 0 → floored to 1
+    assert scribe_module._resolve_max_workers({}, timings=False) == 1
+
+
+def test_resolve_max_workers_honors_explicit_value_over_auto_with_warning(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+    _fake_machine(monkeypatch, cores=2, free_gb=128)   # auto = 2
+    warned: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", lambda m: warned.append(m))
+    assert scribe_module._resolve_max_workers({"max_workers": 6}, timings=False) == 6
+    assert warned and "max_workers=6" in warned[0]
+
+
+def test_scribe_records_ingest_run_and_stamps_units(
+    isolated_project, tmp_path, mock_embed
+):
+    src = _write_txt(tmp_path / "doc.txt", "A small document to ingest and stamp.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        runs = cur.execute(
+            "SELECT run_id, finished_at, config_json FROM ingests"
+        ).fetchall()
+        assert len(runs) == 1
+        run_id, finished_at, config_json = runs[0]
+        assert finished_at is not None          # finally-block closed the run
+        assert "api_key" not in config_json     # secrets never persisted
+
+        # The document and its chunks carry the producing run.
+        assert cur.execute(
+            "SELECT ingest_run_id FROM documents"
+        ).fetchone()[0] == run_id
+        chunk_runs = {
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT ingest_run_id FROM chunks "
+                "WHERE source_kind = 'document'"
+            )
+        }
+        assert chunk_runs == {run_id}
+    finally:
+        conn.close()
+
+
+def test_scribe_warns_on_config_drift(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.console.warn", lambda m: warnings.append(m)
+    )
+
+    configs = [{"pdf_converter": "pdfplumber"}]
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", lambda: configs[0]
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "A document ingested across two runs.")
+    scribe.main(project="test_proj", files=str(src))
+    assert not [w for w in warnings if "Config drift" in w]  # no prior → silent
+
+    # Second run under a changed knob → a drift warning, but never a block.
+    configs[0] = {"pdf_converter": "docling"}
+    scribe.main(project="test_proj", files=str(src))
+    drift = [w for w in warnings if "Config drift" in w]
+    assert any("pdf_converter" in w for w in drift)
+
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM ingests"
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()

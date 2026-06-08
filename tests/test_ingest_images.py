@@ -183,29 +183,25 @@ def test_analyze_routes_scene_image_via_vlm(monkeypatch):
     assert seen["model"] == "fake-vl:1"
 
 
-def test_analyze_uses_prefetched_ocr_when_provided(monkeypatch):
-    """Sparse-page render path: already-OCR'd result is passed down, no second pass."""
-    ocr_run_count = {"n": 0}
-
-    def _spy_run(b):
-        ocr_run_count["n"] += 1
-        return ocr_module.OcrResult(text="should not be called", avg_confidence=99.0)
-
-    monkeypatch.setattr(ocr_module, "run", _spy_run)
+def test_analyze_falls_back_to_vlm_when_ocr_raises(monkeypatch):
+    """A crashing Tesseract (e.g. unwritable TMPDIR) must not drop the image:
+    OCR is only a classifier, so the VLM still runs and produces a caption."""
+    seen = {}
 
     class _FakeProvider:
         name = "fake"
-        def analyze_image(self, *a, **k):
-            return VlmDescription(description="scene fallback", notes="")
+        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+            seen["called"] = True
+            return VlmDescription(description="A red square.", notes="")
         def summarize(self, *a, **k):
             raise NotImplementedError
 
+    def _boom(_bytes):
+        raise RuntimeError("Tesseract OCR failed (unwritable TMPDIR).")
+
+    monkeypatch.setattr(ocr_module, "run", _boom)
     prepared = img_pipeline.prepare_image(_png_bytes(50, 50), max_dimension=1024)
-    prefetched = ocr_module.OcrResult(text="hi", avg_confidence=10.0)
-    out = img_pipeline.analyze(
-        _FakeProvider(), prepared, model="fake-vl:1",
-        prefetched_ocr=prefetched,
-    )
-    assert ocr_run_count["n"] == 0    # never re-OCR'd the bytes
+    out = img_pipeline.analyze(_FakeProvider(), prepared, model="fake-vl:1")
+    assert seen["called"]   # VLM ran despite OCR crashing
     assert out.kind == "scene"
-    assert out.description == "scene fallback"
+    assert out.description == "A red square."

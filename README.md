@@ -291,19 +291,23 @@ Interactive configuration wizard. Asks for:
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| LLM provider | anthropic | `anthropic`, `openai`, or `ollama` |
+| LLM provider | anthropic | `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Model | varies by provider | Model name (e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b`) |
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
+| Summarize workers | 4 | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
-| Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` |
+| Parse workers | auto | How many documents to parse in parallel. `0` = auto (`min(CPU cores, free RAM ÷ ~2.5 GB)`); raise for a faster bulk ingest on a big machine, lower if memory is tight |
+| Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
-| Max image dimension | 1024 | Long-edge pixels before sending an image to the VLM |
+| Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
+| Min image dimension | 64 | Images with a shorter edge than this are skipped — avoids wasting VLM calls (and crashes) on thin slivers |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
+| Caption workers | 4 | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
@@ -389,7 +393,7 @@ _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, 
 bartleby scribe --project bench --files /path/to/sample --timings > bench.json
 ```
 
-Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions?
+Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions? Recorded runs and the reproducible recipe (including the gotchas that silently corrupt a run) live in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ### `bartleby session`
 

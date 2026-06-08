@@ -1,0 +1,73 @@
+# Decision log
+
+Settled judgment calls, kept so we don't re-derive them. Each decision is one
+file, named `GH-<issue>-<slug>-<index>.md` — the issue number four-zero-padded
+(`GH-XXXX` when a decision predates the issue-tracked workflow or lands out of
+band), and a per-stem `<index>` that climbs only for phases of one issue or
+repeated hotfixes. A hotfix folds into the `<slug>` as `hotfix-<descriptive-slug>` —
+`GH-XXXX-hotfix-embedding-oom-0003.md` out of band,
+`GH-0181-hotfix-vlm-fallback-0001.md` when it mends a specific issue's regression —
+never the bare `hotfix` token. The `GH-XXXX` bucket sorts last on disk, so **this
+index is the source of truth for chronological order**, newest first.
+
+Current-state architecture (invariants, conventions) lives in
+[`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
+past calls, read on demand.
+
+- [GH-0170 — Scribe progress UX under the worker pool (issue #170)](GH-0170-scribe-progress-ux-worker-pool-0001.md)
+- [GH-0188 — Parallelize the summarize pass (issue #188)](GH-0188-parallelize-summarize-pass-0001.md)
+- [GH-0166 — Decouple captioning into its own concurrent phase (issue #166)](GH-0166-decouple-captioning-own-concurrent-phase-0001.md)
+- [GH-0167 — Decouple summarization into its own pass (issue #167)](GH-0167-decouple-summarization-own-pass-0001.md)
+- [GH-0181 — OCR failure falls back to the VLM instead of dropping the image (issue #181)](GH-0181-ocr-failure-falls-back-vlm-instead-dropping-0001.md)
+- [GH-0162 — Opt-in per-stage ingest timing + benchmark mode (issue #162)](GH-0162-opt-stage-ingest-timing-benchmark-mode-0001.md)
+- [GH-0165 — Parallel parse pool (issue #165)](GH-0165-parallel-parse-pool-0001.md)
+- [GH-0156 — Per-chunk view + quick-links from every chunk reference (issue #156)](GH-0156-chunk-view-quick-links-from-every-chunk-0001.md)
+- [GH-0137 — `bartleby ready` skill installer + `ready`→`config` rename (issue #137)](GH-0137-bartleby-ready-skill-installer-ready-config-rename-0001.md)
+- [GH-0002 — Docling backend stops double-parsing for images (issue #2)](GH-0002-docling-backend-stops-double-parsing-images-0001.md)
+- [GH-0171 — Per-unit ingest provenance + config-drift warnings (issue #171)](GH-0171-unit-ingest-provenance-config-drift-warnings-0001.md)
+- [GH-0164 — Schema v8 — single-writer drain + per-unit restartable ingest (issue #164)](GH-0164-schema-v8-single-writer-drain-unit-restartable-0001.md)
+- [GH-0123 — Sanitize `{@html}` markdown against XSS (issue #123)](GH-0123-sanitize-html-markdown-against-xss-0001.md)
+- [GH-0127 — Two-tone-by-meaning surface system — the visual unify pass (issue #127)](GH-0127-two-tone-meaning-surface-system-visual-unify-0001.md)
+- [GH-0118 — `scan --sort {document,date}` — chronological enumeration (issue #118)](GH-0118-scan-sort-document-date-chronological-enumeration-0001.md)
+- [GH-0122 — Web style standardization — design tokens + extracted primitives (issue #122)](GH-0122-web-style-standardization-design-tokens-extracted-primitives-0001.md)
+- [GH-0121 — Displayed HTML source can't run its scripts (issue #121)](GH-0121-displayed-html-source-can-t-run-scripts-0001.md)
+- [GH-0104 — Aggregation/facet — `scan --count-by document` + filtered `describe_corpus` (issue #104)](GH-0104-aggregation-facet-scan-count-document-filtered-describe-0001.md)
+- [GH-0108 — Memory-off reads scoped to own session, not blocked (issue #108)](GH-0108-memory-off-reads-scoped-own-session-blocked-0001.md)
+- [GH-0110 — Web view delegates read parity to the skills — home + `/documents` (issue #110)](GH-0110-web-view-delegates-read-parity-skills-home-0001.md)
+- [GH-0105 — `--brief` triage projection on the four enumeration commands (issue #105)](GH-0105-brief-triage-projection-four-enumeration-commands-0001.md)
+- [GH-0100 — Semi-automated releases — tags as version pins, minor coupled to `SCHEMA_VERSION` (issue #100)](GH-0100-semi-automated-releases-tags-version-pins-minor-0001.md)
+- [GH-0087 — Web UI packaged so `serve` works from an installed wheel (issue #87)](GH-0087-web-ui-packaged-so-serve-works-from-0001.md)
+- [GH-0080 — No summary for zero-chunk documents + image-only summary input (issue #80)](GH-0080-summary-zero-chunk-documents-image-only-summary-0001.md)
+- [GH-0056 — Findings curation — `delete_finding` + `merge_findings` (issue #56)](GH-0056-findings-curation-delete-finding-merge-findings-0001.md)
+- [GH-0078 — Content-sniffed file-type resolution (issue #78)](GH-0078-content-sniffed-file-type-resolution-0001.md)
+- [GH-0068 — Batch tag assignment — `assign_tag` / `unassign_tag --documents <id,id,...>` (issue #68)](GH-0068-batch-tag-assignment-assign-tag-unassign-tag-0001.md)
+- [GH-0066 — Tags surfaced in the web UI (issue #66)](GH-0066-tags-surfaced-web-ui-0001.md)
+- [GH-0065 — Web UI search reuses the skill scripts via subprocess (issue #65)](GH-0065-web-ui-search-reuses-skill-scripts-subprocess-0001.md)
+- [GH-0051 — EDGAR full-submission `.txt` unwrap (issue #51, Phase 1)](GH-0051-edgar-full-submission-txt-unwrap-0001.md)
+- [GH-0062 — Schema v7 — finding provenance (`sessions.model` / `sessions.harness`, issue #62)](GH-0062-schema-v7-finding-provenance-sessions-model-sessions-0001.md)
+- [GH-0032 — `scan` — full-text enumeration primitive (issue #32)](GH-0032-scan-full-text-enumeration-primitive-0001.md)
+- [GH-0047 — `--help` prints the response shape, not just flags (issue #47)](GH-0047-help-prints-response-shape-just-flags-0001.md)
+- [GH-0040 — `list_findings` / `read_finding` — finding read paths (issue #40)](GH-0040-list-findings-read-finding-finding-read-paths-0001.md)
+- [GH-0035 — Manual tag assignment — `assign_tag` / `unassign_tag` (issue #35)](GH-0035-manual-tag-assignment-assign-tag-unassign-tag-0001.md)
+- [GH-0014 — Converter axis split + sec2md (issue #14)](GH-0014-converter-axis-split-sec2md-0001.md)
+- [GH-XXXX — Schema v6 — `tags` + `document_tags`](GH-XXXX-schema-v6-tags-document-tags-0001.md)
+- [GH-XXXX — Skill scratch lives in `~/.bartleby/tmp/`, not `/tmp`](GH-XXXX-skill-scratch-lives-bartleby-tmp-tmp-0001.md)
+- [GH-XXXX — Schema v5 — `summaries.authored_date`](GH-XXXX-schema-v5-summaries-authored-date-0001.md)
+- [GH-XXXX — Summarizer input includes image chunks](GH-XXXX-summarizer-input-includes-image-chunks-0001.md)
+- [GH-XXXX — Additive-only schema upgrades allowed (relaxation of "no backwards compat")](GH-XXXX-additive-only-schema-upgrades-allowed-relaxation-backwards-0001.md)
+- [GH-XXXX — No running citation tracker](GH-XXXX-running-citation-tracker-0001.md)
+- [GH-XXXX — `read_chunks --chunks <ids>`](GH-XXXX-read-chunks-chunks-ids-0001.md)
+- [GH-XXXX — `search` triage signals](GH-XXXX-search-triage-signals-0001.md)
+- [GH-XXXX — `search --in-documents`](GH-XXXX-search-documents-0001.md)
+- [GH-XXXX — Tesseract owns image transcription, VLM owns description.](GH-XXXX-tesseract-owns-image-transcription-vlm-owns-description-0001.md)
+- [GH-XXXX — Schema v4 — `chunks.page_number`](GH-XXXX-schema-v4-chunks-page-number-0001.md)
+- [GH-XXXX — Schema v3 — image pipeline](GH-XXXX-schema-v3-image-pipeline-0001.md)
+- [GH-XXXX — Schema v2 — title/description on summaries and findings](GH-XXXX-schema-v2-title-description-summaries-findings-0001.md)
+- [GH-XXXX — `documents.token_count`](GH-XXXX-documents-token-count-0001.md)
+- [GH-XXXX — Query embedding](GH-XXXX-query-embedding-0001.md)
+- [GH-XXXX — Sessions auto-create](GH-XXXX-sessions-auto-create-0001.md)
+- [GH-XXXX — `finding_citations` is chunk-level](GH-XXXX-finding-citations-chunk-level-0001.md)
+- [GH-XXXX — Reranker dropped](GH-XXXX-reranker-dropped-0001.md)
+- [GH-XXXX — Docling is the only converter](GH-XXXX-docling-only-converter-0001.md)
+- [GH-XXXX — Sequential ingestion](GH-XXXX-sequential-ingestion-0001.md)
+- [GH-XXXX — CLI rename](GH-XXXX-cli-rename-0001.md)

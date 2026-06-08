@@ -6,18 +6,20 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
 from bartleby.config import CONFIG_PATH, load_config, save_config
 from bartleby.lib.consts import (
+    ALLOWED_HTML_CONVERTERS,
+    ALLOWED_PDF_CONVERTERS,
+    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
 from bartleby.providers import ALLOWED_PROVIDERS
 
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
-ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
-ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
 
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
@@ -166,6 +168,21 @@ def _prompt_positive_int(prompt: str, default: int, *, help_text: str) -> int:
         console.print("[red]Must be a positive integer[/red]")
 
 
+def _prompt_max_workers(existing: dict) -> int | None:
+    """Returns the worker count, or None for auto (omit the key from config)."""
+    _help(
+        "How many documents scribe parses in parallel. 0 = auto: the min of your "
+        "CPU cores and what free RAM allows.\nRaise it for a faster bulk ingest "
+        "on a big machine; lower it if memory is tight."
+    )
+    current = existing.get("max_workers")
+    while True:
+        n = IntPrompt.ask("Parse workers (0 = auto)", default=int(current) if current else 0)
+        if n >= 0:
+            return n or None
+        console.print("[red]Must be 0 (auto) or a positive integer[/red]")
+
+
 def main():
     console.print(Panel.fit(
         "[bold cyan]Bartleby Configuration[/bold cyan]\n"
@@ -230,13 +247,22 @@ def main():
                 help_text="Caps how much document text is sent to the summarizer; "
                 "longer documents are truncated.\nHigher = more context, higher cost.",
             )
+            config["summarize_workers"] = _prompt_positive_int(
+                "Summarize workers",
+                int(existing.get("summarize_workers", DEFAULT_SUMMARIZE_WORKERS)),
+                help_text="How many documents summarize in parallel after parsing "
+                "— LLM calls are network-bound, so this runs separately from parse "
+                "workers.\nRaise it for a rate-tolerant cloud provider; keep it low "
+                "for a single-GPU local Ollama, which serializes anyway.",
+            )
         else:
             config.pop("temperature", None)
             config.pop("max_summarize_tokens", None)
+            config.pop("summarize_workers", None)
     else:
         # No LLM → no summarization.
         for k in ("provider", "model", "summary_depth", "temperature",
-                 "max_summarize_tokens", "ollama_base_url",
+                 "max_summarize_tokens", "summarize_workers", "ollama_base_url",
                  "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
             config.pop(k, None)
         config["summary_depth"] = "none"
@@ -260,6 +286,9 @@ def main():
         "treated as scanned and routed to OCR/VLM.\nLower = more pages OCR'd "
         "(slower, catches more).",
     )
+    max_workers = _prompt_max_workers(existing)
+    if max_workers is not None:
+        config["max_workers"] = max_workers
 
     console.print("\n[bold]Image analysis[/bold] (VLM captions/OCR for embedded + standalone images)")
     _help(
@@ -312,10 +341,18 @@ def main():
             help_text="Tesseract average confidence (0-100); pages scoring below "
             "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more.",
         )
+        config["caption_workers"] = _prompt_positive_int(
+            "Caption workers",
+            int(existing.get("caption_workers", DEFAULT_CAPTION_WORKERS)),
+            help_text="How many images caption in parallel after parsing — VLM "
+            "calls are network-bound, so this runs separately from parse workers."
+            "\nRaise it for a rate-tolerant cloud provider; keep it low for a "
+            "single-GPU local Ollama, which serializes anyway.",
+        )
     else:
         for k in ("vision_provider", "vision_model",
                  "vision_max_dimension", "vision_min_dimension",
-                 "ocr_min_confidence"):
+                 "ocr_min_confidence", "caption_workers"):
             config.pop(k, None)
 
     console.print("\n[bold]Document reading[/bold]")

@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Instructions for Claude working in this repo. Terse on purpose. Two companions:
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — load-bearing invariants and the decision log. Read it before changing anything structural.
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — load-bearing invariants and current state. Read it before changing anything structural. The decision log (the *why* behind past calls) now lives one-per-file under [`docs/decisions/`](./docs/decisions/).
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — the human narrative of the workflow below.
 
 Bartleby ingests documents into per-project SQLite (FTS5 + sqlite-vec), then a
@@ -29,6 +29,8 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
   error with `{"error": ..., "code": ...}`. Prose and progress go to stderr only.
 - **When unsure, stop and ask.** Most choices here have a prior conversation behind
   them. If something is ambiguous or uncovered, ask rather than wing it.
+- **Smallest fix that fits.** Prefer the simplest change that satisfies the
+  requirement; don't add abstractions, flags, or migrations unless asked.
 
 ## Workflow rails
 

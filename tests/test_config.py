@@ -7,6 +7,7 @@ import pytest
 
 import bartleby.config
 import bartleby.commands.config as config
+from bartleby.config import config_drift, redact_config
 
 
 @pytest.fixture
@@ -47,9 +48,11 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
         "one-shot",            # Summary depth
         "0",                   # Temperature
         "50000",               # Max summarize tokens
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -87,6 +90,7 @@ def test_config_with_summary_depth_none_omits_summarize_settings(
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "60000",               # Max read tokens
     ])
@@ -107,9 +111,11 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",
     ])
@@ -128,6 +134,7 @@ def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypat
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -154,6 +161,7 @@ def test_config_strips_legacy_keys_from_existing_config(isolated_config, monkeyp
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
+        "0",                   # Parse workers (0 = auto → omitted)
         "n",                   # Configure vision?
         "50000",               # Max read tokens
     ])
@@ -174,15 +182,18 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",
+        "0",                   # Parse workers (0 = auto → omitted)
         "y",                   # Configure vision?
         "openai",              # Vision provider (same as LLM → no fresh api key)
         "gpt-5-mini",          # Vision model
         "1024",                # vision_max_dimension
         "32",                  # vision_min_dimension
         "30",                  # ocr_min_confidence
+        "4",                   # caption_workers
         "50000",               # max_read_tokens
     ])
     config.main()
@@ -192,6 +203,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
     assert cfg["vision_max_dimension"] == 1024
     assert cfg["vision_min_dimension"] == 32
     assert cfg["ocr_min_confidence"] == 30
+    assert cfg["caption_workers"] == 4
     # openai_api_key already set from the LLM block; no double prompt.
     assert cfg["openai_api_key"] == "sk-openai"
 
@@ -207,9 +219,11 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",
+        "0",                   # Parse workers (0 = auto → omitted)
         "y",                   # Configure vision?
         "anthropic",           # Different provider → prompt for key
         "claude-haiku-4-5",
@@ -217,6 +231,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "1024",
         "32",
         "30",
+        "4",                   # caption_workers
         "50000",
     ])
     config.main()
@@ -224,3 +239,57 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
     assert cfg["vision_provider"] == "anthropic"
     assert cfg["openai_api_key"] == "sk-openai"
     assert cfg["anthropic_api_key"] == "sk-anthro"
+
+
+# -------------------- ingest provenance: redaction + drift --------------------
+
+
+def test_redact_config_strips_secret_keys():
+    cfg = {
+        "provider": "anthropic",
+        "model": "claude",
+        "anthropic_api_key": "sk-secret",
+        "openai_api_key": "sk-other",
+        "wsjpt_api_key": "tok",
+        "ollama_base_url": "http://localhost:11434",
+    }
+    redacted = redact_config(cfg)
+    assert redacted == {
+        "provider": "anthropic",
+        "model": "claude",
+        "ollama_base_url": "http://localhost:11434",
+    }
+    # Original is untouched (a copy is returned).
+    assert "anthropic_api_key" in cfg
+
+
+def test_redact_config_matches_token_secret_password_credential():
+    cfg = {
+        "keep": 1,
+        "auth_token": "t",
+        "client_secret": "s",
+        "db_password": "p",
+        "gcp_credential": "c",
+    }
+    assert redact_config(cfg) == {"keep": 1}
+
+
+def test_config_drift_none_prior_is_silent():
+    assert config_drift(None, {"provider": "anthropic"}) == []
+
+
+def test_config_drift_reports_changed_added_and_removed_fields():
+    prior = {"provider": "anthropic", "model": "old", "temperature": 0}
+    current = {"provider": "anthropic", "model": "new", "vision_model": "v"}
+    drift = config_drift(prior, current)
+    # model changed; temperature dropped; vision_model added — provider stable.
+    assert drift == [
+        "model: 'old' → 'new'",
+        "temperature: 0 → '<unset>'",
+        "vision_model: '<unset>' → 'v'",
+    ]
+
+
+def test_config_drift_identical_is_silent():
+    cfg = {"provider": "anthropic", "model": "x"}
+    assert config_drift(cfg, dict(cfg)) == []
