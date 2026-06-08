@@ -32,6 +32,8 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator, TypeVar
 
+from bartleby.lib.consts import WORKER_MAX_TASKS
+
 Req = TypeVar("Req")
 Cfg = TypeVar("Cfg")
 Out = TypeVar("Out")
@@ -158,8 +160,9 @@ def parse_stream(
 
     ``parse_fn`` must not raise — it is expected to capture parse failures as
     data in its returned outcome, so one bad file never tears down the stream.
-    ``warmup(config)`` runs once per worker in the pool path (never inline,
-    where the caller's process is already warm).
+    ``warmup(config)`` runs once per worker *instance* in the pool path — i.e.
+    again each time a worker is recycled after ``WORKER_MAX_TASKS`` docs (#213) —
+    never inline, where the caller's process is already warm.
     """
     if max_workers <= 1:
         for request in requests:
@@ -182,6 +185,10 @@ def parse_stream(
     try:
         with ctx.Pool(
             processes=max_workers,
+            # Recycle each worker after WORKER_MAX_TASKS docs so docling/torch RSS
+            # can't grow unbounded across a long run (#213) — a replacement worker
+            # re-runs _init_worker (re-warming the models).
+            maxtasksperchild=WORKER_MAX_TASKS,
             initializer=_init_worker,
             initargs=(
                 parse_fn, config, warmup, verbose, tuple(required_models), progress_q,
