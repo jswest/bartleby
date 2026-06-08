@@ -61,11 +61,15 @@ def _upgrade_v6_to_v7(conn: apsw.Connection) -> None:
 
 
 def _upgrade_v7_to_v8(conn: apsw.Connection) -> None:
+    # Schema v8 is the resumable/provenance bump (#164 + #171): a
+    # failed_ingests retry ledger, an ingests provenance table, and an
+    # ingest_run_id stamp on every per-unit table. All purely additive — no
+    # reingest. Keep this DDL in lockstep with db/schema.py.
+    cur = conn.cursor()
     # failed_ingests records a per-unit ingest failure (parse / caption /
     # summary) so resumable ingest can cap retries on a deterministically
-    # failing unit instead of attempting it every run. Purely additive — no
-    # reingest. Keep this DDL in lockstep with db/schema.py.
-    conn.cursor().execute(
+    # failing unit instead of attempting it every run.
+    cur.execute(
         "CREATE TABLE failed_ingests ("
         "  file_hash TEXT NOT NULL, "
         "  file_name TEXT NOT NULL, "
@@ -77,6 +81,25 @@ def _upgrade_v7_to_v8(conn: apsw.Connection) -> None:
         "  PRIMARY KEY (file_hash, stage)"
         ")"
     )
+    # ingests provenance table (mirrors schema.py). Old rows pre-date any run,
+    # so their ingest_run_id stays NULL — which the chunk helpers expect.
+    cur.execute(
+        "CREATE TABLE ingests ("
+        "  run_id INTEGER PRIMARY KEY, "
+        "  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "  finished_at TEXT, "
+        "  config_json TEXT NOT NULL, "
+        "  bartleby_version TEXT, "
+        "  schema_version INTEGER NOT NULL"
+        ")"
+    )
+    # per-unit provenance columns (mirror schema.py). Nullable with no
+    # default, so the FK-bearing ADD COLUMN is legal on a populated table.
+    for table in ("documents", "summaries", "chunks"):
+        cur.execute(
+            f"ALTER TABLE {table} ADD COLUMN "
+            "ingest_run_id INTEGER REFERENCES ingests(run_id)"
+        )
 
 
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
