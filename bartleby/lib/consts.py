@@ -47,12 +47,19 @@ DEFAULT_VISION_MAX_DIMENSION = 768
 DEFAULT_VISION_MIN_DIMENSION = 64
 
 # Parse-pool sizing (#165). When `max_workers` is unset, scribe auto-picks
-# min(cpu_count, free_ram_gb // PER_WORKER_GB), floored at 1 — so a box that's
-# CPU-rich but RAM-poor doesn't launch more parse workers than memory can hold
-# and OOM. Each worker loads the embedding model and, for docling ingests, the
-# layout/table models; PER_WORKER_GB is a deliberately conservative resident-set
-# estimate for that footprint. `max_workers` in config overrides the auto-pick.
+# min(cpu_count - RESERVED_CORES, free_ram_gb // PER_WORKER_GB), floored at 1 —
+# so a box that's CPU-rich but RAM-poor doesn't launch more parse workers than
+# memory can hold and OOM, and the auto-pick always leaves a couple of cores for
+# the OS and the rest of the machine instead of pinning every core for hours.
+# Each worker loads the embedding model and, for docling ingests, the layout/table
+# models; PER_WORKER_GB is a deliberately conservative resident-set estimate for
+# that footprint. `max_workers` in config overrides the auto-pick (and may use
+# every core).
 PER_WORKER_GB = 2.5
+
+# Held back by the auto-pick only (#211); an explicit `max_workers` can still use
+# every core. (The why — OS/machine headroom — is in the PER_WORKER_GB block.)
+RESERVED_CORES = 2
 
 # Caption-pool sizing (#166). Captioning runs after parse as its own concurrent
 # stage: many VLM/OCR calls per document, network/IO-bound rather than RAM-bound,
