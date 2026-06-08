@@ -81,16 +81,26 @@ what looks wrong. It's **off by default** because browser automation is slow and
 burns image tokens, so you opt in per run when a change is actually worth eyeballing.
 Backend-only issues ignore the token even if you pass it.
 
-### `skip-tests` (docs-only changes)
+### Skipping the test gates (docs-only changes)
 
-For a docs-only change — README wording, an `ARCHITECTURE.md` note, a `SKILL.md`
-tweak — you can append a `skip-tests` token (`/ship #<N> skip-tests`) to omit the
-`uv run pytest` runs that otherwise gate every commit. It's a convenience for diffs
-that can't affect tests, **not** a way to land untested code: Claude honors it only
-when the branch diff touches no `*.py`, `pyproject.toml`, or `bartleby/web/` file —
-otherwise it runs the tests anyway and tells you why. When tests are genuinely
-skipped, the PR and final report say so. Combine it with `with-playwright` in either
-order.
+The `uv run pytest` runs that otherwise gate every commit are skipped down two
+paths — both a convenience for diffs that can't affect tests, **not** a way to land
+untested code:
+
+- **Docs-only — automatic, no token.** When every changed path is a `*.md` file,
+  `LICENSE`, or under `docs/` — README wording, an `ARCHITECTURE.md` note, a
+  `SKILL.md` tweak — Claude skips the gates on its own. A pure prose change can't
+  move the suite, so there's nothing to gate and no token to remember.
+- **`skip-tests` — opt-in, for docs-adjacent files outside that set.** For a change
+  that's still test-irrelevant but touches something other than docs (a shell
+  script, a `.txt` asset), append a `skip-tests` token (`/ship #<N> skip-tests`).
+  Claude honors it only when the branch diff touches no `*.py`, `pyproject.toml`, or
+  `bartleby/web/` file — otherwise it runs the tests anyway and tells you why.
+
+Either way, Claude re-checks at every gate, so a docs PR that grows a code change
+mid-stream starts running tests from that point. When tests are genuinely skipped,
+the PR and final report say so — naming which path applied. Combine `skip-tests`
+with `with-playwright` in either order.
 
 ### `onto #<omnibus>` (ship onto an omnibus branch)
 
