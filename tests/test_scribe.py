@@ -97,7 +97,7 @@ class _StubVisionProvider:
         return self.description
 
 
-def _png_bytes(width=100, height=60, color=(20, 200, 50)) -> bytes:
+def _png_bytes(width=100, height=100, color=(20, 200, 50)) -> bytes:
     im = Image.new("RGB", (width, height), color=color)
     buf = io.BytesIO()
     im.save(buf, format="PNG")

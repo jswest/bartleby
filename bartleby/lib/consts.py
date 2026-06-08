@@ -29,9 +29,12 @@ DEFAULT_PDF_CONVERTER = "pdfplumber"
 DEFAULT_HTML_CONVERTER = "docling"
 DEFAULT_SPARSE_TEXT_THRESHOLD = 100
 DEFAULT_OCR_MIN_CONFIDENCE = 30
-DEFAULT_VISION_MAX_DIMENSION = 1024
+DEFAULT_VISION_MAX_DIMENSION = 768
 # VLM image processors (e.g. qwen3-vl) tile images into fixed-size patches and
-# crash when an edge is smaller than the patch factor. Images below this on
-# either edge — thin rules, banners, sliver crops — are skipped before the VLM
-# call. 32 matches qwen3-vl's factor; raise it for models with larger patches.
-DEFAULT_VISION_MIN_DIMENSION = 32
+# crash when an edge is smaller than the patch factor (32 for qwen3-vl) — a hard
+# floor that scales up for models with larger patches. Images below the default
+# on either edge — thin rules, banners, sliver crops — are skipped before the VLM
+# call. The default sits above that floor at 64 to also drop tiny crops the VLM
+# can't read but will "describe" with confident nonsense. Raise it further for
+# noisier corpora.
+DEFAULT_VISION_MIN_DIMENSION = 64
