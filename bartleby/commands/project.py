@@ -94,9 +94,16 @@ def info(*, name: str | None) -> None:
         c = i["chunk_counts"]
         table.add_row(
             "Chunks",
-            f"{c['document']} document  /  {c['summary']} summary  /  "
-            f"{c['finding']} finding",
+            f"{c['document']} document  /  {c['image']} image  /  "
+            f"{c['summary']} summary  /  {c['finding']} finding",
         )
+        f = i["failed_ingests"]
+        if f["total"]:
+            capped_note = f" ({f['capped']} capped, not retried)" if f["capped"] else ""
+            table.add_row(
+                "Failed units",
+                f"[yellow]{f['total']} incomplete{capped_note}[/yellow]",
+            )
     _console.print(table)
 
 

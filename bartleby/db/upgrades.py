@@ -60,10 +60,30 @@ def _upgrade_v6_to_v7(conn: apsw.Connection) -> None:
     cur.execute("ALTER TABLE sessions ADD COLUMN harness TEXT")
 
 
+def _upgrade_v7_to_v8(conn: apsw.Connection) -> None:
+    # failed_ingests records a per-unit ingest failure (parse / caption /
+    # summary) so resumable ingest can cap retries on a deterministically
+    # failing unit instead of attempting it every run. Purely additive — no
+    # reingest. Keep this DDL in lockstep with db/schema.py.
+    conn.cursor().execute(
+        "CREATE TABLE failed_ingests ("
+        "  file_hash TEXT NOT NULL, "
+        "  file_name TEXT NOT NULL, "
+        "  stage TEXT NOT NULL "
+        "    CHECK (stage IN ('parse', 'caption', 'summary')), "
+        "  error TEXT NOT NULL, "
+        "  attempts INTEGER NOT NULL DEFAULT 1, "
+        "  last_attempt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "  PRIMARY KEY (file_hash, stage)"
+        ")"
+    )
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
     6: _upgrade_v6_to_v7,
+    7: _upgrade_v7_to_v8,
 }
 
 

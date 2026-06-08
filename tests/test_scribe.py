@@ -584,7 +584,7 @@ def test_scribe_stage_callback_progresses_through_phases(
     conn = open_db("test_proj")
     try:
         scribe_module._process_one(
-            conn, pdf, ".pdf", archive_root,
+            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -632,7 +632,7 @@ def test_scribe_page_count_callback_fires_for_pdf(
     conn = open_db("test_proj")
     try:
         scribe_module._process_one(
-            conn, pdf, ".pdf", archive_root,
+            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -680,7 +680,7 @@ def test_scribe_image_progress_callback_fires_per_image(
     conn = open_db("test_proj")
     try:
         scribe_module._process_one(
-            conn, pdf, ".pdf", archive_root,
+            scribe_module.Writer(conn), pdf, ".pdf", archive_root,
             pdf_converter="pdfplumber",
             html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -698,25 +698,10 @@ def test_scribe_image_progress_callback_fires_per_image(
     assert seen[-1] == (1, 1)
 
 
-def test_document_already_ingested_skips_partial_row(isolated_project):
-    """A documents row with no chunks/images is treated as not-yet-ingested."""
-    conn = open_db("test_proj")
-    try:
-        conn.cursor().execute(
-            "INSERT INTO documents "
-            "(file_hash, file_name, file_path, page_count, token_count) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("abc123", "stranded.txt", "/tmp/stranded.txt", None, 0),
-        )
-        assert scribe._document_already_ingested(conn, "abc123") is None
-    finally:
-        conn.close()
-
-
-def test_document_already_ingested_recognizes_complete_text_doc(
+def test_document_id_for_returns_parsed_document(
     isolated_project, tmp_path, mock_embed
 ):
-    """A document with at least one text chunk is recognized as complete."""
+    """Writer.document_id_for resolves an already-parsed file by its hash."""
     src = _write_txt(tmp_path / "doc.txt", "Some content for ingestion.")
     scribe.main(project="test_proj", files=str(src))
 
@@ -725,13 +710,32 @@ def test_document_already_ingested_recognizes_complete_text_doc(
         file_hash, doc_id = conn.cursor().execute(
             "SELECT file_hash, document_id FROM documents"
         ).fetchone()
-        assert scribe._document_already_ingested(conn, file_hash) == doc_id
+        writer = scribe.Writer(conn)
+        assert writer.document_id_for(file_hash) == doc_id
+        assert writer.document_id_for("nope") is None
     finally:
         conn.close()
 
 
-def test_document_already_ingested_recognizes_image_only_doc(isolated_project):
-    """A document with only document_images attached (no doc chunks) is complete."""
+def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
+    """A parsed text doc (chunks, no images, summaries off) is complete."""
+    src = _write_txt(tmp_path / "doc.txt", "Some content for ingestion.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        doc_id = conn.cursor().execute(
+            "SELECT document_id FROM documents"
+        ).fetchone()[0]
+        writer = scribe.Writer(conn)
+        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+    finally:
+        conn.close()
+
+
+def test_is_complete_false_when_image_uncaptioned(isolated_project):
+    """An image row recorded by parse but not yet captioned (analysis_json
+    NULL) keeps the document incomplete — the per-unit resume signal."""
     conn = open_db("test_proj")
     try:
         cur = conn.cursor()
@@ -742,10 +746,11 @@ def test_document_already_ingested_recognizes_image_only_doc(isolated_project):
             ("imghash", "image.jpg", "/tmp/image.jpg", None, 0),
         )
         doc_id = conn.last_insert_rowid()
+        # analysis_json IS NULL → uncaptioned.
         cur.execute(
             "INSERT INTO images (file_hash, file_path, width, height, "
-            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
-            ("imgblob", "/tmp/image.jpg", 100, 100, "{}", "m"),
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, NULL, NULL)",
+            ("imgblob", "/tmp/image.jpg", 100, 100),
         )
         image_id = conn.last_insert_rowid()
         cur.execute(
@@ -754,28 +759,36 @@ def test_document_already_ingested_recognizes_image_only_doc(isolated_project):
             "VALUES (?, ?, ?, ?)",
             (doc_id, image_id, None, 0),
         )
-        assert scribe._document_already_ingested(conn, "imghash") == doc_id
+        writer = scribe.Writer(conn)
+        assert not scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert [pi.image_id for pi in writer.uncaptioned_images(doc_id)] == [image_id]
+
+        # Caption it → complete, and no longer pending.
+        cur.execute(
+            "UPDATE images SET analysis_json = '{}', analysis_model = 'm' "
+            "WHERE image_id = ?", (image_id,),
+        )
+        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert writer.uncaptioned_images(doc_id) == []
     finally:
         conn.close()
 
 
-def test_scribe_reingests_after_partial_crash(
+def test_scribe_does_not_reparse_existing_document(
     isolated_project, tmp_path, mock_embed
 ):
-    """A stranded documents row from a crashed run is cleaned up + re-ingested."""
-    src = _write_txt(tmp_path / "doc.txt", "Content that should land on retry.")
-    # Simulate an interrupted previous run: hash matches the file but no
-    # chunks were ever written. The row holds the file_hash UNIQUE slot.
-    file_hash = scribe._hash_file(src)
+    """Re-running ingest on an already-complete file is a no-op: no duplicate
+    rows, no re-parse, no extra chunks. Parse is atomic, so a document row
+    means a finished parse — never a partial to clean up and redo."""
+    src = _write_txt(tmp_path / "doc.txt", "Stable content.")
+    scribe.main(project="test_proj", files=str(src))
+
     conn = open_db("test_proj")
     try:
-        # The stranded row's file_path points at a non-existent location and
-        # its token_count is 0 — the canonical "partial" fingerprint.
-        conn.cursor().execute(
-            "INSERT INTO documents "
-            "(file_hash, file_name, file_path, page_count, token_count) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (file_hash, "doc.txt", "/tmp/missing.txt", None, 0),
+        cur = conn.cursor()
+        before = (
+            cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+            cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
         )
     finally:
         conn.close()
@@ -785,78 +798,11 @@ def test_scribe_reingests_after_partial_crash(
     conn = open_db("test_proj")
     try:
         cur = conn.cursor()
-        # Exactly one row for this hash, and it now looks like a real ingest:
-        # the stranded "/tmp/missing.txt" path was replaced with a real archive
-        # path and tokens were counted.
-        rows = cur.execute(
-            "SELECT file_path, token_count FROM documents WHERE file_hash = ?",
-            (file_hash,),
-        ).fetchall()
-        assert len(rows) == 1
-        archive_path, token_count = rows[0]
-        assert archive_path != "/tmp/missing.txt"
-        assert token_count > 0
-        # Chunks landed this time.
-        n_chunks = cur.execute(
-            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
-        ).fetchone()[0]
-        assert n_chunks >= 1
-    finally:
-        conn.close()
-
-
-def test_cleanup_partial_document_preserves_shared_image(isolated_project):
-    """Cleaning up a partial doc drops its joins but leaves shared images alive."""
-    conn = open_db("test_proj")
-    try:
-        cur = conn.cursor()
-        # Two documents share one image
-        for fh, name in (("h_partial", "partial.pdf"), ("h_other", "other.pdf")):
-            cur.execute(
-                "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count) "
-                "VALUES (?, ?, ?, 1, 0)", (fh, name, f"/tmp/{name}"),
-            )
-        partial_id, other_id = [r[0] for r in cur.execute(
-            "SELECT document_id FROM documents ORDER BY document_id"
-        )]
-        cur.execute(
-            "INSERT INTO images (file_hash, file_path, width, height, "
-            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, ?, ?)",
-            ("img_shared", "/tmp/img.jpg", 100, 100, "{}", "m"),
+        after = (
+            cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+            cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
         )
-        image_id = conn.last_insert_rowid()
-        for doc_id in (partial_id, other_id):
-            cur.execute(
-                "INSERT INTO document_images "
-                "(document_id, image_id, page_number, image_index_on_page) "
-                "VALUES (?, ?, NULL, 0)", (doc_id, image_id),
-            )
-
-        scribe._cleanup_partial_document(conn, partial_id)
-
-        # Partial doc + its join row are gone
-        assert cur.execute(
-            "SELECT COUNT(*) FROM documents WHERE document_id = ?",
-            (partial_id,),
-        ).fetchone()[0] == 0
-        assert cur.execute(
-            "SELECT COUNT(*) FROM document_images WHERE document_id = ?",
-            (partial_id,),
-        ).fetchone()[0] == 0
-        # Other doc + shared image survive
-        assert cur.execute(
-            "SELECT COUNT(*) FROM documents WHERE document_id = ?",
-            (other_id,),
-        ).fetchone()[0] == 1
-        assert cur.execute(
-            "SELECT COUNT(*) FROM images WHERE image_id = ?",
-            (image_id,),
-        ).fetchone()[0] == 1
-        assert cur.execute(
-            "SELECT COUNT(*) FROM document_images WHERE document_id = ?",
-            (other_id,),
-        ).fetchone()[0] == 1
+        assert after == before == (1, before[1])
     finally:
         conn.close()
 
@@ -1065,10 +1011,10 @@ end
 """
 
 
-def test_maybe_summarize_skips_zero_chunk_document(isolated_project):
+def test_summarize_if_missing_skips_zero_chunk_document(isolated_project):
     """A document with no indexed chunks is never handed to the summarizer —
-    its only text is `full_text` trace garbage that makes the model
-    confabulate (issue #80)."""
+    its only text would be trace garbage that makes the model confabulate
+    (issue #80). It counts as settled (returns False, no provider call)."""
     conn = open_db("test_proj")
     try:
         conn.cursor().execute(
@@ -1080,15 +1026,14 @@ def test_maybe_summarize_skips_zero_chunk_document(isolated_project):
         doc_id = conn.last_insert_rowid()
 
         stub = _StubProvider()
-        # full_text is the kind of trace string that defeats the old
-        # whitespace-only guard: non-empty after .strip().
-        scribe._maybe_summarize(
-            conn, doc_id, "Map\n\f\nMap",
-            provider=stub, model="m",
-            temperature=0.0, max_summarize_tokens=1000,
+        owed = scribe._summarize_if_missing(
+            scribe.Writer(conn), doc_id, "maphash", "annotated-map.pdf",
+            summaries_enabled=True, llm_provider=stub, llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000, on_stage=None,
         )
 
-        # Provider never called, nothing persisted.
+        # Settled, not owed; provider never called, nothing persisted.
+        assert owed is False
         assert stub.calls == 0
         assert conn.cursor().execute(
             "SELECT COUNT(*) FROM summaries"
@@ -1097,11 +1042,9 @@ def test_maybe_summarize_skips_zero_chunk_document(isolated_project):
         conn.close()
 
 
-def test_build_summary_input_uses_image_chunks_without_doc_chunks(
-    isolated_project,
-):
+def test_summary_input_uses_image_chunks_without_doc_chunks(isolated_project):
     """An image-only doc (image chunks, no document chunks) summarizes from
-    its real VLM/OCR descriptions — not the trace `full_text` (issue #80)."""
+    its real VLM/OCR descriptions — not raw trace text (issue #80)."""
     from bartleby.db.chunks import ChunkInput, insert_image_chunks
 
     conn = open_db("test_proj")
@@ -1133,12 +1076,11 @@ def test_build_summary_input_uses_image_chunks_without_doc_chunks(
             content_type="image_description",
         )])
 
-        result = scribe._build_summary_input(conn, doc_id, "Map\n\f\nMap")
+        result = scribe.Writer(conn).summary_input(doc_id)
 
-        # Real image-chunk text is fed, labeled with its page; trace is dropped.
+        # Real image-chunk text is fed, labeled with its page.
         assert "annotated railroad track map" in result
         assert "[Image on page 2]" in result
-        assert "Map\n\f\nMap" not in result
     finally:
         conn.close()
 
@@ -1451,5 +1393,237 @@ def test_scribe_ingests_extensionless_pdf_by_sniffing(
         assert docs[0][0] == "ATTACHMENT 7 - LOADING FORMS"
         # A page count (txt would be NULL) proves it took the PDF route.
         assert docs[0][1] == 1
+    finally:
+        conn.close()
+
+
+# -------------------- per-unit resume + failure tracking --------------------
+
+
+class _FlakyVisionProvider:
+    """Vision provider whose first ``fail_times`` analyze_image calls raise.
+
+    ``calls`` accumulates across runs when the same instance is returned by a
+    patched ``get_provider`` — so a test can assert a caption recovered on a
+    later run, or that a capped unit stops reaching the VLM at all.
+    """
+    name = "flaky-vision"
+
+    def __init__(self, fail_times: int):
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def summarize(self, *a, **k):  # protocol completeness
+        raise NotImplementedError
+
+    def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("VLM unavailable")
+        return VlmDescription(description="A recovered image.", notes="")
+
+
+def _vision_pdf_config():
+    return {
+        "summary_depth": "none",
+        "pdf_converter": "pdfplumber", "html_converter": "docling",
+        "sparse_text_threshold": 100, "ocr_min_confidence": 30,
+        "vision_provider": "stub", "vision_model": "stub-vl:1",
+        "vision_max_dimension": 1024, "vision_min_dimension": 32,
+    }
+
+
+def test_scribe_resumes_missing_caption_without_reparsing(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """The caption-loss bug fix: when the VLM dies after the text chunks land,
+    the parse stays durable; a later run captions only the missing image and
+    never re-parses or re-embeds the document body."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _vision_pdf_config,
+    )
+    vision = _FlakyVisionProvider(fail_times=1)
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    # Count real pdfplumber parses to prove the second run doesn't re-parse.
+    import bartleby.ingest.pdfplumber as pp
+    real_convert = pp.convert
+    parses = {"n": 0}
+
+    def counting_convert(*a, **k):
+        parses["n"] += 1
+        return real_convert(*a, **k)
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.pdfplumber_pipeline.convert", counting_convert,
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes(), text="Durable body text " * 12)
+
+    # Run 1: the VLM fails. Text chunks land; the image is recorded uncaptioned.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == 1
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        doc_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0]
+        assert doc_chunks >= 1                               # parse durable
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT analysis_json FROM images"
+        ).fetchone()[0] is None                              # uncaptioned
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0] == 0
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "caption" and attempts == 1
+    finally:
+        conn.close()
+
+    # Run 2: the VLM recovers. The image is captioned; nothing is re-parsed.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == 1                                  # NOT re-parsed
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0] == doc_chunks                        # body untouched
+        assert cur.execute(
+            "SELECT analysis_json FROM images"
+        ).fetchone()[0] is not None                          # captioned
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='image'"
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM failed_ingests"
+        ).fetchone()[0] == 0                                 # failure cleared
+    finally:
+        conn.close()
+
+    # One failed call, one successful — the missing image, captioned once.
+    assert vision.calls == 2
+
+
+def test_scribe_caps_caption_retries_and_stops_calling_vlm(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A deterministically-failing caption is retried up to the cap, recorded,
+    then never sent to the VLM again — so a poison image can't loop forever and
+    can't silently read as done."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _vision_pdf_config,
+    )
+    vision = _FlakyVisionProvider(fail_times=10_000)  # always fails
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes(), text="Body text " * 12)
+
+    # Each run makes exactly one more attempt until the cap is reached.
+    for _ in range(MAX_INGEST_ATTEMPTS):
+        scribe.main(project="test_proj", files=str(pdf))
+    assert vision.calls == MAX_INGEST_ATTEMPTS
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "caption" and attempts == MAX_INGEST_ATTEMPTS
+        assert cur.execute(
+            "SELECT analysis_json FROM images"
+        ).fetchone()[0] is None                              # still uncaptioned
+    finally:
+        conn.close()
+
+    # A further run is a no-op against the VLM — the unit is capped.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert vision.calls == MAX_INGEST_ATTEMPTS
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT attempts FROM failed_ingests"
+        ).fetchone()[0] == MAX_INGEST_ATTEMPTS               # not bumped past cap
+    finally:
+        conn.close()
+
+
+def test_writer_persist_parse_dedupes_shared_image(isolated_project, tmp_path):
+    """A second document referencing an already-recorded image reuses the row
+    (one images row, two joins) and never resets its caption."""
+    from bartleby.ingest.writer import ParsedDocument, ParsedImage, Writer
+
+    def _img(page):
+        return ParsedImage(
+            hash="shared", archive_path=tmp_path / "i.jpg", width=100, height=80,
+            page_number=page, image_index_on_page=1, jpeg_bytes=b"x",
+        )
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        doc_a = writer.persist_parse(ParsedDocument(
+            file_hash="a", file_name="a.pdf", archive_path=tmp_path / "a.pdf",
+            page_count=1, token_count=1, document_chunks=[], images=[_img(1)],
+        ))
+        # Caption the shared image as if document A processed it.
+        conn.cursor().execute(
+            "UPDATE images SET analysis_json='{}', analysis_model='m' "
+            "WHERE file_hash='shared'"
+        )
+        doc_b = writer.persist_parse(ParsedDocument(
+            file_hash="b", file_name="b.pdf", archive_path=tmp_path / "b.pdf",
+            page_count=1, token_count=1, document_chunks=[], images=[_img(2)],
+        ))
+
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_images"
+        ).fetchone()[0] == 2
+        # The shared image is already captioned, so neither doc sees it pending.
+        assert writer.uncaptioned_images(doc_a) == []
+        assert writer.uncaptioned_images(doc_b) == []
+    finally:
+        conn.close()
+
+
+def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
+    """record_failure upserts (bumping attempts), failures() reports them with
+    the capped flag, and clear_failure removes the row."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        assert writer.attempts("h", "parse") == 0
+        for _ in range(MAX_INGEST_ATTEMPTS):
+            writer.record_failure("h", "doc.pdf", "parse", RuntimeError("boom"))
+        assert writer.attempts("h", "parse") == MAX_INGEST_ATTEMPTS
+
+        [failure] = writer.failures()
+        assert failure.stage == "parse"
+        assert failure.file_name == "doc.pdf"
+        assert "boom" in failure.error
+        assert failure.capped is True
+
+        writer.clear_failure("h", "parse")
+        assert writer.attempts("h", "parse") == 0
+        assert writer.failures() == []
     finally:
         conn.close()
