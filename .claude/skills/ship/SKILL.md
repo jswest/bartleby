@@ -4,8 +4,9 @@ description: >-
   Implement a GitHub issue end-to-end the way this repo expects: sync the base
   branch, sibling worktree, pre-commit gates, conflict reconciliation, and a PR
   that closes the issue. Invoke as `/ship #<N>` (or `/ship <N>`); add `onto
-  #<omnibus>` to ship onto an omnibus branch instead of `main`. Use whenever
-  asked to ship, implement, or do a numbered issue in bartleby.
+  #<omnibus>` to ship onto an omnibus branch instead of `main`, or pass an omnibus
+  issue alone to open its promotion PR to `main`. Use whenever asked to ship,
+  implement, or do a numbered issue in bartleby.
 ---
 
 # ship — issue → tested PR
@@ -14,7 +15,9 @@ Argument is one GitHub issue number (`#118`, `118`), optionally followed by any
 of three opt-in tokens — `onto #<omnibus>`, `with-playwright`, and `skip-tests`
 (e.g. `/ship #134 with-playwright`, `/ship #170 onto #169 skip-tests`, in any
 order) — see below. Run the steps in order. Two hard stops are marked **PAUSE**:
-do not pass them without the user's OK.
+do not pass them without the user's OK. One exception: if the lone issue is itself
+an *omnibus issue* (no `onto`), `/ship` runs **omnibus-promotion mode** — opening
+the omnibus → `main` PR instead of implementing anything (see below).
 
 Throughout, **base** is the integration branch this issue targets: `main` by
 default, or the omnibus branch when `onto #<omnibus>` is given (see below).
@@ -50,8 +53,48 @@ branch name. When present:
   **"Part of #<omnibus>"** with **no `Closes` keyword**; sub-issues close when the
   omnibus → main PR (which enumerates `Closes #<N>` for the bundle) merges. Do not
   put `Closes #<N>` on a sub-PR in this mode.
+- **Keep the omnibus issue's tracking current.** Promotion mode draws its `Closes
+  #<N>` manifest from the omnibus issue's hand-curated sub-issue checklist, which
+  drifts unless each sub-ship updates it. So when the sub-PR is opened (step 11),
+  edit the omnibus issue (`#<omnibus>`) to reflect this landing: tick this issue's
+  box `[ ]→[x]`, annotate it with the sub-PR number and target in the existing
+  style (`— … (#NNN)`), and flip any dependency/order marker the omnibus tracks.
+  **Edit only the one checklist line, by anchored match** — never free-form rewrite
+  the hand-curated body — and show the proposed issue diff at the step-11 PAUSE next
+  to the PR draft. If the omnibus issue has no checklist line referencing `#<N>`,
+  **report it and leave the body untouched** rather than invent tracking. (Ticking
+  on sub-PR-open is safe — promotion reconciles `Closes` against actually-merged
+  PRs.)
 - The guard hook still protects `main` only; the omnibus branch is not
   hook-protected. Composes with `with-playwright` and `skip-tests`.
+
+**Omnibus-promotion mode (`/ship #<omnibus>`, no `onto`).** When the lone argument
+is itself an *omnibus issue* — its title parses as `vX.Y.Z — …` **and** an
+`omnibus/vX.Y.Z` branch exists with commits ahead of `origin/main` — `/ship`
+implements nothing (the bundle already landed on that branch). It opens the
+**omnibus → `main` PR** that promotes the whole bundle. If the title looks
+omnibus-shaped but the branch is missing or not ahead of `main`, **report and
+stop** — don't guess. The flow is reduced:
+- **Steps 1–2 only.** Preconditions (clean main) and sync (`git fetch origin`, ff
+  `main`). **No worktree, no code, no per-commit gates, no reconcile** — steps
+  3–10 are N/A.
+- **Build the `Closes` enumeration.** Take the bundle's issue numbers from the
+  omnibus issue's sub-issue checklist, then **reconcile against the sub-PRs
+  actually merged into the branch**
+  (`gh pr list --base omnibus/vX.Y.Z --state merged --json number,title`, cross-
+  checked with `git log origin/main..origin/omnibus/vX.Y.Z`). Emit `Closes #<N>`
+  for every sub-issue whose work is on the branch. If the checklist and the
+  merged-PR set disagree, **report the discrepancy** and let the user reconcile — a
+  hand-edit slip must not silently add or drop a `Closes`.
+- **PAUSE — PR (step 11).** Same PAUSE contract as step 11, but the body is the
+  `Closes #<N>` list + a one-line bundle summary and the diff is `git diff --stat
+  origin/main...origin/omnibus/vX.Y.Z`. Then `gh pr create --base main --head
+  omnibus/vX.Y.Z`. **Do not merge** — the human merge auto-closes the whole bundle
+  (every sub-issue and the omnibus issue).
+- **Cleanup (step 12).** After the user confirms the merge, there's no worktree to
+  remove; just `git pull --ff-only origin main` in the main checkout. Cutting the
+  release is the separate, later `/release` act on `main` — promotion PR → human
+  merge → `/release`, never folded into this step.
 
 **Optional `with-playwright`.** The argument may carry a `with-playwright` token
 after the issue number (only that exact token). It turns on a visual-verification
@@ -168,7 +211,8 @@ origin/<base>...HEAD`) and wait for their OK. Then push and `gh pr create`.
 - Normal case: target `main` (the default) with a `Closes #<N>` line.
 - Under `onto`: pass `--base <omnibus-branch>`, and write **"Part of #<omnibus>"**
   with **no `Closes`** (see the flag note) — the sub-issue closes at the omnibus →
-  main merge, not here.
+  main merge, not here. Also show and apply the omnibus-issue tracking edit here
+  (see *Keep the omnibus issue's tracking current*).
 
 ## 12. Cleanup (only after the user confirms the merge)
 From the main checkout: `git worktree remove ../bartleby-issue-<N>-<slug>`,

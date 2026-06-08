@@ -114,9 +114,19 @@ new long-lived branch. From there the whole loop retargets from `main` to the
 omnibus branch: worktree base, collision scan, reconcile, and PR base. The sub-PR
 says *"Part of #169"* rather than `Closes #170`, because GitHub only auto-closes
 from the default branch; the sub-issues all close when the omnibus → main PR (which
-lists every `Closes #<N>`) finally merges. The `main`-only guard rail is unchanged,
-so the omnibus branch itself isn't hook-protected — keeping work on sub-PRs is
-discipline, not enforcement. Composes with the two tokens above.
+lists every `Closes #<N>`) finally merges. As it opens that sub-PR, Claude ticks
+the issue's box on the omnibus checklist and notes the PR number, so the bundle's
+tracking stays current instead of drifting. The `main`-only guard rail is
+unchanged, so the omnibus branch itself isn't hook-protected — keeping work on
+sub-PRs is discipline, not enforcement. Composes with the two tokens above.
+
+When the bundle is ready, `/ship #169` — the omnibus issue **on its own, no
+`onto`** — opens that omnibus → main PR. Claude recognizes the omnibus issue (a
+`vX.Y.Z — …` title with a branch ahead of `main`), skips the implement machinery —
+the work already landed on the branch — and drafts the PR with a `Closes #<N>`
+line for every sub-issue, cross-checked against the PRs actually merged onto the
+branch. You approve and merge it; that one merge closes the whole bundle. Cutting
+the release is the later, separate `/release` step.
 
 ### The helper agents
 
