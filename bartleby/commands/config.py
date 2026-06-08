@@ -11,6 +11,7 @@ from bartleby.lib.consts import (
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
@@ -246,13 +247,22 @@ def main():
                 help_text="Caps how much document text is sent to the summarizer; "
                 "longer documents are truncated.\nHigher = more context, higher cost.",
             )
+            config["summarize_workers"] = _prompt_positive_int(
+                "Summarize workers",
+                int(existing.get("summarize_workers", DEFAULT_SUMMARIZE_WORKERS)),
+                help_text="How many documents summarize in parallel after parsing "
+                "— LLM calls are network-bound, so this runs separately from parse "
+                "workers.\nRaise it for a rate-tolerant cloud provider; keep it low "
+                "for a single-GPU local Ollama, which serializes anyway.",
+            )
         else:
             config.pop("temperature", None)
             config.pop("max_summarize_tokens", None)
+            config.pop("summarize_workers", None)
     else:
         # No LLM → no summarization.
         for k in ("provider", "model", "summary_depth", "temperature",
-                 "max_summarize_tokens", "ollama_base_url",
+                 "max_summarize_tokens", "summarize_workers", "ollama_base_url",
                  "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
             config.pop(k, None)
         config["summary_depth"] = "none"

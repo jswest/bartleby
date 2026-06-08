@@ -54,3 +54,11 @@ PER_WORKER_GB = 2.5
 # requests anyway, while a rate-limited cloud provider tolerates a few in flight.
 # Override with `caption_workers` in config.
 DEFAULT_CAPTION_WORKERS = 4
+
+# Summarize-pool sizing (#188). Summarization is the heaviest ingest stage (the
+# #177 baseline put it at ~59% of wall-clock) and, like captioning, it's a run of
+# network/IO-bound LLM calls rather than RAM-bound parse work — so it gets the
+# same fixed-default treatment, decoupled from parse-worker sizing. 4 matches
+# `caption_workers`: a single-GPU local Ollama serializes anyway, a rate-limited
+# cloud provider tolerates a few in flight. Override with `summarize_workers`.
+DEFAULT_SUMMARIZE_WORKERS = 4

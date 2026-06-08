@@ -27,12 +27,13 @@ documents are unwrapped and routed individually.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import shutil
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -77,6 +78,7 @@ from bartleby.ingest.writer import (
     ParsedDocument,
     ParsedImage,
     PendingImage,
+    PendingSummary,
     Writer,
 )
 from bartleby.lib import console
@@ -87,6 +89,7 @@ from bartleby.lib.consts import (
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
     DOCLING_HF_REPOS,
@@ -644,8 +647,8 @@ def _parse_document(
 def _is_complete(writer: Writer, document_id: int) -> bool:
     """Per-unit drain completeness: parsed ∧ every image captioned.
 
-    Summaries are settled by their own pass (:func:`_summarize_documents`),
-    not here — a document missing only its summary is "complete" for the
+    Summaries are settled by their own pass (:func:`_summarize_all`), not
+    here — a document missing only its summary is "complete" for the
     parse/caption drain and is picked up later from the DB by that pass.
     """
     return not writer.uncaptioned_images(document_id)
@@ -780,53 +783,120 @@ def _caption_all(
             _advance()
 
 
-def _summarize_if_missing(
+def _summarize_all(
     writer: Writer,
-    document_id: int,
-    file_hash: str,
-    file_name: str,
+    pending: list[PendingSummary],
     *,
-    summaries_enabled: bool,
     llm_provider: Provider | None,
     llm_model: str | None,
     temperature: float,
     max_summarize_tokens: int,
-    on_stage: Callable[[str], None] | None = None,
-) -> bool:
-    """Summarize a document if it has none yet. Returns True if a summary was
-    owed but did not land (failed this run or capped)."""
-    if not summaries_enabled or writer.summary_exists(document_id):
-        return False
-    if writer.summarizable_chunk_count(document_id) == 0:
-        # No indexed chunks → nothing real to summarize. Handing the model trace
-        # text (page labels, form-feed separators from an image-only/sub-threshold
-        # doc) makes it confabulate (issue #80). Counts as settled; surface it.
-        console.warn(
-            f"{file_name}: no summary — no extractable content (0 chunks). "
-            f"The document may be image-only and need OCR/re-ingest."
+    summarize_workers: int,
+    timings: bool,
+    on_progress: Callable[[int, int], None] | None,
+) -> tuple[int, dict[int, tuple[str, float]]]:
+    """Phase 3: summarize every document still owing one, concurrently (#188).
+
+    Mirrors the caption stage (#166): the network-bound ``summarize()`` LLM call
+    fans out across ``summarize_workers`` threads while the Writer's persist stays
+    on this thread, its connection's sole owner. Capped documents are surfaced as
+    still-incomplete rather than retried; a single failure never tears down the
+    pass. The ``pending`` work-list is :meth:`Writer.documents_needing_summary`,
+    which already excludes summarized and zero-chunk docs (issue #80), so the only
+    main-thread guard left is the cap check.
+
+    One deliberate difference from captioning: a caption's payload is an on-disk
+    image the worker reads itself, but a summary's payload is assembled from the
+    DB by ``writer.summary_input`` — a Writer-owned read that must stay on this
+    thread. So inputs are fetched here and only ``summarize_workers`` are kept in
+    flight, holding the old sequential pass's flat memory footprint instead of
+    materializing every document's text at once.
+
+    Returns ``(incomplete_count, {document_id: (file_name, seconds)})`` — the
+    second map is populated only under ``timings`` (which forces one worker, so
+    the per-document seconds stay a clean sequential baseline).
+    """
+    total = len(pending)
+    done = 0
+    incomplete = 0
+    times: dict[int, tuple[str, float]] = {}
+    if on_progress is not None:
+        on_progress(0, total)
+
+    def _advance() -> None:
+        nonlocal done
+        done += 1
+        if on_progress is not None:
+            on_progress(done, total)
+
+    # Capped docs (failed MAX_INGEST_ATTEMPTS× already) are surfaced, not retried.
+    work: list[PendingSummary] = []
+    for ps in pending:
+        if writer.is_capped(ps.file_hash, "summary"):
+            console.warn(
+                f"{ps.file_name}: skipping summary — failed "
+                f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
+            )
+            incomplete += 1
+            _advance()
+        else:
+            work.append(ps)
+
+    def _persist(ps: PendingSummary, result) -> None:
+        writer.persist_summary(
+            ps.document_id, result, _summary_chunks(result.text)
         )
-        return False
-    if writer.is_capped(file_hash, "summary"):
-        console.warn(
-            f"{file_name}: skipping summary — failed {MAX_INGEST_ATTEMPTS}× "
-            f"already; not retrying."
-        )
-        return True
-    try:
-        if on_stage is not None:
-            on_stage("summarizing")
-        result = summarize(
-            writer.summary_input(document_id),
-            provider=llm_provider, model=llm_model,
+        writer.clear_failure(ps.file_hash, "summary")
+
+    def _fail(ps: PendingSummary, exc: Exception) -> None:
+        nonlocal incomplete
+        console.warn(f"{ps.file_name}: summary failed: {exc}")
+        writer.record_failure(ps.file_hash, ps.file_name, "summary", exc)
+        incomplete += 1
+
+    def _summarize(text: str):
+        return summarize(
+            text, provider=llm_provider, model=llm_model,
             temperature=temperature, max_summarize_tokens=max_summarize_tokens,
         )
-        writer.persist_summary(document_id, result, _summary_chunks(result.text))
-        writer.clear_failure(file_hash, "summary")
-        return False
-    except Exception as e:
-        console.warn(f"{file_name}: summary failed: {e}")
-        writer.record_failure(file_hash, file_name, "summary", e)
-        return True
+
+    if summarize_workers <= 1:
+        # Inline: one document at a time on this thread. Same summarize/persist
+        # calls as the pool, but with clean per-document seconds for --timings.
+        for ps in work:
+            t0 = time.perf_counter() if timings else None
+            try:
+                _persist(ps, _summarize(writer.summary_input(ps.document_id)))
+            except Exception as e:
+                _fail(ps, e)
+            if t0 is not None:
+                times[ps.document_id] = (ps.file_name, time.perf_counter() - t0)
+            _advance()
+        return incomplete, times
+
+    # Pooled: keep at most ``summarize_workers`` inputs in flight (see docstring) —
+    # fetch each document's text on this thread, then top up one as each completes.
+    it = iter(work)
+    with ThreadPoolExecutor(max_workers=summarize_workers) as pool:
+        in_flight = {
+            pool.submit(_summarize, writer.summary_input(ps.document_id)): ps
+            for ps in itertools.islice(it, summarize_workers)
+        }
+        while in_flight:
+            finished, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                ps = in_flight.pop(fut)
+                try:
+                    _persist(ps, fut.result())
+                except Exception as e:
+                    _fail(ps, e)
+                _advance()
+                nxt = next(it, None)
+                if nxt is not None:
+                    in_flight[
+                        pool.submit(_summarize, writer.summary_input(nxt.document_id))
+                    ] = nxt
+    return incomplete, times
 
 
 # -------------------- parse pool: requests, config, worker fn --------------------
@@ -1047,6 +1117,25 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
     return max(1, configured)
 
 
+def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
+    """Resolve how many documents summarize concurrently in the post-parse pass.
+
+    Like captioning (and unlike RAM-bound parse workers), summarization is
+    network/IO-bound, so this is a plain configured count defaulting to
+    ``DEFAULT_SUMMARIZE_WORKERS``. ``--timings`` forces 1 for a clean per-document
+    baseline, meaningless once summaries overlap (same rationale as the others).
+    """
+    configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
+    if timings:
+        if configured > 1:
+            console.warn(
+                "--timings summarizes sequentially (summarize_workers=1) for a "
+                "clean baseline."
+            )
+        return 1
+    return max(1, configured)
+
+
 def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, ...]:
     """HF repos this ingest run will load, used to gate offline mode (#88).
 
@@ -1229,6 +1318,7 @@ def main(
 
         max_workers = _resolve_max_workers(config, timings=timings) if to_parse else 1
         caption_workers = _resolve_caption_workers(config, timings=timings)
+        summarize_workers = _resolve_summarize_workers(config, timings=timings)
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
@@ -1343,43 +1433,41 @@ def main(
                         ),
                     )
 
-            # ---- Phase 3: summarize as its own pass (#167) -------------------
+            # ---- Phase 3: summarize as its own concurrent pass (#167, #188) --
             # Over whatever the DB still lacks — keeps the slow LLM summary off the
             # parse/caption critical path; resume falls out for free, since the
-            # work-list is simply what's missing.
+            # work-list is simply what's missing. Like captioning, it fans out
+            # across its own workers (#188) with the Writer's persist on this
+            # thread.
             if summaries_enabled:
                 pending = writer.documents_needing_summary()
                 if pending:
                     stask = bar.add_task(
                         "summaries", total=len(pending), label="Summarizing",
                     )
-                    for ps in pending:
-                        bar.update(
-                            stask,
-                            label=f"Summarizing "
-                                  f"{console.truncate_filename(ps.file_name)}",
-                        )
-                        sum_t = time.perf_counter()
-                        owed = _summarize_if_missing(
-                            writer, ps.document_id, ps.file_hash, ps.file_name,
-                            summaries_enabled=summaries_enabled,
-                            llm_provider=llm_provider, llm_model=llm_model,
-                            temperature=temperature,
-                            max_summarize_tokens=max_summarize_tokens,
-                        )
-                        if owed:
-                            incomplete_count += 1
-                        if timings:
+
+                    def _summary_progress(done: int, total: int) -> None:
+                        bar.update(stask, completed=done, total=total)
+
+                    owed, summarize_times = _summarize_all(
+                        writer, pending,
+                        llm_provider=llm_provider, llm_model=llm_model,
+                        temperature=temperature,
+                        max_summarize_tokens=max_summarize_tokens,
+                        summarize_workers=summarize_workers, timings=timings,
+                        on_progress=_summary_progress,
+                    )
+                    incomplete_count += owed
+                    if timings:
+                        for doc_id, (fname, secs) in summarize_times.items():
                             name, rec = doc_timings.get(
-                                ps.document_id,
-                                (ps.file_name, timing.DocTiming(page_count=None)),
+                                doc_id,
+                                (fname, timing.DocTiming(page_count=None)),
                             )
                             rec.stages["summarize"] = (
-                                rec.stages.get("summarize", 0.0)
-                                + (time.perf_counter() - sum_t)
+                                rec.stages.get("summarize", 0.0) + secs
                             )
-                            doc_timings[ps.document_id] = (name, rec)
-                        bar.advance(stask)
+                            doc_timings[doc_id] = (name, rec)
 
             if incomplete_count:
                 console.warn(

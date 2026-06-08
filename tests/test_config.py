@@ -48,6 +48,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
         "one-shot",            # Summary depth
         "0",                   # Temperature
         "50000",               # Max summarize tokens
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
@@ -110,6 +111,7 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
@@ -180,6 +182,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",
@@ -216,6 +219,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "one-shot",
         "0",
         "50000",
+        "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",

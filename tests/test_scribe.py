@@ -619,6 +619,207 @@ def test_resolve_caption_workers_defaults_and_timings():
         {"caption_workers": 9}, timings=True) == 1
 
 
+def _summary_config(**overrides):
+    """A summaries-on config for the LLM-backed ingest tests."""
+    return {
+        "summary_depth": "one-shot",
+        "provider": "anthropic", "model": "m",
+        "temperature": 0.0, "max_summarize_tokens": 50_000,
+        **overrides,
+    }
+
+
+def test_scribe_summarizes_many_documents_concurrently_in_one_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#188: summarization is its own concurrent pass. Several documents parsed in
+    one run all get summarized through the summarize thread pool — not just the
+    first — with the DB write staying on the single Writer thread."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: _summary_config(summarize_workers=3),
+    )
+    stub = _StubProvider(text="summary body")
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    srcs = [
+        str(_write_txt(tmp_path / f"doc{i}.txt", f"Body of document {i}."))
+        for i in range(4)
+    ]
+    scribe.main(project="test_proj", files=srcs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        # Every document summarized — race-free DB check on the writer thread.
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 4
+    finally:
+        conn.close()
+
+
+def test_scribe_one_summary_failure_does_not_block_the_rest(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A single document whose summarize call raises is recorded as a summary
+    failure; the others in the same concurrent run still summarize — one bad
+    document never tears down the pass."""
+    import threading
+
+    class _OneFailLLM:
+        name = "one-fail-llm"
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def analyze_image(self, *a, **k):  # protocol completeness
+            raise NotImplementedError
+
+        def summarize(self, document_text, *, model, temperature):
+            # Lock so the "first call fails" rule is deterministic under the pool.
+            with self._lock:
+                self.calls += 1
+                first = self.calls == 1
+            if first:
+                raise RuntimeError("LLM unavailable")
+            return DocumentSummary(
+                title="t", description="d", text="ok", authored_date=None,
+            )
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: _summary_config(summarize_workers=3),
+    )
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailLLM(),
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    srcs = [
+        str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
+        for i in range(3)
+    ]
+    scribe.main(project="test_proj", files=srcs)
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Exactly one document left without a summary (the failed call); two land.
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT stage FROM failed_ingests"
+        ).fetchone()[0] == "summary"
+    finally:
+        conn.close()
+
+
+def test_resolve_summarize_workers_defaults_and_timings():
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
+
+    # Default when unset or zero; explicit value respected.
+    assert scribe_module._resolve_summarize_workers(
+        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 9}, timings=False) == 9
+    # --timings forces a sequential baseline regardless of config.
+    assert scribe_module._resolve_summarize_workers(
+        {"summarize_workers": 9}, timings=True) == 1
+
+
+def test_summarize_all_progress_callback_fires_per_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """The summarize pass invokes on_progress(0, N) then once per document."""
+    from bartleby.commands import scribe as scribe_module
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="h", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+
+        pending = writer.documents_needing_summary()
+        seen: list[tuple[int, int]] = []
+        owed, _times = scribe_module._summarize_all(
+            writer, pending,
+            llm_provider=_StubProvider(), llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=1, timings=False,
+            on_progress=lambda done, total: seen.append((done, total)),
+        )
+    finally:
+        conn.close()
+
+    assert seen, "expected at least one progress callback for one document"
+    assert seen[0] == (0, 1)
+    assert seen[-1] == (1, 1)
+    assert owed == 0
+
+
+def test_summarize_all_skips_capped_document(
+    isolated_project, tmp_path, mock_embed
+):
+    """A document already capped on the summary stage is surfaced as owed and
+    never re-handed to the model — counts incomplete, no provider call."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = scribe_module._parse_document(
+            txt, ".txt", file_hash="caphash", file_name="doc.txt",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+        writer.persist_parse(parsed)
+        # Cap the summary stage so the pass must skip rather than retry.
+        for _ in range(MAX_INGEST_ATTEMPTS):
+            writer.record_failure("caphash", "doc.txt", "summary", RuntimeError("x"))
+
+        stub = _StubProvider()
+        owed, _times = scribe_module._summarize_all(
+            writer, writer.documents_needing_summary(),
+            llm_provider=stub, llm_model="m",
+            temperature=0.0, max_summarize_tokens=1000,
+            summarize_workers=2, timings=False, on_progress=None,
+        )
+    finally:
+        conn.close()
+
+    assert owed == 1            # surfaced as still-incomplete
+    assert stub.calls == 0      # never handed to the model
+
+
 def test_scribe_ingests_standalone_image_file(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -1210,10 +1411,10 @@ end
 """
 
 
-def test_summarize_if_missing_skips_zero_chunk_document(isolated_project):
-    """A document with no indexed chunks is never handed to the summarizer —
-    its only text would be trace garbage that makes the model confabulate
-    (issue #80). It counts as settled (returns False, no provider call)."""
+def test_documents_needing_summary_excludes_zero_chunk_document(isolated_project):
+    """A document with no indexed chunks is never offered to the summarize pass —
+    its only text would be trace garbage that makes the model confabulate (issue
+    #80). The work-list excludes it, so it's never handed to the model."""
     conn = open_db("test_proj")
     try:
         conn.cursor().execute(
@@ -1222,21 +1423,8 @@ def test_summarize_if_missing_skips_zero_chunk_document(isolated_project):
             "VALUES (?, ?, ?, ?, ?)",
             ("maphash", "annotated-map.pdf", "/tmp/map.pdf", 1, 3),
         )
-        doc_id = conn.last_insert_rowid()
-
-        stub = _StubProvider()
-        owed = scribe._summarize_if_missing(
-            scribe.Writer(conn), doc_id, "maphash", "annotated-map.pdf",
-            summaries_enabled=True, llm_provider=stub, llm_model="m",
-            temperature=0.0, max_summarize_tokens=1000, on_stage=None,
-        )
-
-        # Settled, not owed; provider never called, nothing persisted.
-        assert owed is False
-        assert stub.calls == 0
-        assert conn.cursor().execute(
-            "SELECT COUNT(*) FROM summaries"
-        ).fetchone()[0] == 0
+        # No chunks → the document owes no summarizable work and isn't pending.
+        assert scribe.Writer(conn).documents_needing_summary() == []
     finally:
         conn.close()
 
