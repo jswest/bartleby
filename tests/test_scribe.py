@@ -240,6 +240,58 @@ def test_scribe_writes_summary_when_provider_configured(
         conn.close()
 
 
+def test_scribe_summarizes_existing_document_on_later_run(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Summarization is its own pass over whatever the DB still lacks (issue
+    #167): a document parsed on an earlier run with summaries off is summarized
+    on a later run with summaries on — without being re-parsed. The pass picks
+    it up from the DB even though classification skips it as already ingested."""
+    src = _write_txt(tmp_path / "doc.txt", "Hello world summarized.")
+
+    # First run: no summary provider configured → parse only, no summary.
+    scribe.main(project="test_proj", files=str(src))
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # Second run: summaries now configured. The file is already parsed (so it's
+    # classified as skipped), yet the summarize pass still summarizes it.
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "provider": "anthropic",
+            "model": "test-model", "temperature": 0.0,
+            "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    scribe.main(project="test_proj", files=str(src))
+    assert stub.calls == 1  # summarized exactly once
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # Not re-parsed: still a single document row, now with one summary.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -557,9 +609,10 @@ def test_scribe_persists_page_number_for_pdfplumber_chunks(
 def test_parse_document_stage_callback_fires_extract_then_embed(
     isolated_project, tmp_path, mock_embed
 ):
-    """Parse emits its stages in order: extracting → embedding. (Caption and
-    summarize stages now fire downstream in the main-process drain, not here —
-    parse runs in a pool worker and only carries the parse-side stages.)"""
+    """Parse emits its stages in order: extracting → embedding. (Caption fires
+    downstream in the main-process drain and summarize in its own later pass —
+    not here; parse runs in a pool worker and only carries the parse-side
+    stages.)"""
     from bartleby.commands import scribe as scribe_module
 
     pdf = tmp_path / "doc.pdf"
@@ -657,7 +710,7 @@ def test_document_id_for_returns_parsed_document(
 
 
 def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
-    """A parsed text doc (chunks, no images, summaries off) is complete."""
+    """A parsed text doc (chunks, no images) is drain-complete — nothing to caption."""
     src = _write_txt(tmp_path / "doc.txt", "Some content for ingestion.")
     scribe.main(project="test_proj", files=str(src))
 
@@ -667,7 +720,7 @@ def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
             "SELECT document_id FROM documents"
         ).fetchone()[0]
         writer = scribe.Writer(conn)
-        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert scribe._is_complete(writer, doc_id)
     finally:
         conn.close()
 
@@ -699,7 +752,7 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             (doc_id, image_id, None, 0),
         )
         writer = scribe.Writer(conn)
-        assert not scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert not scribe._is_complete(writer, doc_id)
         assert [pi.image_id for pi in writer.uncaptioned_images(doc_id)] == [image_id]
 
         # Caption it → complete, and no longer pending.
@@ -707,8 +760,53 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             "UPDATE images SET analysis_json = '{}', analysis_model = 'm' "
             "WHERE image_id = ?", (image_id,),
         )
-        assert scribe._is_complete(writer, doc_id, summaries_enabled=False)
+        assert scribe._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
+    finally:
+        conn.close()
+
+
+def test_documents_needing_summary_filters_summarized_and_empty(isolated_project):
+    """The summarize work-list (issue #167) is documents with indexed chunks and
+    no summary row; already-summarized docs and zero-chunk docs (nothing
+    extractable) are both excluded."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+
+        def _add_doc(file_hash, file_name):
+            cur.execute(
+                "INSERT INTO documents (file_hash, file_name, file_path, "
+                "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+                (file_hash, file_name, f"/tmp/{file_name}", None, 0),
+            )
+            return conn.last_insert_rowid()
+
+        def _chunk():
+            return [ChunkInput(
+                text="body", embedding=[0.0] * EMBEDDING_DIM, chunk_index=0,
+            )]
+
+        # Doc A: has a chunk, no summary → owed.
+        doc_a = _add_doc("a", "a.txt")
+        insert_document_chunks(conn, doc_a, _chunk())
+        # Doc B: has a chunk but already summarized → excluded.
+        doc_b = _add_doc("b", "b.txt")
+        insert_document_chunks(conn, doc_b, _chunk())
+        cur.execute(
+            "INSERT INTO summaries (document_id, title, description, text, model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (doc_b, "t", "d", "body", "m"),
+        )
+        # Doc C: no chunks at all → excluded (nothing to summarize).
+        _add_doc("c", "c.txt")
+
+        owed = scribe.Writer(conn).documents_needing_summary()
+        assert [p.document_id for p in owed] == [doc_a]
+        assert owed[0].file_name == "a.txt"
+        assert owed[0].file_hash == "a"
     finally:
         conn.close()
 
@@ -1586,6 +1684,43 @@ def test_scribe_timings_emits_aggregate_json(
     # parse is the one stage every doc passes through (extracting → parse).
     assert "parse" in agg["stages"]
     assert agg["stages"]["parse"]["total_s"] >= 0
+
+
+def test_scribe_timings_includes_decoupled_summarize_stage(
+    isolated_project, tmp_path, mock_embed, monkeypatch, capsys
+):
+    """--timings folds the decoupled summarize pass back into each document's
+    record: the aggregate carries a `summarize` stage, and the doc count isn't
+    inflated by the second pass (one merged record per document, issue #167)."""
+    import json
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "provider": "anthropic",
+            "model": "test-model", "temperature": 0.0,
+            "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    _write_txt(tmp_path / "a.txt", "First doc with some words.")
+    _write_txt(tmp_path / "b.txt", "Second doc with other words.")
+    scribe.main(project="test_proj", files=str(tmp_path), timings=True)
+
+    assert stub.calls == 2
+    agg = json.loads(capsys.readouterr().out)
+    assert agg["docs"] == 2  # one record per doc, not doubled by the pass
+    assert "summarize" in agg["stages"]
+    assert agg["stages"]["summarize"]["total_s"] >= 0
 
 
 def test_scribe_without_timings_writes_nothing_to_stdout(

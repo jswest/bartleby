@@ -1,13 +1,16 @@
 """`bartleby scribe` — restartable ingest pipeline over a single writer.
 
-Per source file: hash → (parse → persist → caption → summarize), where parse
-produces a result and a single :class:`~bartleby.ingest.writer.Writer` drains it
-to SQLite. The three post-parse units commit independently, so ingest resumes by
-what's *missing*: a run that dies mid-captioning leaves the parse durable and
-the next run re-captions only the images that never landed (it never re-parses,
-never re-captions finished images). Deterministically-failing units are recorded
-in ``failed_ingests`` and capped, not retried forever — and surfaced, so a
-skipped unit never reads as a green one.
+Per source file: hash → (parse → persist → caption), where parse produces a
+result and a single :class:`~bartleby.ingest.writer.Writer` drains it to SQLite;
+summarization then runs as its own pass over every document still owing one,
+once the parse/caption drain is done — kept off the parse path so it can't
+throttle the parse workers (issue #167). Every unit commits independently, so
+ingest resumes by what's *missing*: a run that dies mid-captioning leaves the
+parse durable and the next run re-captions only the images that never landed
+(it never re-parses, never re-captions finished images) and then summarizes
+whatever lacks a summary. Deterministically-failing units are recorded in
+``failed_ingests`` and capped, not retried forever — and surfaced, so a skipped
+unit never reads as a green one.
 
 All chunk writes go through the ``bartleby.db.chunks`` typed helpers via the
 Writer; image rows additionally get a join entry in ``document_images``.
@@ -625,21 +628,14 @@ def _parse_document(
 # -------------------- per-file orchestration --------------------
 
 
-def _is_complete(writer: Writer, document_id: int, *, summaries_enabled: bool) -> bool:
-    """Per-unit completeness: parsed ∧ every image captioned ∧ summary settled.
+def _is_complete(writer: Writer, document_id: int) -> bool:
+    """Per-unit drain completeness: parsed ∧ every image captioned.
 
-    "Summary settled" means a summary row exists, summaries are disabled, or the
-    document has no summarizable content (0 chunks → nothing to summarize).
+    Summaries are settled by their own pass (:func:`_summarize_documents`),
+    not here — a document missing only its summary is "complete" for the
+    parse/caption drain and is picked up later from the DB by that pass.
     """
-    if writer.uncaptioned_images(document_id):
-        return False
-    if (
-        summaries_enabled
-        and not writer.summary_exists(document_id)
-        and writer.summarizable_chunk_count(document_id) > 0
-    ):
-        return False
-    return True
+    return not writer.uncaptioned_images(document_id)
 
 
 def _caption_missing(
@@ -710,7 +706,7 @@ def _summarize_if_missing(
     llm_model: str | None,
     temperature: float,
     max_summarize_tokens: int,
-    on_stage: Callable[[str], None] | None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> bool:
     """Summarize a document if it has none yet. Returns True if a summary was
     owed but did not land (failed this run or capped)."""
@@ -846,13 +842,14 @@ def _classify(
     writer: Writer,
     sources: list[tuple[Path, str]],
     *,
-    summaries_enabled: bool,
     vision_enabled: bool,
 ) -> tuple[list[ParseRequest], list[_ResumeItem], list[str]]:
-    """Bucket each source by what it still needs, all from DB state: already
-    complete (skip), parsed-but-incomplete (resume — no parse), or never parsed
-    (hand to the pool). Hashing + the resume lookups run here on the main
-    process; only the parse bucket crosses to workers."""
+    """Bucket each source by what the parse/caption drain still needs, all from
+    DB state: already parsed+captioned (skip), parsed-but-uncaptioned (resume —
+    no parse), or never parsed (hand to the pool). Summaries are not considered
+    here — they're settled by their own pass over whatever the DB still lacks.
+    Hashing + the resume lookups run here on the main process; only the parse
+    bucket crosses to workers."""
     to_parse: list[ParseRequest] = []
     to_resume: list[_ResumeItem] = []
     skipped: list[str] = []
@@ -860,7 +857,7 @@ def _classify(
         file_hash = _hash_file(path)
         document_id = writer.document_id_for(file_hash)
         if document_id is not None:
-            if _is_complete(writer, document_id, summaries_enabled=summaries_enabled):
+            if _is_complete(writer, document_id):
                 skipped.append(path.name)
             else:
                 to_resume.append(_ResumeItem(document_id, path.name, file_hash))
@@ -1110,12 +1107,11 @@ def main(
         writer.begin_run(config_snapshot)
 
         # Classify up front (hash + resume lookups, on this process): only files
-        # that have never been parsed cross to the workers. Parsed-but-incomplete
+        # that have never been parsed cross to the workers. Parsed-but-uncaptioned
         # docs resume on the main process — they need no parse, just the missing
-        # captions/summary.
+        # captions. Summaries are settled afterwards by their own pass.
         to_parse, to_resume, skipped = _classify(
             writer, sources,
-            summaries_enabled=summaries_enabled,
             vision_enabled=parse_config.vision_enabled,
         )
         SKIP_DISPLAY_LIMIT = 3
@@ -1133,7 +1129,11 @@ def main(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
             )
 
-        timing_records: list[timing.DocTiming] = []
+        # --timings: one record per document, keyed by document_id and built
+        # across both passes — parse/embed/caption in the drain, summarize in
+        # the summarize pass — then emitted once at the end. Insertion order is
+        # drain order. (Only populated under --timings, which forces 1 worker.)
+        doc_timings: dict[int, tuple[str, timing.DocTiming]] = {}
         run_start = time.perf_counter() if timings else None
         incomplete_count = 0
 
@@ -1162,13 +1162,15 @@ def main(
                     bar.update(sub, completed=done, total=total)
 
             def _drain(
-                document_id: int, file_name: str, file_hash: str,
+                document_id: int, file_name: str,
                 *, parse_stages: dict[str, float] | None = None,
                 page_count: int | None = None,
             ) -> None:
-                """Caption + summarize one parsed document on the main process —
-                the post-parse half, behind the single Writer. Used for both
-                freshly-parsed and resumed documents."""
+                """Caption one parsed document on the main process — the
+                post-parse half, behind the single Writer. Used for both
+                freshly-parsed and resumed documents. Summarization is a
+                separate pass (:func:`_summarize_documents`), kept off this
+                parse-drain path so it can't throttle the parse workers."""
                 nonlocal incomplete_count
 
                 def on_stage(stage: str) -> None:
@@ -1185,38 +1187,68 @@ def main(
                     vision_enabled=parse_config.vision_enabled,
                     on_stage=on_stage, on_image_progress=_images_progress,
                 )
-                sum_t = time.perf_counter()
-                sum_incomplete = _summarize_if_missing(
-                    writer, document_id, file_hash, file_name,
-                    summaries_enabled=summaries_enabled,
-                    llm_provider=llm_provider, llm_model=llm_model,
-                    temperature=temperature, max_summarize_tokens=max_summarize_tokens,
-                    on_stage=on_stage,
-                )
-                end_t = time.perf_counter()
-
-                if cap_incomplete or sum_incomplete:
+                if cap_incomplete:
                     incomplete_count += 1
                 if timings:
                     # `parse_stages` arrives partially built: for a fresh parse it
                     # carries prep/parse/embed (incl. the persist top-up added at
-                    # the call site); for a resume it's None. Here we add the
-                    # caption + summarize seconds measured on this process.
+                    # the call site); for a resume it's None. Add the caption
+                    # seconds; the summarize pass fills its stage in later.
                     stages = dict(parse_stages or {})
-                    stages["caption"] = stages.get("caption", 0.0) + (sum_t - cap_t)
-                    stages["summarize"] = stages.get("summarize", 0.0) + (end_t - sum_t)
-                    timing_records.append(
-                        timing.DocTiming(page_count=page_count, stages=stages)
+                    stages["caption"] = (
+                        stages.get("caption", 0.0) + (time.perf_counter() - cap_t)
                     )
-                    console.info(
-                        timing.render_doc_line(file_name, sum(stages.values()), stages)
+                    doc_timings[document_id] = (
+                        file_name, timing.DocTiming(page_count=page_count, stages=stages)
                     )
                 bar.update(sub, visible=False)
                 bar.advance(task)
 
-            # Resume bucket first: already parsed, just fill the missing units.
+            def _summarize_documents() -> None:
+                """Second pass: summarize every document still owing one, after
+                the parse/caption drain has finished. Decoupling it from the
+                drain (issue #167) keeps the slow LLM summary off the parse
+                workers' critical path; resume falls out for free, since the
+                work-list is simply whatever the DB still lacks."""
+                nonlocal incomplete_count
+                if not summaries_enabled:
+                    return
+                pending = writer.documents_needing_summary()
+                if not pending:
+                    return
+                stask = bar.add_task(
+                    "summaries", total=len(pending), label="Summarizing",
+                )
+                for ps in pending:
+                    bar.update(
+                        stask,
+                        label=f"Summarizing {console.truncate_filename(ps.file_name)}",
+                    )
+                    sum_t = time.perf_counter()
+                    owed = _summarize_if_missing(
+                        writer, ps.document_id, ps.file_hash, ps.file_name,
+                        summaries_enabled=summaries_enabled,
+                        llm_provider=llm_provider, llm_model=llm_model,
+                        temperature=temperature,
+                        max_summarize_tokens=max_summarize_tokens,
+                    )
+                    if owed:
+                        incomplete_count += 1
+                    if timings:
+                        name, rec = doc_timings.get(
+                            ps.document_id,
+                            (ps.file_name, timing.DocTiming(page_count=None)),
+                        )
+                        rec.stages["summarize"] = (
+                            rec.stages.get("summarize", 0.0)
+                            + (time.perf_counter() - sum_t)
+                        )
+                        doc_timings[ps.document_id] = (name, rec)
+                    bar.advance(stask)
+
+            # Resume bucket first: already parsed, just fill the missing captions.
             for item in to_resume:
-                _drain(item.document_id, item.file_name, item.file_hash)
+                _drain(item.document_id, item.file_name)
 
             # Parse bucket: parse across the pool (or inline at 1 worker); drain
             # each result through the single Writer as it completes, unordered.
@@ -1256,9 +1288,12 @@ def main(
                         stages.get("embed", 0.0) + (time.perf_counter() - persist_t)
                     )
                 _drain(
-                    document_id, req.file_name, req.file_hash,
+                    document_id, req.file_name,
                     parse_stages=stages, page_count=outcome.parsed.page_count,
                 )
+
+            # Summaries last, as their own pass over whatever the DB still lacks.
+            _summarize_documents()
 
             if incomplete_count:
                 console.warn(
@@ -1272,10 +1307,18 @@ def main(
         conn.close()
 
     if timings:
-        # Human breakdown to stderr; machine summary to stdout so a benchmark
-        # run is captured with `bartleby scribe --files <sample> --timings >
-        # bench.json` while the bar and status text stay on stderr.
-        agg = timing.aggregate(timing_records, time.perf_counter() - run_start)
+        # One coherent line per document (parse + caption + summarize merged),
+        # emitted now that both passes have run. Human breakdown to stderr;
+        # machine summary to stdout so a benchmark run is captured with
+        # `bartleby scribe --files <sample> --timings > bench.json` while the bar
+        # and status text stay on stderr.
+        records: list[timing.DocTiming] = []
+        for name, rec in doc_timings.values():
+            console.info(
+                timing.render_doc_line(name, sum(rec.stages.values()), rec.stages)
+            )
+            records.append(rec)
+        agg = timing.aggregate(records, time.perf_counter() - run_start)
         console.big("Timing summary")
         for line in timing.render_summary(agg):
             console.info(line)
