@@ -49,6 +49,11 @@ from bartleby.lib import console
 # are both built straight off this tuple.
 PHASES = ("parse", "caption", "summarize")
 
+# Rows the live region needs beyond its lanes: the run-of-show header, the
+# overall bar, and a line of breathing room. Lanes are capped to the terminal
+# height minus this so the whole region always fits the screen (#208).
+_RESERVED_ROWS = 4
+
 
 class ScribeProgress:
     """Live multi-worker progress for a scribe ingest run (see module docstring).
@@ -68,6 +73,17 @@ class ScribeProgress:
         self._active: str | None = None
 
         shared = console.get_console()
+
+        # Cap lanes so the live region (header + overall bar + one row per lane)
+        # can't outgrow the terminal. Rich's Live only redraws in place while its
+        # renderable fits the screen; once it's taller, the top scrolls out of
+        # reach and every refresh stacks a fresh frame below the last instead of
+        # overwriting it (#208). Only a real TTY redraws in place — off a terminal
+        # (pipe, CI log, tests) Live appends regardless, so leave the count alone.
+        if shared.is_terminal:
+            n_lanes = min(n_lanes, shared.size.height - _RESERVED_ROWS)
+        n_lanes = max(1, n_lanes)
+
         self._overall = Progress(
             TextColumn("[bold]{task.fields[label]}"),
             BarColumn(),
@@ -87,14 +103,19 @@ class ScribeProgress:
         )
         self._lane_tasks = [
             self._lanes.add_task("lane", label="", visible=False)
-            for _ in range(max(1, n_lanes))
+            for _ in range(n_lanes)
         ]
         self._free: list[int] = list(range(len(self._lane_tasks)))
         # Insertion-ordered so the oldest-active key can be evicted (LRU) when a
         # new worker needs a lane and none are free — see _lane_update.
         self._by_key: "OrderedDict[object, int]" = OrderedDict()
 
-        self._live = Live(self, console=shared, refresh_per_second=8)
+        # crop (don't stack) if the region still overshoots — e.g. the window is
+        # resized shorter mid-run. Header + overall sit atop the group, so crop
+        # sheds excess lanes from the bottom first (#208).
+        self._live = Live(
+            self, console=shared, refresh_per_second=8, vertical_overflow="crop"
+        )
 
     # -- rendering -----------------------------------------------------------
 
