@@ -135,7 +135,7 @@
             <ul class="rows">
               {#each corpus.largest_documents as d}
                 <li>
-                  <a href="/documents/{d.id}">{d.title ?? stripExt(d.file_name)}</a>
+                  <a href="/documents/{d.id}" title={d.title ?? stripExt(d.file_name)}>{d.title ?? stripExt(d.file_name)}</a>
                   <span class="muted">{d.token_count == null ? "—" : pluralize(d.token_count, "token")}</span>
                 </li>
               {/each}
@@ -273,11 +273,18 @@
     padding: var(--space-2xs) 0;
   }
   .rows a {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--color-link);
     text-decoration: none;
   }
   .rows a:hover {
     text-decoration: underline;
+  }
+  .rows .muted {
+    flex-shrink: 0;
   }
 
   .histogram {
