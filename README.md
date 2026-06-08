@@ -389,7 +389,7 @@ _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, 
 bartleby scribe --project bench --files /path/to/sample --timings > bench.json
 ```
 
-Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions?
+Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions? Recorded runs and the reproducible recipe (including the gotchas that silently corrupt a run) live in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ### `bartleby session`
 

@@ -1657,3 +1657,67 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
     scribe.main(project="test_proj", files=str(tmp_path))
 
     assert capsys.readouterr().out == ""
+
+
+def test_scribe_records_ingest_run_and_stamps_units(
+    isolated_project, tmp_path, mock_embed
+):
+    src = _write_txt(tmp_path / "doc.txt", "A small document to ingest and stamp.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        runs = cur.execute(
+            "SELECT run_id, finished_at, config_json FROM ingests"
+        ).fetchall()
+        assert len(runs) == 1
+        run_id, finished_at, config_json = runs[0]
+        assert finished_at is not None          # finally-block closed the run
+        assert "api_key" not in config_json     # secrets never persisted
+
+        # The document and its chunks carry the producing run.
+        assert cur.execute(
+            "SELECT ingest_run_id FROM documents"
+        ).fetchone()[0] == run_id
+        chunk_runs = {
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT ingest_run_id FROM chunks "
+                "WHERE source_kind = 'document'"
+            )
+        }
+        assert chunk_runs == {run_id}
+    finally:
+        conn.close()
+
+
+def test_scribe_warns_on_config_drift(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.console.warn", lambda m: warnings.append(m)
+    )
+
+    configs = [{"pdf_converter": "pdfplumber"}]
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", lambda: configs[0]
+    )
+
+    src = _write_txt(tmp_path / "doc.txt", "A document ingested across two runs.")
+    scribe.main(project="test_proj", files=str(src))
+    assert not [w for w in warnings if "Config drift" in w]  # no prior → silent
+
+    # Second run under a changed knob → a drift warning, but never a block.
+    configs[0] = {"pdf_converter": "docling"}
+    scribe.main(project="test_proj", files=str(src))
+    drift = [w for w in warnings if "Config drift" in w]
+    assert any("pdf_converter" in w for w in drift)
+
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM ingests"
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
