@@ -5,6 +5,12 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
+# Held at 8 across the #169 concurrent-ingestion omnibus. The `ingests` table
+# and the `ingest_run_id` columns below are additive work landing under that
+# omnibus (issue #171); the single v8→v9 bump + a consolidated
+# `_upgrade_v8_to_v9` ships once when #169 releases, rather than each sub-issue
+# bumping in turn. Until then fresh DBs carry these structures at v8 and an
+# existing v8 corpus must re-ingest to gain them.
 SCHEMA_VERSION = 8
 
 EMBEDDING_DIM = 768
@@ -17,6 +23,15 @@ CREATE TABLE meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE ingests (
+    run_id INTEGER PRIMARY KEY,
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TEXT,
+    config_json TEXT NOT NULL,
+    bartleby_version TEXT,
+    schema_version INTEGER NOT NULL
+);
+
 CREATE TABLE documents (
     document_id INTEGER PRIMARY KEY,
     file_hash TEXT NOT NULL UNIQUE,
@@ -24,7 +39,8 @@ CREATE TABLE documents (
     file_path TEXT NOT NULL,
     page_count INTEGER,
     token_count INTEGER,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ingest_run_id INTEGER REFERENCES ingests(run_id)
 );
 
 CREATE TABLE summaries (
@@ -35,7 +51,8 @@ CREATE TABLE summaries (
     text TEXT NOT NULL,
     model TEXT NOT NULL,
     authored_date TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ingest_run_id INTEGER REFERENCES ingests(run_id)
 );
 
 CREATE TABLE sessions (
@@ -88,6 +105,7 @@ CREATE TABLE chunks (
     page_number INTEGER,
     content_type TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ingest_run_id INTEGER REFERENCES ingests(run_id),
     UNIQUE (source_kind, source_id, chunk_index)
 );
 

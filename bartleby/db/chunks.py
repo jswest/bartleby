@@ -60,6 +60,7 @@ def _insert(
     source_kind: str,
     source_id: int,
     chunks: list[ChunkInput],
+    ingest_run_id: int | None = None,
 ) -> list[int]:
     if not chunks:
         return []
@@ -72,10 +73,11 @@ def _insert(
             cur.execute(
                 "INSERT INTO chunks "
                 "(source_kind, source_id, chunk_index, text, "
-                " section_heading, page_number, content_type) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " section_heading, page_number, content_type, ingest_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (source_kind, source_id, c.chunk_index, c.text,
-                 c.section_heading, c.page_number, c.content_type),
+                 c.section_heading, c.page_number, c.content_type,
+                 ingest_run_id),
             )
             chunk_id = conn.last_insert_rowid()
             inserted_ids.append(chunk_id)
@@ -94,16 +96,18 @@ def insert_document_chunks(
     conn: apsw.Connection,
     document_id: int,
     chunks: list[ChunkInput],
+    ingest_run_id: int | None = None,
 ) -> list[int]:
-    return _insert(conn, "document", document_id, chunks)
+    return _insert(conn, "document", document_id, chunks, ingest_run_id)
 
 
 def insert_summary_chunks(
     conn: apsw.Connection,
     summary_id: int,
     chunks: list[ChunkInput],
+    ingest_run_id: int | None = None,
 ) -> list[int]:
-    return _insert(conn, "summary", summary_id, chunks)
+    return _insert(conn, "summary", summary_id, chunks, ingest_run_id)
 
 
 def insert_finding_chunks(
@@ -111,6 +115,8 @@ def insert_finding_chunks(
     finding_id: int,
     chunks: list[ChunkInput],
 ) -> list[int]:
+    # Findings are authored in a research session, not produced by an ingest
+    # run, so they carry no ingest_run_id (the column stays NULL).
     return _insert(conn, "finding", finding_id, chunks)
 
 
@@ -118,8 +124,9 @@ def insert_image_chunks(
     conn: apsw.Connection,
     image_id: int,
     chunks: list[ChunkInput],
+    ingest_run_id: int | None = None,
 ) -> list[int]:
-    return _insert(conn, "image", image_id, chunks)
+    return _insert(conn, "image", image_id, chunks, ingest_run_id)
 
 
 def delete_chunks_for(
