@@ -7,6 +7,7 @@ import pytest
 
 import bartleby.config
 import bartleby.commands.config as config
+from bartleby.config import config_drift, redact_config
 
 
 @pytest.fixture
@@ -231,3 +232,57 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
     assert cfg["vision_provider"] == "anthropic"
     assert cfg["openai_api_key"] == "sk-openai"
     assert cfg["anthropic_api_key"] == "sk-anthro"
+
+
+# -------------------- ingest provenance: redaction + drift --------------------
+
+
+def test_redact_config_strips_secret_keys():
+    cfg = {
+        "provider": "anthropic",
+        "model": "claude",
+        "anthropic_api_key": "sk-secret",
+        "openai_api_key": "sk-other",
+        "wsjpt_api_key": "tok",
+        "ollama_base_url": "http://localhost:11434",
+    }
+    redacted = redact_config(cfg)
+    assert redacted == {
+        "provider": "anthropic",
+        "model": "claude",
+        "ollama_base_url": "http://localhost:11434",
+    }
+    # Original is untouched (a copy is returned).
+    assert "anthropic_api_key" in cfg
+
+
+def test_redact_config_matches_token_secret_password_credential():
+    cfg = {
+        "keep": 1,
+        "auth_token": "t",
+        "client_secret": "s",
+        "db_password": "p",
+        "gcp_credential": "c",
+    }
+    assert redact_config(cfg) == {"keep": 1}
+
+
+def test_config_drift_none_prior_is_silent():
+    assert config_drift(None, {"provider": "anthropic"}) == []
+
+
+def test_config_drift_reports_changed_added_and_removed_fields():
+    prior = {"provider": "anthropic", "model": "old", "temperature": 0}
+    current = {"provider": "anthropic", "model": "new", "vision_model": "v"}
+    drift = config_drift(prior, current)
+    # model changed; temperature dropped; vision_model added — provider stable.
+    assert drift == [
+        "model: 'old' → 'new'",
+        "temperature: 0 → '<unset>'",
+        "vision_model: '<unset>' → 'v'",
+    ]
+
+
+def test_config_drift_identical_is_silent():
+    cfg = {"provider": "anthropic", "model": "x"}
+    assert config_drift(cfg, dict(cfg)) == []

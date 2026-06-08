@@ -42,7 +42,12 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from bartleby.config import ensure_provider_env, load_config
+from bartleby.config import (
+    config_drift,
+    ensure_provider_env,
+    load_config,
+    redact_config,
+)
 from bartleby.db.chunks import ChunkInput
 from bartleby.db.connection import open_db, resolve_project_name
 from bartleby.ingest import edgar as edgar_pipeline
@@ -1090,6 +1095,20 @@ def main(
     conn = open_db(project_name)
     writer = Writer(conn)
     try:
+        # Record this invocation's resolved config (secrets stripped) so resume
+        # is auditable per unit; warn — never block — on any field that drifted
+        # since the last ingest, read *before* this run's row is inserted.
+        config_snapshot = redact_config({
+            **config,
+            "pdf_converter": pdf_converter_name,
+            "html_converter": html_converter_name,
+            "provider": provider or config.get("provider"),
+            "model": model or config.get("model"),
+        })
+        for line in config_drift(writer.latest_config(), config_snapshot):
+            console.warn(f"Config drift since last ingest — {line}")
+        writer.begin_run(config_snapshot)
+
         # Classify up front (hash + resume lookups, on this process): only files
         # that have never been parsed cross to the workers. Parsed-but-incomplete
         # docs resume on the main process — they need no parse, just the missing
@@ -1249,6 +1268,7 @@ def main(
 
         _report_failures(writer)
     finally:
+        writer.finish_run()
         conn.close()
 
     if timings:
