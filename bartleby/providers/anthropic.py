@@ -86,11 +86,12 @@ class AnthropicProvider:
         )
         if reasoning_effort and _supports_effort(model):
             kwargs["output_config"] = {"effort": _EFFORT_MAP[reasoning_effort]}
-            # Opus 4.7+ rejects temperature; the older effort-capable models still
-            # accept it, so we only drop it where it would 400.
-            if _drops_temperature(model):
-                _warn_dropped_temperature(temperature, model)
-                del kwargs["temperature"]
+        # Opus 4.7+ rejects temperature outright — a property of the model, not of
+        # whether we sent effort — so drop it wherever it would 400, independent of
+        # reasoning_effort. The older effort-capable models still accept it.
+        if _drops_temperature(model):
+            _warn_dropped_temperature(temperature, model)
+            del kwargs["temperature"]
         response = self._client.messages.create(**kwargs)
         return _extract_tool_input(response, _SUMMARY_TOOL, DocumentSummary)
 

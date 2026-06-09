@@ -108,6 +108,14 @@ def test_anthropic_effort_skipped_for_uncapable_model(monkeypatch):
     assert fake.last_call["temperature"] == 0.0
 
 
+def test_anthropic_drops_temperature_on_47plus_without_effort(monkeypatch):
+    # Opus 4.7+ rejects temperature whether or not effort is configured — so an
+    # unset reasoning_effort must still drop it, or every summarize call 400s.
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort=None)
+    assert "output_config" not in fake.last_call
+    assert "temperature" not in fake.last_call
+
+
 def test_anthropic_minimal_effort_maps_to_low(monkeypatch):
     # Anthropic has no "minimal" — our enum's minimal maps to the lowest, "low".
     fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort="minimal")
