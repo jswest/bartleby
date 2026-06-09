@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0234 — Graduate the local-summarizer benchmark into VC: local-only, temp-0.0 parity, blind OpenAI judge, schema-gate leaderboard; defer the real run (issue #234)](GH-0234-graduate-summarize-benchmark-to-vc-0001.md)
 - [GH-0227 — Parse workers route warnings to the parent; they never touch the console (issue #227)](GH-0227-route-worker-warnings-to-parent-0001.md)
 - [GH-0225 — In-run duplicate files are dropped with a surfaced count, not aliased or provenance-tracked (issue #225)](GH-0225-in-run-duplicate-files-dropped-with-count-0001.md)
 - [GH-0222 — Never send temperature to the OpenAI provider; GPT-5 rejects non-default values (issue #222)](GH-0222-omit-temperature-openai-0001.md)
