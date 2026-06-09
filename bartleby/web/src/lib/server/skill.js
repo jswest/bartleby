@@ -48,7 +48,9 @@ export function toSkillError(e) {
  */
 export function runSkill(name, args = []) {
   const { project } = getDb();
-  const argv = ['skill', name, ...args.map(String), '--project', project];
+  // --project leads the user args so a trailing `--` sentinel (search/scan use
+  // one to fence a leading-dash query) keeps everything after it positional.
+  const argv = ['skill', name, '--project', project, ...args.map(String)];
 
   return new Promise((resolve, reject) => {
     const child = spawn(BARTLEBY_BIN, argv, {
