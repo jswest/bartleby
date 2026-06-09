@@ -1185,6 +1185,11 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
     so this is a plain configured count defaulting to ``DEFAULT_CAPTION_WORKERS``.
     ``--timings`` forces 1: the per-stage breakdown is a sequential baseline,
     meaningless once captions overlap (same rationale as ``max_workers``).
+
+    A local Ollama vision provider clamps to 1 regardless (#243): Ollama's
+    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
+    and parallel workers only queue. An explicit ``caption_workers`` > 1 is
+    ignored (with a warning) rather than honored — the clamp is the point.
     """
     configured = int(config.get("caption_workers") or DEFAULT_CAPTION_WORKERS)
     if timings:
@@ -1192,6 +1197,15 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
             console.warn(
                 "--timings captions sequentially (caption_workers=1) for a "
                 "clean baseline."
+            )
+        return 1
+    if config.get("vision_provider") == "ollama":
+        # Re-read the raw value (not `configured`, which has the default folded
+        # in) so the warning fires only on an explicit count, not the default.
+        if int(config.get("caption_workers") or 0) > 1:
+            console.warn(
+                "caption_workers > 1 ignored — Ollama serializes requests "
+                "(OLLAMA_NUM_PARALLEL defaults to 1); captioning one image at a time."
             )
         return 1
     return max(1, configured)
@@ -1204,6 +1218,11 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
     network/IO-bound, so this is a plain configured count defaulting to
     ``DEFAULT_SUMMARIZE_WORKERS``. ``--timings`` forces 1 for a clean per-document
     baseline, meaningless once summaries overlap (same rationale as the others).
+
+    A local Ollama LLM provider clamps to 1 regardless (#243): Ollama's
+    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
+    and parallel workers only queue. An explicit ``summarize_workers`` > 1 is
+    ignored (with a warning) rather than honored — the clamp is the point.
     """
     configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
     if timings:
@@ -1211,6 +1230,16 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
             console.warn(
                 "--timings summarizes sequentially (summarize_workers=1) for a "
                 "clean baseline."
+            )
+        return 1
+    if config.get("provider") == "ollama":
+        # Re-read the raw value (not `configured`, which has the default folded
+        # in) so the warning fires only on an explicit count, not the default.
+        if int(config.get("summarize_workers") or 0) > 1:
+            console.warn(
+                "summarize_workers > 1 ignored — Ollama serializes requests "
+                "(OLLAMA_NUM_PARALLEL defaults to 1); summarizing one document "
+                "at a time."
             )
         return 1
     return max(1, configured)

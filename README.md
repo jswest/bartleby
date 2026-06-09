@@ -297,7 +297,7 @@ Interactive configuration wizard. Asks for:
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
-| Summarize workers | 4 | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
+| Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider. A local Ollama provider auto-clamps to 1 and isn't prompted for a count (`OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
@@ -307,7 +307,7 @@ Interactive configuration wizard. Asks for:
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
 | Min image dimension | 64 | Images with a shorter edge than this are skipped — avoids wasting VLM calls (and crashes) on thin slivers |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
-| Caption workers | 4 | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider, keep it low for a single-GPU local Ollama (which serializes anyway) |
+| Caption workers | 4 (cloud) / 1 (Ollama) | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider. A local Ollama vision provider auto-clamps to 1 and isn't prompted for a count (`OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue) |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.

@@ -114,7 +114,7 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "0",
         "low",
         "50000",
-        "4",                   # Summarize workers
+        # No "Summarize workers" prompt — Ollama auto-clamps to 1 (#243).
         "pdfplumber",          # PDF converter
         "docling",             # HTML converter
         "100",                 # Sparse text threshold
@@ -129,6 +129,8 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
     assert cfg["ollama_base_url"] == "http://localhost:11434"
     assert "anthropic_api_key" not in cfg
     assert "openai_api_key" not in cfg
+    # Ollama serializes, so the wizard never stores a summarize-worker count.
+    assert "summarize_workers" not in cfg
 
 
 def test_config_without_llm_writes_summary_depth_none(isolated_config, monkeypatch):
@@ -244,6 +246,44 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
     assert cfg["vision_provider"] == "anthropic"
     assert cfg["openai_api_key"] == "sk-openai"
     assert cfg["anthropic_api_key"] == "sk-anthro"
+
+
+def test_config_ollama_vision_skips_caption_workers_prompt(
+    isolated_config, monkeypatch
+):
+    # Cloud LLM (so summarize_workers is still prompted) + Ollama vision: the
+    # caption-worker prompt is skipped because Ollama serializes (#243).
+    _scripted_inputs(monkeypatch, [
+        "y",
+        "anthropic",
+        "claude-haiku-4-5",
+        "sk-anthro",
+        "one-shot",
+        "0",
+        "low",
+        "50000",
+        "4",                   # Summarize workers (anthropic → still prompted)
+        "pdfplumber",          # PDF converter
+        "docling",             # HTML converter
+        "100",
+        "0",                   # Parse workers (0 = auto → omitted)
+        "y",                   # Configure vision?
+        "ollama",              # Vision provider
+        "qwen3-vl:30b",        # Vision model
+        "http://localhost:11434",  # Ollama base URL (not yet set by the LLM block)
+        "1024",                # vision_max_dimension
+        "32",                  # vision_min_dimension
+        "30",                  # ocr_min_confidence
+        # No "Caption workers" prompt — Ollama auto-clamps to 1.
+        "50000",               # max_read_tokens
+    ])
+    config.main()
+    cfg = _read_yaml(isolated_config)
+    assert cfg["vision_provider"] == "ollama"
+    assert cfg["ollama_base_url"] == "http://localhost:11434"
+    # Cloud LLM still carries a summarize count; Ollama vision carries none.
+    assert cfg["summarize_workers"] == 4
+    assert "caption_workers" not in cfg
 
 
 # -------------------- ingest provenance: redaction + drift --------------------
