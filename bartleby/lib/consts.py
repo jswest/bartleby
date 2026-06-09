@@ -77,15 +77,19 @@ WORKER_MAX_TASKS = 100
 # Caption-pool sizing (#166). Captioning runs after parse as its own concurrent
 # stage: many VLM/OCR calls per document, network/IO-bound rather than RAM-bound,
 # so it doesn't share parse's RAM-derived auto-formula — a fixed default is more
-# honest. 4 is a safe middle ground: a single-GPU local Ollama serializes vision
-# requests anyway, while a rate-limited cloud provider tolerates a few in flight.
-# Override with `caption_workers` in config.
+# honest. 4 is a safe middle ground for a rate-limited cloud provider, which
+# tolerates a few in flight. This default is cloud-only: a local Ollama vision
+# provider auto-clamps to 1 (#243) because Ollama's `OLLAMA_NUM_PARALLEL` defaults
+# to 1, so a single model serializes and parallel workers only queue. Override
+# with `caption_workers` in config (ignored for Ollama).
 DEFAULT_CAPTION_WORKERS = 4
 
 # Summarize-pool sizing (#188). Summarization is the heaviest ingest stage (the
 # #177 baseline put it at ~59% of wall-clock) and, like captioning, it's a run of
 # network/IO-bound LLM calls rather than RAM-bound parse work — so it gets the
 # same fixed-default treatment, decoupled from parse-worker sizing. 4 matches
-# `caption_workers`: a single-GPU local Ollama serializes anyway, a rate-limited
-# cloud provider tolerates a few in flight. Override with `summarize_workers`.
+# `caption_workers` for a rate-limited cloud provider. Like captioning, a local
+# Ollama LLM provider auto-clamps to 1 (#243): `OLLAMA_NUM_PARALLEL` defaults to
+# 1, so parallel workers only queue. Override with `summarize_workers` (ignored
+# for Ollama).
 DEFAULT_SUMMARIZE_WORKERS = 4

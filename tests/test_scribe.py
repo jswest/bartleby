@@ -685,9 +685,28 @@ def test_resolve_caption_workers_defaults_and_timings():
         {"caption_workers": 0}, timings=False) == DEFAULT_CAPTION_WORKERS
     assert scribe_module._resolve_caption_workers(
         {"caption_workers": 9}, timings=False) == 9
+    # A cloud vision provider keeps the configured/default count.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "anthropic"}, timings=False) == DEFAULT_CAPTION_WORKERS
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_caption_workers(
         {"caption_workers": 9}, timings=True) == 1
+
+
+def test_resolve_caption_workers_clamps_ollama(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
+
+    # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "ollama"}, timings=False) == 1
+    assert warnings == []
+    # An explicit count > 1 is ignored (still 1) and warns.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "ollama", "caption_workers": 8}, timings=False) == 1
+    assert any("caption_workers > 1 ignored" in w for w in warnings)
 
 
 def _summary_config(**overrides):
@@ -808,9 +827,28 @@ def test_resolve_summarize_workers_defaults_and_timings():
         {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
         {"summarize_workers": 9}, timings=False) == 9
+    # A cloud LLM provider keeps the configured/default count.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
         {"summarize_workers": 9}, timings=True) == 1
+
+
+def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
+
+    # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama"}, timings=False) == 1
+    assert warnings == []
+    # An explicit count > 1 is ignored (still 1) and warns.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+    assert any("summarize_workers > 1 ignored" in w for w in warnings)
 
 
 def test_summarize_all_progress_callback_fires_per_document(
