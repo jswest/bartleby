@@ -26,7 +26,10 @@ export async function load({ url }) {
   if (!q) return { params, available, result: null, error: null };
 
   try {
-    const args = [q, '--limit', limit];
+    // Build options first; the query is appended last after a `--` sentinel so
+    // a leading-dash term (`-foo`, `-LRB-`) reaches argparse as the positional
+    // rather than an unknown option (which 500s the page as BAD_OUTPUT).
+    const args = ['--limit', limit];
     if (docs) args.push('--in-documents', docs);
     for (const t of tags) args.push('--tag', t);
 
@@ -34,6 +37,7 @@ export async function load({ url }) {
     if (mode === 'scan') {
       if (matchTerms) args.push('--match-terms');
       if (offset) args.push('--offset', offset);
+      args.push('--', q);
       result = await runSkill('scan', args);
       // Add summary title/description + a source link to each match.
       result.matches = enrichScanMatches(result.matches);
@@ -43,6 +47,7 @@ export async function load({ url }) {
       const effective = kinds.length ? kinds : DEFAULT_KINDS;
       for (const k of effective) args.push(`--${k}`);
       if (context) args.push('--add-context', context);
+      args.push('--', q);
       result = await runSkill('search', args);
       result.results = enrichHits(result.results);
     }
