@@ -1,32 +1,28 @@
 #!/usr/bin/env python
 """Benchmark local Ollama models against Bartleby's summarization prompt.
 
-Samples documents from a real Bartleby project DB, runs each candidate model
-N times per document, and writes one JSONL record per (model, document, run)
-with timings and the parsed summary. Uses bartleby's prompt +
-``DocumentSummary`` schema verbatim, at production settings (temp 0.0, the
-default ``max_summarize_tokens``), so the benchmark exercises the same path
-``bartleby ingest`` takes.
+Benchmarks one committed PDF (``benchmarks/corpus/``), assembling its
+summarization input **the same way production does**: extract text with the
+pdfplumber backend, chunk it with Bartleby's chunker, and join the document
+chunks in page/chunk order — exactly what ``writer.summary_input`` produces for
+an image-free document. Then each candidate model summarizes that input N
+times, at production settings (temp 0.0, the default ``max_summarize_tokens``),
+using Bartleby's actual ``build_summary_messages`` + ``DocumentSummary`` schema.
 
-The whole (model, document, run) matrix is shuffled into one randomized order
-so thermal throttling and weight-eviction can't systematically favor any
-model or document.
+The benchmark doc is **image-free on purpose**: with no image chunks, the
+pdfplumber → chunk path reproduces the *whole* production summary input, so the
+benchmark is faithful without dragging in the caption pipeline. (Image-bearing
+docs, Docling extraction, and a multi-doc corpus are tracked as follow-ups.)
+
+The (model, run) matrix is shuffled into one randomized order so thermal
+throttling and weight-eviction can't systematically favor any model.
 
 Model set is auto-discovered from ``ollama list`` minus a skip-list of
 non-text models (vision ``*-vl*``, embeddings ``nomic-embed*``, image-gen
 ``x/*``, coder variants), or pinned with ``--models``.
 
-No warmup phase: with randomized ordering, models get evicted from memory
-between calls anyway, so a per-model warmup is mostly wasted. Use
-``wall_seconds - load_duration_ns/1e9`` (or ``eval_duration_ns``) for
-load-corrected timing comparisons.
-
 Example:
-  uv run python benchmarks/summarize_local.py \\
-      --db ~/.bartleby/projects/centralhudson-redux/bartleby.db \\
-      --sample 12 \\
-      --runs 3 \\
-      --out benchmarks/results.jsonl
+  uv run python benchmarks/summarize_local.py --runs 3 --out benchmarks/results.jsonl
 """
 
 from __future__ import annotations
@@ -34,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -42,6 +37,9 @@ from pathlib import Path
 import ollama
 from pydantic import ValidationError
 
+from bartleby.ingest import pdfplumber as pdfplumber_pipeline
+from bartleby.ingest.text import chunk_text
+from bartleby.lib.consts import DEFAULT_OCR_MIN_CONFIDENCE, DEFAULT_SPARSE_TEXT_THRESHOLD
 from bartleby.providers.base import DocumentSummary
 from bartleby.providers.prompt import build_summary_messages
 
@@ -51,6 +49,11 @@ from bartleby.providers.prompt import build_summary_messages
 # the benchmark measures models under the settings ingest actually uses.
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 50_000
+
+# The committed benchmark document. Image-free, medium-length PSC order; see
+# benchmarks/README.md for why this one.
+DEFAULT_PDF = Path(__file__).parent / "corpus" / \
+    "0109_Order_Denying_Request_for_Rehearing_and_Reconsideration.pdf"
 
 # Substrings that mark a locally-installed model as not a text summarizer.
 # Auto-discovery drops any model whose name contains one of these. Coder
@@ -67,70 +70,39 @@ def discover_models(client: ollama.Client, *, include_coder: bool) -> list[str]:
     return [n for n in names if not any(marker in n for marker in skip)]
 
 
-def _document_lengths(conn: sqlite3.Connection) -> list[tuple[int, int]]:
-    """(document_id, token_count) for every document, shortest first."""
-    rows = conn.execute(
-        "SELECT document_id, COALESCE(token_count, 0) FROM documents ORDER BY token_count"
-    ).fetchall()
-    return [(int(d), int(t)) for d, t in rows]
+def build_summary_input(pdf_path: Path) -> tuple[str, dict]:
+    """Reproduce production's summary input for an image-free PDF.
 
-
-def sample_documents(
-    db_path: Path, *, sample: int, max_tokens: int, rng: random.Random
-) -> list[int]:
-    """Stratified sample of ``sample`` document ids, spread across length bands.
-
-    Splits documents into short/medium/long tertiles by token_count and draws
-    evenly from each. Deliberately forces in at least one document that exceeds
-    ``max_tokens`` (when the corpus has one) so truncation behavior is always
-    exercised.
+    Mirrors ``scribe._parse_pdf_pdfplumber`` + ``writer.summary_input``: extract
+    with the pdfplumber backend at the production thresholds, chunk each text
+    page with ``chunk_text``, and join the document chunks in page/chunk order
+    with blank lines. Returns ``(text, meta)``; ``meta`` flags anything that
+    would make this *not* a faithful image-free reproduction (image-routed or
+    sparse pages), which the caller surfaces.
     """
-    conn = sqlite3.connect(db_path)
-    try:
-        docs = _document_lengths(conn)
-    finally:
-        conn.close()
-    if not docs:
-        raise SystemExit(f"No documents in {db_path}")
-    if sample >= len(docs):
-        return [d for d, _ in docs]
-
-    third = len(docs) // 3 or 1
-    bands = [docs[:third], docs[third : 2 * third], docs[2 * third :]]
-    per_band = max(sample // 3, 1)
-
-    chosen: list[int] = []
-    for band in bands:
-        ids = [d for d, _ in band]
-        chosen.extend(rng.sample(ids, min(per_band, len(ids))))
-
-    # Guarantee a truncation case if the corpus has one.
-    over = [d for d, t in docs if t > max_tokens]
-    if over and not any(d in over for d in chosen):
-        chosen[-1] = rng.choice(over)
-
-    # Top up / trim to exactly `sample`, drawing any remaining ids at random.
-    remaining = [d for d, _ in docs if d not in chosen]
-    rng.shuffle(remaining)
-    while len(chosen) < sample and remaining:
-        chosen.append(remaining.pop())
-    return chosen[:sample]
-
-
-def load_source_text(db_path: Path, document_id: int) -> str:
-    conn = sqlite3.connect(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT text FROM chunks "
-            "WHERE source_kind='document' AND source_id=? "
-            "ORDER BY chunk_index",
-            (document_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    if not rows:
-        raise SystemExit(f"No chunks found for document {document_id} in {db_path}")
-    return "\n\n".join(r[0] for r in rows)
+    result = pdfplumber_pipeline.convert(
+        pdf_path,
+        sparse_text_threshold=DEFAULT_SPARSE_TEXT_THRESHOLD,
+        ocr_min_confidence=DEFAULT_OCR_MIN_CONFIDENCE,
+    )
+    parts: list[str] = []
+    image_pages: list[int] = []
+    # if/elif/if is deliberate: a text page is chunked, else a sparse page would
+    # route to the VLM — but *either* kind can also carry embedded images, so the
+    # embedded-image check is a separate `if`, not part of the elif chain.
+    for page in result.pages:
+        if page.content_type is not None:
+            parts.extend(chunk_text(page.text))
+        elif page.page_render_png is not None:
+            image_pages.append(page.page_number)  # would route to the VLM in prod
+        if page.embedded_images:
+            image_pages.append(page.page_number)
+    meta = {
+        "page_count": result.page_count,
+        "content_types": [p.content_type for p in result.pages],
+        "image_routed_pages": sorted(set(image_pages)),
+    }
+    return "\n\n".join(parts), meta
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> tuple[str, int]:
@@ -205,18 +177,10 @@ def call_summarize(
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--db", type=Path, required=True, help="Path to a bartleby SQLite DB")
+    p.add_argument("--pdf", type=Path, default=DEFAULT_PDF,
+                   help="PDF to benchmark (default: the committed corpus doc)")
     p.add_argument("--out", type=Path, required=True, help="JSONL output path")
-    docs = p.add_mutually_exclusive_group()
-    docs.add_argument(
-        "--sample", type=int, default=12,
-        help="Stratified sample of N documents across length bands (default 12)",
-    )
-    docs.add_argument(
-        "--document-ids", type=int, nargs="+",
-        help="Explicit document ids to benchmark (overrides --sample)",
-    )
-    p.add_argument("--runs", type=int, default=3, help="Measured runs per (model, doc) (default 3)")
+    p.add_argument("--runs", type=int, default=3, help="Measured runs per model (default 3)")
     p.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
                    help=f"Sampling temperature (default {DEFAULT_TEMPERATURE}, production parity)")
     p.add_argument(
@@ -237,9 +201,12 @@ def main(argv=None):
     )
     p.add_argument(
         "--seed", type=int, default=None,
-        help="Seed for the doc sample + run-order shuffle so the plan is reproducible",
+        help="Seed for the run-order shuffle so the plan is reproducible",
     )
     args = p.parse_args(argv)
+
+    if not args.pdf.exists():
+        raise SystemExit(f"PDF not found: {args.pdf}")
 
     rng = random.Random(args.seed)
 
@@ -248,21 +215,19 @@ def main(argv=None):
     if not models:
         raise SystemExit("No candidate models found (auto-discovery returned nothing).")
 
-    if args.document_ids:
-        doc_ids = args.document_ids
-    else:
-        doc_ids = sample_documents(
-            args.db, sample=args.sample, max_tokens=args.max_tokens, rng=rng
-        )
+    print(f"Assembling summary input from {args.pdf.name} (pdfplumber + chunker)...",
+          file=sys.stderr)
+    source, meta = build_summary_input(args.pdf)
+    if not source.strip():
+        raise SystemExit(f"No extractable text in {args.pdf}")
+    if meta["image_routed_pages"]:
+        print(f"  WARNING: pages {meta['image_routed_pages']} would route to the "
+              f"image/VLM pipeline — this doc is not purely image-free, so the input "
+              f"omits content production would include.", file=sys.stderr)
+    text, source_tokens = truncate_to_tokens(source, args.max_tokens)
+    truncated = source_tokens > args.max_tokens
 
-    # Pre-load + truncate each document once; reuse the text across all runs.
-    docs_text: dict[int, tuple[str, int, bool]] = {}
-    for doc_id in doc_ids:
-        source = load_source_text(args.db, doc_id)
-        text, n_tokens = truncate_to_tokens(source, args.max_tokens)
-        docs_text[doc_id] = (text, n_tokens, n_tokens > args.max_tokens)
-
-    plan = [(m, d, i) for m in models for d in doc_ids for i in range(args.runs)]
+    plan = [(m, i) for m in models for i in range(args.runs)]
     rng.shuffle(plan)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -275,30 +240,30 @@ def main(argv=None):
 
     write({
         "kind": "config",
-        "db": str(args.db),
-        "document_ids": doc_ids,
-        "documents": [
-            {"document_id": d, "source_token_count": docs_text[d][1],
-             "source_truncated": docs_text[d][2]}
-            for d in doc_ids
-        ],
+        "pdf": str(args.pdf),
+        "pdf_name": args.pdf.name,
+        "page_count": meta["page_count"],
+        "content_types": meta["content_types"],
+        "image_routed_pages": meta["image_routed_pages"],
         "models": models,
         "runs_per_model": args.runs,
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
-        "shuffled_plan": [{"model": m, "document_id": d, "run": i} for m, d, i in plan],
+        "source_token_count": source_tokens,
+        "source_truncated": truncated,
+        # The exact (truncated) text every model saw — kept so judge.py scores
+        # against precisely this, no PDF re-extraction needed.
+        "source_text": text,
+        "shuffled_plan": [{"model": m, "run": i} for m, i in plan],
         "seed": args.seed,
     })
 
-    print(f"Running {len(plan)} call(s): {len(models)} model(s) × "
-          f"{len(doc_ids)} doc(s) × {args.runs} run(s)...", file=sys.stderr)
-    for idx, (model, doc_id, run_idx) in enumerate(plan, 1):
-        print(f"  [{idx}/{len(plan)}] {model} · doc {doc_id} (run {run_idx})",
-              file=sys.stderr, flush=True)
-        text, _, _ = docs_text[doc_id]
+    print(f"Running {len(plan)} call(s): {len(models)} model(s) × {args.runs} run(s) "
+          f"on {source_tokens} input token(s)...", file=sys.stderr)
+    for idx, (model, run_idx) in enumerate(plan, 1):
+        print(f"  [{idx}/{len(plan)}] {model} (run {run_idx})", file=sys.stderr, flush=True)
         result = call_summarize(client, model, text, args.temperature)
-        write({"kind": "run", "model": model, "document_id": doc_id,
-               "run_index": run_idx, **result})
+        write({"kind": "run", "model": model, "run_index": run_idx, **result})
 
     out_f.close()
     print(f"\nWrote results to {args.out}", file=sys.stderr)

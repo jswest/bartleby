@@ -3,7 +3,7 @@
 
 Subcommands:
   timings     — markdown table of per-model wall-clock + tok/s + schema-valid %
-  blind       — write blinded summaries for one doc (one per model) + a key file
+  blind       — write blinded summaries (one per model) + a key file
   errors      — list any failed runs, with raw-output previews
   leaderboard — merge timings + schema-valid % + judge scores into the final
                 ranked report, dropping schema-failers and starring the frontier
@@ -12,7 +12,7 @@ Safe to run on a partially-written JSONL (malformed final line is skipped).
 
 Examples:
   uv run python benchmarks/examine.py timings benchmarks/results.jsonl
-  uv run python benchmarks/examine.py blind   benchmarks/results.jsonl --document-id 45 --out benchmarks/blind/
+  uv run python benchmarks/examine.py blind   benchmarks/results.jsonl --out benchmarks/blind/
   uv run python benchmarks/examine.py errors  benchmarks/results.jsonl
   uv run python benchmarks/examine.py leaderboard benchmarks/results.jsonl --judged benchmarks/judged.jsonl
 """
@@ -60,6 +60,13 @@ def _inference_seconds(run: dict) -> float:
     return run["wall_seconds"] - (run.get("load_duration_ns") or 0) / 1e9
 
 
+def _header(records: list[dict]) -> str:
+    cfg = _config(records)
+    return (f"{cfg.get('pdf_name', '?')} ({cfg.get('source_token_count', '?')} input "
+            f"tokens, temp {cfg.get('temperature', '?')}, "
+            f"max_tokens {cfg.get('max_tokens', '?')})")
+
+
 def cmd_timings(args) -> int:
     records = load_records(args.results)
     by_model = _runs_by_model(records)
@@ -67,11 +74,7 @@ def cmd_timings(args) -> int:
         print("No measured runs yet.", file=sys.stderr)
         return 1
 
-    cfg = _config(records)
-    n_docs = len(cfg.get("document_ids", []))
-    print(f"# Timings — {n_docs} doc(s), {len(cfg.get('models', []))} model(s) "
-          f"(temperature={cfg.get('temperature', '?')}, "
-          f"max_tokens={cfg.get('max_tokens', '?')})\n")
+    print(f"# Timings — {_header(records)}\n")
     print("| Model | OK / N | Schema-valid % | Inference sec (median) | Inference range | Tok/s (median) | Eval tokens (median) |")
     print("|---|---|---|---|---|---|---|")
 
@@ -93,12 +96,11 @@ def cmd_timings(args) -> int:
 
     print("\n_Inference sec = wall_seconds − load_duration. "
           "Schema-valid % = share of runs that parsed into DocumentSummary (the hard gate)._")
+    cfg = _config(records)
     expected = cfg.get("runs_per_model")
-    if expected and n_docs:
-        full = expected * n_docs
-        if any(len(by_model[m]) < full for m in by_model):
-            print(f"\n_Note: expected {full} runs per model ({expected} × {n_docs} docs); "
-                  f"some are incomplete (benchmark still running?)._")
+    if expected and any(len(by_model[m]) < expected for m in by_model):
+        print(f"\n_Note: expected {expected} runs per model; some are incomplete "
+              f"(benchmark still running?)._")
     missing = [m for m in cfg.get("models", []) if m not in by_model]
     if missing:
         print(f"\n_Not yet seen: {', '.join(missing)}._")
@@ -107,14 +109,9 @@ def cmd_timings(args) -> int:
 
 def cmd_blind(args) -> int:
     records = load_records(args.results)
-    cfg = _config(records)
-    doc_ids = cfg.get("document_ids", [])
-    document_id = args.document_id or (doc_ids[0] if doc_ids else None)
-    runs = [r for r in records
-            if r.get("kind") == "run" and r.get("ok")
-            and r.get("document_id") == document_id]
+    runs = [r for r in records if r.get("kind") == "run" and r.get("ok")]
     if not runs:
-        print(f"No successful runs to blind for document {document_id}.", file=sys.stderr)
+        print("No successful runs to blind yet.", file=sys.stderr)
         return 1
 
     by_model: dict[str, list[dict]] = defaultdict(list)
@@ -133,8 +130,9 @@ def cmd_blind(args) -> int:
     md_path = args.out / "blinded_summaries.md"
     key_path = args.out / "key.json"
 
+    cfg = _config(records)
     with md_path.open("w") as f:
-        f.write(f"# Blinded summaries — doc {document_id}\n\n")
+        f.write(f"# Blinded summaries — {cfg.get('pdf_name', '?')}\n\n")
         f.write(f"_{len(chosen)} models, 1 run each (picked randomly from completed runs)._\n\n")
         for label, (_, run) in zip(labels, chosen):
             s = run["summary"]
@@ -167,8 +165,7 @@ def cmd_errors(args) -> int:
 
     print(f"=== Run failures ({len(run_fails)}) ===")
     for r in run_fails:
-        print(f"  {r['model']} · doc {r.get('document_id')} (run {r.get('run_index')}): "
-              f"{r.get('error', '?')}")
+        print(f"  {r['model']} (run {r.get('run_index')}): {r.get('error', '?')}")
         if r.get("raw_output"):
             print(f"    raw: {r['raw_output'][:200]}...")
     return 0
@@ -206,7 +203,6 @@ def cmd_leaderboard(args) -> int:
         return 1
 
     quality = _quality_by_model(args.judged) if args.judged else {}
-    cfg = _config(records)
 
     survivors: list[dict] = []
     failers: list[tuple[str, float]] = []
@@ -232,8 +228,7 @@ def cmd_leaderboard(args) -> int:
     front = _frontier(rankable) if rankable else set()
     survivors.sort(key=lambda s: (-(s["quality"] or -1), -s["tps"]))
 
-    print(f"# Summarizer leaderboard — {len(cfg.get('document_ids', []))} doc(s), "
-          f"temp {cfg.get('temperature', '?')}, max_tokens {cfg.get('max_tokens', '?')}\n")
+    print(f"# Summarizer leaderboard — {_header(records)}\n")
     if not args.judged:
         print("_No judge scores supplied (--judged); quality column blank. "
               "Run benchmarks/judge.py to populate it._\n")
@@ -267,11 +262,9 @@ def main(argv=None) -> None:
     t.add_argument("results", type=Path)
     t.set_defaults(fn=cmd_timings)
 
-    b = sub.add_parser("blind", help="Write blinded summaries + key file for one doc")
+    b = sub.add_parser("blind", help="Write blinded summaries + key file")
     b.add_argument("results", type=Path)
     b.add_argument("--out", type=Path, required=True, help="Output directory")
-    b.add_argument("--document-id", type=int, default=None,
-                   help="Which document to blind (default: first sampled doc)")
     b.add_argument("--seed", type=int, default=None,
                    help="Seed the per-model pick + label shuffle for reproducibility")
     b.set_defaults(fn=cmd_blind)
