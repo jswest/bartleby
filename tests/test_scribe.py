@@ -43,7 +43,8 @@ class _StubProvider:
         self.calls = 0
         self.last_document_text: str | None = None
 
-    def summarize(self, document_text, *, model, temperature):
+    def summarize(self, document_text, *, model, temperature,
+                  reasoning_effort=None):
         self.calls += 1
         self.last_document_text = document_text
         return DocumentSummary(
@@ -753,7 +754,8 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         def analyze_image(self, *a, **k):  # protocol completeness
             raise NotImplementedError
 
-        def summarize(self, document_text, *, model, temperature):
+        def summarize(self, document_text, *, model, temperature,
+                      reasoning_effort=None):
             # Lock so the "first call fails" rule is deterministic under the pool.
             with self._lock:
                 self.calls += 1

@@ -27,7 +27,9 @@ class OllamaProvider:
         *,
         model: str,
         temperature: float,
+        reasoning_effort: str | None = None,
     ) -> DocumentSummary:
+        # reasoning_effort is a cloud-provider concept; Ollama has no equivalent.
         response = self._client.chat(
             model=model,
             messages=build_summary_messages(document_text),

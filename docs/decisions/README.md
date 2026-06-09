@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0232 — Reasoning effort is a unified enum mapped per-provider, via the modern Anthropic effort API (issue #232)](GH-0232-reasoning-effort-knob-0001.md)
 - [GH-0235 — An HTML page saved as `.pdf` is rejected with a clear reason, never rerouted into the HTML pipeline (issue #235)](GH-0235-reject-html-saved-as-pdf-not-reroute-0001.md)
 - [GH-0236 — PER_WORKER_GB sized against measured pdfplumber peak RSS, not a model-load estimate (issue #236)](GH-0236-tune-per-worker-gb-to-measured-peak-0001.md)
 - [GH-0227 — Parse workers route warnings to the parent; they never touch the console (issue #227)](GH-0227-route-worker-warnings-to-parent-0001.md)

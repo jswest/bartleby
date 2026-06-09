@@ -82,6 +82,7 @@ def summarize(
     model: str,
     temperature: float,
     max_summarize_tokens: int,
+    reasoning_effort: str | None = None,
 ) -> SummaryResult:
     """Summarize ``document_text``, truncating input if needed.
 
@@ -96,6 +97,7 @@ def summarize(
 
     summary: DocumentSummary = provider.summarize(
         input_text, model=model, temperature=temperature,
+        reasoning_effort=reasoning_effort,
     )
 
     text = summary.text
