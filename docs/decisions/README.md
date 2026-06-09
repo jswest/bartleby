@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0236 — PER_WORKER_GB sized against measured pdfplumber peak RSS, not a model-load estimate (issue #236)](GH-0236-tune-per-worker-gb-to-measured-peak-0001.md)
 - [GH-0227 — Parse workers route warnings to the parent; they never touch the console (issue #227)](GH-0227-route-worker-warnings-to-parent-0001.md)
 - [GH-0225 — In-run duplicate files are dropped with a surfaced count, not aliased or provenance-tracked (issue #225)](GH-0225-in-run-duplicate-files-dropped-with-count-0001.md)
 - [GH-0222 — Never send temperature to the OpenAI provider; GPT-5 rejects non-default values (issue #222)](GH-0222-omit-temperature-openai-0001.md)

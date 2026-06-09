@@ -2287,11 +2287,11 @@ def test_resolve_max_workers_timings_forces_one(monkeypatch):
 
 def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
     from bartleby.commands import scribe as scribe_module
-    # RAM-bound: 8 cores but only ~12GB free → 12 // 4.0 = 3 workers.
-    _fake_machine(monkeypatch, cores=8, free_gb=12)
-    assert scribe_module._resolve_max_workers({}, timings=False) == 3
+    # RAM-bound: 8 cores but only ~48GB free → 48 // 12.0 = 4 workers.
+    _fake_machine(monkeypatch, cores=8, free_gb=48)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 4
     # CPU-bound: 16 cores, plenty of RAM → 16 − 2 reserved = 14 workers.
-    _fake_machine(monkeypatch, cores=16, free_gb=128)
+    _fake_machine(monkeypatch, cores=16, free_gb=256)
     assert scribe_module._resolve_max_workers({}, timings=False) == 14
 
 
@@ -2308,7 +2308,7 @@ def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
 
 def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
     from bartleby.commands import scribe as scribe_module
-    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 4.0 = 0 → floored to 1
+    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 12.0 = 0 → floored to 1
     assert scribe_module._resolve_max_workers({}, timings=False) == 1
 
 
