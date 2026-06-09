@@ -69,6 +69,57 @@ def test_anthropic_summarize_validates_tool_input(monkeypatch):
     assert result.title == "T"
     # The summary call must force the save_summary tool.
     assert fake.last_call["tool_choice"]["name"] == "save_summary"
+    # No reasoning_effort + a non-effort model → plain temperature, no effort knob.
+    assert "output_config" not in fake.last_call
+    assert fake.last_call["temperature"] == 0.0
+
+
+def _summarize_with_effort(monkeypatch, *, model, effort):
+    response = _FakeAnthropicResponse([
+        _block("tool_use", name="save_summary", input_=_SUMMARY_INPUT),
+    ])
+    fake = _install_anthropic(monkeypatch, response)
+    from bartleby.providers.anthropic import AnthropicProvider
+    AnthropicProvider().summarize(
+        "a doc", model=model, temperature=0.0, reasoning_effort=effort,
+    )
+    return fake
+
+
+def test_anthropic_effort_sent_for_capable_model_drops_temperature(monkeypatch):
+    # Opus 4.8 accepts output_config.effort and rejects temperature → effort set,
+    # temperature omitted.
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort="low")
+    assert fake.last_call["output_config"] == {"effort": "low"}
+    assert "temperature" not in fake.last_call
+
+
+def test_anthropic_effort_keeps_temperature_on_older_capable_model(monkeypatch):
+    # Opus 4.6 supports effort but still accepts temperature → both sent.
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-6", effort="medium")
+    assert fake.last_call["output_config"] == {"effort": "medium"}
+    assert fake.last_call["temperature"] == 0.0
+
+
+def test_anthropic_effort_skipped_for_uncapable_model(monkeypatch):
+    # Haiku 4.5 would 400 on output_config.effort → never sent; temperature stays.
+    fake = _summarize_with_effort(monkeypatch, model="claude-haiku-4-5", effort="high")
+    assert "output_config" not in fake.last_call
+    assert fake.last_call["temperature"] == 0.0
+
+
+def test_anthropic_drops_temperature_on_47plus_without_effort(monkeypatch):
+    # Opus 4.7+ rejects temperature whether or not effort is configured — so an
+    # unset reasoning_effort must still drop it, or every summarize call 400s.
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort=None)
+    assert "output_config" not in fake.last_call
+    assert "temperature" not in fake.last_call
+
+
+def test_anthropic_minimal_effort_maps_to_low(monkeypatch):
+    # Anthropic has no "minimal" — our enum's minimal maps to the lowest, "low".
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort="minimal")
+    assert fake.last_call["output_config"] == {"effort": "low"}
 
 
 def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
@@ -153,6 +204,19 @@ def test_openai_summarize_returns_parsed_pydantic(monkeypatch):
     assert fake.last_call["response_format"] is DocumentSummary
     # GPT-5 models reject any non-default temperature, so we never send it.
     assert "temperature" not in fake.last_call
+    # No reasoning_effort configured → the parameter is omitted entirely.
+    assert "reasoning_effort" not in fake.last_call
+
+
+def test_openai_summarize_forwards_reasoning_effort(monkeypatch):
+    parsed = DocumentSummary(**_SUMMARY_INPUT)
+    fake = _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
+    from bartleby.providers.openai import OpenAIProvider
+    OpenAIProvider().summarize(
+        "doc", model="gpt-5-nano", temperature=0.0, reasoning_effort="minimal",
+    )
+    # gpt-5 takes the effort string verbatim (minimal | low | medium | high).
+    assert fake.last_call["reasoning_effort"] == "minimal"
 
 
 def test_openai_classify_omits_temperature(monkeypatch):

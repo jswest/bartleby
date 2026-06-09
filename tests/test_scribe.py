@@ -43,7 +43,8 @@ class _StubProvider:
         self.calls = 0
         self.last_document_text: str | None = None
 
-    def summarize(self, document_text, *, model, temperature):
+    def summarize(self, document_text, *, model, temperature,
+                  reasoning_effort=None):
         self.calls += 1
         self.last_document_text = document_text
         return DocumentSummary(
@@ -232,6 +233,29 @@ def test_persist_parse_reuses_existing_file_hash(
         assert n == 1
     finally:
         conn.close()
+
+
+def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
+    """A `.pdf` that is really an HTML error page is rejected at dispatch with a
+    clear reason, before either PDF backend touches it (#235). The error rides
+    the existing parse-failure path into failed_ingests via _parse_request."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest.pdfplumber import NotAPdfError
+
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    with pytest.raises(NotAPdfError) as exc:
+        scribe_module._parse_document(
+            src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+    assert "HTML page" in str(exc.value)
+    assert "No /Root object" not in str(exc.value)
 
 
 def test_scribe_writes_summary_when_provider_configured(
@@ -661,9 +685,28 @@ def test_resolve_caption_workers_defaults_and_timings():
         {"caption_workers": 0}, timings=False) == DEFAULT_CAPTION_WORKERS
     assert scribe_module._resolve_caption_workers(
         {"caption_workers": 9}, timings=False) == 9
+    # A cloud vision provider keeps the configured/default count.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "anthropic"}, timings=False) == DEFAULT_CAPTION_WORKERS
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_caption_workers(
         {"caption_workers": 9}, timings=True) == 1
+
+
+def test_resolve_caption_workers_clamps_ollama(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
+
+    # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "ollama"}, timings=False) == 1
+    assert warnings == []
+    # An explicit count > 1 is ignored (still 1) and warns.
+    assert scribe_module._resolve_caption_workers(
+        {"vision_provider": "ollama", "caption_workers": 8}, timings=False) == 1
+    assert any("caption_workers > 1 ignored" in w for w in warnings)
 
 
 def _summary_config(**overrides):
@@ -730,7 +773,8 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         def analyze_image(self, *a, **k):  # protocol completeness
             raise NotImplementedError
 
-        def summarize(self, document_text, *, model, temperature):
+        def summarize(self, document_text, *, model, temperature,
+                      reasoning_effort=None):
             # Lock so the "first call fails" rule is deterministic under the pool.
             with self._lock:
                 self.calls += 1
@@ -783,9 +827,28 @@ def test_resolve_summarize_workers_defaults_and_timings():
         {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
         {"summarize_workers": 9}, timings=False) == 9
+    # A cloud LLM provider keeps the configured/default count.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
         {"summarize_workers": 9}, timings=True) == 1
+
+
+def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
+    from bartleby.commands import scribe as scribe_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
+
+    # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama"}, timings=False) == 1
+    assert warnings == []
+    # An explicit count > 1 is ignored (still 1) and warns.
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+    assert any("summarize_workers > 1 ignored" in w for w in warnings)
 
 
 def test_summarize_all_progress_callback_fires_per_document(
@@ -2287,11 +2350,11 @@ def test_resolve_max_workers_timings_forces_one(monkeypatch):
 
 def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
     from bartleby.commands import scribe as scribe_module
-    # RAM-bound: 8 cores but only ~12GB free → 12 // 4.0 = 3 workers.
-    _fake_machine(monkeypatch, cores=8, free_gb=12)
-    assert scribe_module._resolve_max_workers({}, timings=False) == 3
+    # RAM-bound: 8 cores but only ~48GB free → 48 // 12.0 = 4 workers.
+    _fake_machine(monkeypatch, cores=8, free_gb=48)
+    assert scribe_module._resolve_max_workers({}, timings=False) == 4
     # CPU-bound: 16 cores, plenty of RAM → 16 − 2 reserved = 14 workers.
-    _fake_machine(monkeypatch, cores=16, free_gb=128)
+    _fake_machine(monkeypatch, cores=16, free_gb=256)
     assert scribe_module._resolve_max_workers({}, timings=False) == 14
 
 
@@ -2308,7 +2371,7 @@ def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
 
 def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
     from bartleby.commands import scribe as scribe_module
-    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 4.0 = 0 → floored to 1
+    _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 12.0 = 0 → floored to 1
     assert scribe_module._resolve_max_workers({}, timings=False) == 1
 
 

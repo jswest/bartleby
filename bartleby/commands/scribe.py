@@ -620,6 +620,11 @@ def _parse_document(
             on_stage=on_stage, on_warn=on_warn,
         )
     if ext in PDF_EXTENSIONS:
+        # Reject HTML error pages saved with a `.pdf` extension before either
+        # backend dies deep in pdfminer with a cryptic "No /Root object!" — and
+        # *without* rerouting them into the HTML pipeline (they carry no
+        # document content; ingesting a portal error page pollutes the corpus).
+        pdfplumber_pipeline.reject_if_html(archived)
         if pdf_converter == "docling":
             return _parse_pdf_docling(
                 archived, file_hash=file_hash, file_name=file_name,
@@ -828,6 +833,7 @@ def _summarize_all(
     timings: bool,
     on_progress: Callable[[int, int], None] | None,
     on_lane: Callable[[object, str, str], None] | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, dict[int, tuple[str, float]]]:
     """Phase 3: summarize every document still owing one, concurrently (#188).
 
@@ -887,6 +893,7 @@ def _summarize_all(
         return summarize(
             text, provider=llm_provider, model=llm_model,
             temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     if summarize_workers <= 1:
@@ -1178,6 +1185,11 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
     so this is a plain configured count defaulting to ``DEFAULT_CAPTION_WORKERS``.
     ``--timings`` forces 1: the per-stage breakdown is a sequential baseline,
     meaningless once captions overlap (same rationale as ``max_workers``).
+
+    A local Ollama vision provider clamps to 1 regardless (#243): Ollama's
+    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
+    and parallel workers only queue. An explicit ``caption_workers`` > 1 is
+    ignored (with a warning) rather than honored — the clamp is the point.
     """
     configured = int(config.get("caption_workers") or DEFAULT_CAPTION_WORKERS)
     if timings:
@@ -1185,6 +1197,15 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
             console.warn(
                 "--timings captions sequentially (caption_workers=1) for a "
                 "clean baseline."
+            )
+        return 1
+    if config.get("vision_provider") == "ollama":
+        # Re-read the raw value (not `configured`, which has the default folded
+        # in) so the warning fires only on an explicit count, not the default.
+        if int(config.get("caption_workers") or 0) > 1:
+            console.warn(
+                "caption_workers > 1 ignored — Ollama serializes requests "
+                "(OLLAMA_NUM_PARALLEL defaults to 1); captioning one image at a time."
             )
         return 1
     return max(1, configured)
@@ -1197,6 +1218,11 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
     network/IO-bound, so this is a plain configured count defaulting to
     ``DEFAULT_SUMMARIZE_WORKERS``. ``--timings`` forces 1 for a clean per-document
     baseline, meaningless once summaries overlap (same rationale as the others).
+
+    A local Ollama LLM provider clamps to 1 regardless (#243): Ollama's
+    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
+    and parallel workers only queue. An explicit ``summarize_workers`` > 1 is
+    ignored (with a warning) rather than honored — the clamp is the point.
     """
     configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
     if timings:
@@ -1204,6 +1230,16 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
             console.warn(
                 "--timings summarizes sequentially (summarize_workers=1) for a "
                 "clean baseline."
+            )
+        return 1
+    if config.get("provider") == "ollama":
+        # Re-read the raw value (not `configured`, which has the default folded
+        # in) so the warning fires only on an explicit count, not the default.
+        if int(config.get("summarize_workers") or 0) > 1:
+            console.warn(
+                "summarize_workers > 1 ignored — Ollama serializes requests "
+                "(OLLAMA_NUM_PARALLEL defaults to 1); summarizing one document "
+                "at a time."
             )
         return 1
     return max(1, configured)
@@ -1352,6 +1388,7 @@ def main(
         timings=timings,
     )
     temperature = float(config.get("temperature", 0))
+    reasoning_effort = config.get("reasoning_effort")
     max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
     summaries_enabled = llm_provider is not None and bool(llm_model)
 
@@ -1530,6 +1567,7 @@ def main(
                         summarize_workers=summarize_workers, timings=timings,
                         on_progress=sum_phase.on_progress,
                         on_lane=sum_phase.lane,
+                        reasoning_effort=reasoning_effort,
                     )
                     incomplete_count += owed
                     if timings:

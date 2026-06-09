@@ -109,6 +109,7 @@ class Provider(Protocol):
         *,
         model: str,
         temperature: float,
+        reasoning_effort: str | None = None,
     ) -> DocumentSummary: ...
 
     def analyze_image(
