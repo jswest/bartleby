@@ -1,4 +1,14 @@
-benchmarks/
+# benchmarks/ scripts + README are tracked (a reproducible model-selection
+# tool). Only the local run outputs and secrets are ignored.
+benchmarks/results*
+benchmarks/judged*
+benchmarks/blind*
+benchmarks/*-judged.csv
+benchmarks/.env
+# Local-only summarizer variants kept out of VC (cloud-cost is out of scope
+# for the local-selection benchmark; see benchmarks/README.md).
+benchmarks/summarize_openai.py
+benchmarks/summarize_omlx_vs_ollama.py
 build
 *.cast
 dist

@@ -1,0 +1,19 @@
+# Models the summarization benchmark runs — in this exact order, no filtering.
+#
+# This list is the source of truth: summarize_local.py runs *only* what's here
+# and skips nothing. Nothing is auto-discovered, and no model is dropped for
+# being a vision/coder/embedding name — that judgement is yours. Add or remove
+# lines freely; if you don't have one installed, `ollama pull <name>` it (or
+# delete the line). Don't have a model and think it belongs here? Open a PR.
+#
+# Override ad hoc without editing this file: `--models a b c`.
+
+models:
+  - gpt-oss:20b
+  - gpt-oss:120b
+  - gemma4:e2b
+  - gemma4:e4b
+  - gemma4:26b
+  - gemma4:31b
+  - qwen3:30b
+  - qwen3.6:35b-mlx
