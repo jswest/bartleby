@@ -219,6 +219,29 @@ def test_convert_skips_decorative_small_and_thin_images(tmp_path):
     assert len(page.embedded_images) == 1
 
 
+def test_reject_if_html_rejects_html_saved_as_pdf(tmp_path):
+    # The exact NY DPS portal shape from #235: leading CRLF then an HTML page,
+    # saved with a `.pdf` extension by a failed download.
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(
+        b"\r\n\r\n<!DOCTYPE html>\n<html><body>"
+        b"Either the document does not exists or some problem occured."
+        b"</body></html>"
+    )
+    with pytest.raises(pp.NotAPdfError) as exc:
+        pp.reject_if_html(src)
+    # Actionable reason, not pdfminer's cryptic "No /Root object!".
+    assert "HTML page" in str(exc.value)
+    assert "No /Root object" not in str(exc.value)
+
+
+def test_reject_if_html_passes_a_real_pdf(tmp_path):
+    src = tmp_path / "real.pdf"
+    _text_pdf(src, ["A genuine PDF with plenty of text. " * 4])
+    # A valid PDF starts with %PDF — no exception.
+    pp.reject_if_html(src)
+
+
 def test_convert_calls_on_progress_with_total_then_each_page(tmp_path):
     src = tmp_path / "multi.pdf"
     _text_pdf(src, [

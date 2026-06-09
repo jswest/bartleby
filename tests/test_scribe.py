@@ -234,6 +234,29 @@ def test_persist_parse_reuses_existing_file_hash(
         conn.close()
 
 
+def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
+    """A `.pdf` that is really an HTML error page is rejected at dispatch with a
+    clear reason, before either PDF backend touches it (#235). The error rides
+    the existing parse-failure path into failed_ingests via _parse_request."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest.pdfplumber import NotAPdfError
+
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    with pytest.raises(NotAPdfError) as exc:
+        scribe_module._parse_document(
+            src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
+            pdf_converter="pdfplumber", html_converter="docling",
+            sparse_text_threshold=100, ocr_min_confidence=30,
+            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
+            archive_root=archive_root,
+        )
+    assert "HTML page" in str(exc.value)
+    assert "No /Root object" not in str(exc.value)
+
+
 def test_scribe_writes_summary_when_provider_configured(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
