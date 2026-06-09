@@ -47,6 +47,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
         "sk-test-key",         # API key
         "one-shot",            # Summary depth
         "0",                   # Temperature
+        "low",                 # Reasoning effort
         "50000",               # Max summarize tokens
         "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
@@ -63,6 +64,7 @@ def test_config_writes_v1_keys_with_anthropic_one_shot(isolated_config, monkeypa
     assert cfg["anthropic_api_key"] == "sk-test-key"
     assert cfg["summary_depth"] == "one-shot"
     assert cfg["temperature"] == 0
+    assert cfg["reasoning_effort"] == "low"
     assert cfg["max_summarize_tokens"] == 50000
     assert cfg["max_read_tokens"] == 50000
     assert cfg["pdf_converter"] == "pdfplumber"
@@ -110,6 +112,7 @@ def test_config_with_ollama_writes_base_url_not_api_key(isolated_config, monkeyp
         "http://localhost:11434",
         "one-shot",
         "0",
+        "low",
         "50000",
         "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
@@ -181,6 +184,7 @@ def test_config_with_vision_writes_vision_keys(isolated_config, monkeypatch):
         "sk-openai",
         "one-shot",
         "0",
+        "low",
         "50000",
         "4",                   # Summarize workers
         "pdfplumber",          # PDF converter
@@ -218,6 +222,7 @@ def test_config_vision_with_different_provider_prompts_for_fresh_key(
         "sk-openai",
         "one-shot",
         "0",
+        "low",
         "50000",
         "4",                   # Summarize workers
         "pdfplumber",          # PDF converter

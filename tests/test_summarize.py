@@ -18,6 +18,7 @@ class FakeProvider:
     captured_text: str | None = None
     captured_model: str | None = None
     captured_temperature: float | None = None
+    captured_reasoning_effort: str | None = None
     return_title: str = "Doc Title"
     return_description: str = "A one-line hook describing the document."
     return_text: str = "this is a summary"
@@ -25,10 +26,12 @@ class FakeProvider:
 
     name = "fake"
 
-    def summarize(self, document_text: str, *, model: str, temperature: float):
+    def summarize(self, document_text: str, *, model: str, temperature: float,
+                  reasoning_effort: str | None = None):
         self.captured_text = document_text
         self.captured_model = model
         self.captured_temperature = temperature
+        self.captured_reasoning_effort = reasoning_effort
         return DocumentSummary(
             title=self.return_title,
             description=self.return_description,
@@ -49,6 +52,25 @@ def test_summarize_short_doc_no_truncation_note():
     assert result.text == "this is a summary"
     assert result.truncated_from_tokens is None
     assert p.captured_text == "short document"
+
+
+def test_summarize_forwards_reasoning_effort_to_provider():
+    p = FakeProvider()
+    summarize(
+        "short document",
+        provider=p, model="m", temperature=0.0,
+        max_summarize_tokens=1000, reasoning_effort="low",
+    )
+    assert p.captured_reasoning_effort == "low"
+
+
+def test_summarize_reasoning_effort_defaults_to_none():
+    p = FakeProvider()
+    summarize(
+        "short document",
+        provider=p, model="m", temperature=0.0, max_summarize_tokens=1000,
+    )
+    assert p.captured_reasoning_effort is None
 
 
 def test_summarize_long_doc_truncates_input_and_appends_note():

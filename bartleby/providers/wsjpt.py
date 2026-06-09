@@ -48,9 +48,10 @@ class WsjptProvider:
         *,
         model: str,
         temperature: float,
+        reasoning_effort: str | None = None,
     ) -> DocumentSummary:
-        # temperature is intentionally ignored — wsjpt owns model settings
-        # centrally so callers can't drift from the parsing-toolkit defaults.
+        # temperature and reasoning_effort are intentionally ignored — wsjpt owns
+        # model settings centrally so callers can't drift from the toolkit defaults.
         jpt = self._Jpt(
             DocumentSummary,
             model_config=self._model_config(model),

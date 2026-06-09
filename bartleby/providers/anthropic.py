@@ -7,6 +7,7 @@ import base64
 from anthropic import Anthropic
 from pydantic import BaseModel, ValidationError
 
+from bartleby.lib import console
 from bartleby.providers.base import DocumentSummary, VlmDescription
 from bartleby.providers.prompt import (
     IMAGE_DESCRIPTION_INSTRUCTIONS,
@@ -17,6 +18,43 @@ from bartleby.providers.prompt import (
 _SUMMARY_TOOL = "save_summary"
 _IMAGE_TOOL = "save_image_description"
 _CLASSIFY_TOOL = "save_classification"
+
+# Reasoning effort is GA via output_config.effort on Opus 4.5+ and Sonnet 4.6;
+# it 400s on Sonnet 4.5 / Haiku 4.5 and earlier, so we only send it for the
+# models below and leave older models on their default behavior. We deliberately
+# do NOT pair it with a thinking block: Anthropic rejects an enabled-thinking
+# request that also forces a specific tool, and summarize() forces save_summary.
+# Effort alone still lowers reasoning spend, which is the whole point.
+_EFFORT_MODEL_PREFIXES = (
+    "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+    "claude-sonnet-4-6",
+)
+# temperature is removed on Opus 4.7+ (400 if sent); on the older effort-capable
+# models it's still accepted, so we keep forwarding it there for determinism.
+_NO_TEMPERATURE_PREFIXES = ("claude-opus-4-7", "claude-opus-4-8")
+# Our unified enum has "minimal" (an OpenAI level); Anthropic's lowest is "low".
+_EFFORT_MAP = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
+
+_temperature_warned = False
+
+
+def _supports_effort(model: str) -> bool:
+    return model.startswith(_EFFORT_MODEL_PREFIXES)
+
+
+def _drops_temperature(model: str) -> bool:
+    return model.startswith(_NO_TEMPERATURE_PREFIXES)
+
+
+def _warn_dropped_temperature(temperature: float, model: str) -> None:
+    global _temperature_warned
+    if temperature != 1.0 and not _temperature_warned:
+        _temperature_warned = True
+        console.warn(
+            f"{model} does not accept a temperature; ignoring configured "
+            f"temperature={temperature} (steer summaries via reasoning effort "
+            "and the prompt instead)."
+        )
 
 
 class AnthropicProvider:
@@ -31,9 +69,10 @@ class AnthropicProvider:
         *,
         model: str,
         temperature: float,
+        reasoning_effort: str | None = None,
     ) -> DocumentSummary:
         messages = build_summary_messages(document_text)
-        response = self._client.messages.create(
+        kwargs: dict = dict(
             model=model,
             max_tokens=4096,
             temperature=temperature,
@@ -45,6 +84,14 @@ class AnthropicProvider:
             }],
             tool_choice={"type": "tool", "name": _SUMMARY_TOOL},
         )
+        if reasoning_effort and _supports_effort(model):
+            kwargs["output_config"] = {"effort": _EFFORT_MAP[reasoning_effort]}
+            # Opus 4.7+ rejects temperature; the older effort-capable models still
+            # accept it, so we only drop it where it would 400.
+            if _drops_temperature(model):
+                _warn_dropped_temperature(temperature, model)
+                del kwargs["temperature"]
+        response = self._client.messages.create(**kwargs)
         return _extract_tool_input(response, _SUMMARY_TOOL, DocumentSummary)
 
     def classify(

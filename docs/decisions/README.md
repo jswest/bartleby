@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0232 — Reasoning effort is a unified enum mapped per-provider, via the modern Anthropic effort API (issue #232)](GH-0232-reasoning-effort-knob-0001.md)
 - [GH-0227 — Parse workers route warnings to the parent; they never touch the console (issue #227)](GH-0227-route-worker-warnings-to-parent-0001.md)
 - [GH-0225 — In-run duplicate files are dropped with a surfaced count, not aliased or provenance-tracked (issue #225)](GH-0225-in-run-duplicate-files-dropped-with-count-0001.md)
 - [GH-0222 — Never send temperature to the OpenAI provider; GPT-5 rejects non-default values (issue #222)](GH-0222-omit-temperature-openai-0001.md)
