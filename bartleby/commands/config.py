@@ -273,14 +273,18 @@ def main():
                 help_text="Caps how much document text is sent to the summarizer; "
                 "longer documents are truncated.\nHigher = more context, higher cost.",
             )
-            config["summarize_workers"] = _prompt_positive_int(
-                "Summarize workers",
-                int(existing.get("summarize_workers", DEFAULT_SUMMARIZE_WORKERS)),
-                help_text="How many documents summarize in parallel after parsing "
-                "— LLM calls are network-bound, so this runs separately from parse "
-                "workers.\nRaise it for a rate-tolerant cloud provider; keep it low "
-                "for a single-GPU local Ollama, which serializes anyway.",
-            )
+            if provider == "ollama":
+                # Ollama serializes (OLLAMA_NUM_PARALLEL=1), so summarize workers
+                # auto-clamp to 1 (#243) — no count to prompt for.
+                config.pop("summarize_workers", None)
+            else:
+                config["summarize_workers"] = _prompt_positive_int(
+                    "Summarize workers",
+                    int(existing.get("summarize_workers", DEFAULT_SUMMARIZE_WORKERS)),
+                    help_text="How many documents summarize in parallel after "
+                    "parsing — LLM calls are network-bound, so this runs separately "
+                    "from parse workers.\nRaise it for a rate-tolerant cloud provider.",
+                )
         else:
             config.pop("temperature", None)
             config.pop("reasoning_effort", None)
@@ -369,14 +373,18 @@ def main():
             help_text="Tesseract average confidence (0-100); pages scoring below "
             "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more.",
         )
-        config["caption_workers"] = _prompt_positive_int(
-            "Caption workers",
-            int(existing.get("caption_workers", DEFAULT_CAPTION_WORKERS)),
-            help_text="How many images caption in parallel after parsing — VLM "
-            "calls are network-bound, so this runs separately from parse workers."
-            "\nRaise it for a rate-tolerant cloud provider; keep it low for a "
-            "single-GPU local Ollama, which serializes anyway.",
-        )
+        if vprovider == "ollama":
+            # Ollama serializes (OLLAMA_NUM_PARALLEL=1), so caption workers
+            # auto-clamp to 1 (#243) — no count to prompt for.
+            config.pop("caption_workers", None)
+        else:
+            config["caption_workers"] = _prompt_positive_int(
+                "Caption workers",
+                int(existing.get("caption_workers", DEFAULT_CAPTION_WORKERS)),
+                help_text="How many images caption in parallel after parsing — VLM "
+                "calls are network-bound, so this runs separately from parse "
+                "workers.\nRaise it for a rate-tolerant cloud provider.",
+            )
     else:
         for k in ("vision_provider", "vision_model",
                  "vision_max_dimension", "vision_min_dimension",
