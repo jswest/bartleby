@@ -21,12 +21,23 @@ thresholds, chunks each text page with Bartleby's `chunk_text`, and joins the
 document chunks in page/chunk order — the exact result `writer.summary_input`
 produces (verified byte-identical to the chunks ingest stored for this doc). It
 runs at **temperature 0.0** and the production **`max_summarize_tokens` =
-50,000** (the old prototype ran temp 1.0 / 16k — both stale), and auto-discovers
-candidates from `ollama list` minus a skip-list (vision `*-vl*`, embeddings
-`nomic-embed*`, image-gen `x/*`, coder variants). It imports Bartleby's actual
-`build_summary_messages` + `DocumentSummary` so the call path matches ingest.
-pdfplumber is the only extraction backend; Docling is deferred. A single doc,
-extra docs (incl. image-bearing), and a Docling variant are explicit follow-ups.
+50,000** (the old prototype ran temp 1.0 / 16k — both stale). It imports
+Bartleby's actual `build_summary_messages` + `DocumentSummary` so the call path
+matches ingest. pdfplumber is the only extraction backend; Docling is deferred.
+A single doc, extra docs (incl. image-bearing), and a Docling variant are
+explicit follow-ups.
+
+The candidate model set is a **committed, human-curated `models.yaml`**, run in
+order with **no filtering** — explicitly *not* auto-discovered from `ollama
+list`, and nothing skipped for being a vision/coder/embedding name (an earlier
+cut auto-discovered minus a skip-list; that was dropped). The benchmark is a
+personal selection tool; deciding which models belong is the maintainer's call,
+and a missing model is a warning, not a silent omission. Calls **stream** so a
+`rich` live view can show tokens accruing in real time (overall matrix bar +
+streaming active-model line with a pulse bar + per-model dashboard table),
+degrading to plain per-call lines off a TTY; the exact timing metadata still
+comes from Ollama's final streamed chunk, so streaming doesn't perturb the
+numbers.
 
 Accuracy judging is automated. `judge.py` sends each summary plus its source to
 a cloud model (OpenAI `gpt-5.5`) for a 1–5 rubric (faithfulness, coverage,

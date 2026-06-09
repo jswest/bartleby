@@ -69,11 +69,13 @@ For each candidate model, over N runs:
 - **Randomized order.** The whole (model × run) matrix is shuffled into one
   order so thermal throttling and weight-eviction can't favor any model. Pass
   `--seed` to make the plan reproducible.
-- **Model discovery.** With no `--models`, the set is auto-discovered from
-  `ollama list` minus a skip-list of non-text models (vision `*-vl*`, embeddings
-  `nomic-embed*`, image-gen `x/*`, and coder variants). So the set tracks
-  whatever you actually have installed. `--include-coder` keeps coders;
-  `--models a b c` pins an explicit set.
+- **Model list (`models.yaml`).** The set is **exactly** the list under
+  `models:` in `benchmarks/models.yaml` — committed to VC, run in order, with
+  **no filtering**: nothing is auto-discovered and no model is dropped for being
+  a vision/coder/embedding name. Curating it is your job — add or remove lines,
+  `ollama pull` what you don't have (or open a PR). Listed-but-not-installed
+  models are warned about up front and their runs simply record an error.
+  `--models a b c` overrides the file for an ad-hoc run.
 - **Blind, automated judge.** `judge.py` sends each summary to a cloud model
   (default `gpt-5.5`) with **only** the source text and the summary — never the
   model name — and scores it on the rubric. The source is the exact (truncated)
@@ -85,8 +87,11 @@ For each candidate model, over N runs:
 
 ## Running it
 
+Edit `models.yaml` to the set you want, then:
+
 ```sh
-# 1. Benchmark the committed doc (hammers local Ollama — minutes per model).
+# 1. Benchmark the committed doc (runs every model in models.yaml; hammers
+#    local Ollama — minutes per model).
 uv run python benchmarks/summarize_local.py --runs 3 --seed 1 \
     --out benchmarks/results.jsonl
 
@@ -109,6 +114,19 @@ uv run python benchmarks/examine.py blind benchmarks/results.jsonl \
 
 `--pdf` points the benchmark at a different file if you want to try one ad hoc.
 
+## Live progress
+
+On a terminal, `summarize_local.py` shows a live `rich` view: an overall
+matrix progress bar (calls done, elapsed, ETA), a streaming line for the model
+currently generating (live token estimate + tok/s + elapsed, with a pulse bar —
+generation length isn't known ahead of time, so the bar signals activity, not a
+percentage), and a per-model dashboard table (status, runs done, tok/s, schema
+gate) that fills in as runs land. The live token count is a tiktoken estimate of
+the streamed text; the exact `eval_count`/`tok/s` recorded in the JSONL come
+from Ollama's final-chunk metadata. Off a terminal (piped or redirected) it
+degrades to one plain `[k/N] model (run i)` line per call, then a `✓/✗` on
+completion — no escape codes in your logs.
+
 ## Reading the leaderboard
 
 - **Schema-valid %** is the gate. Anything below `--min-schema` (default 100%)
@@ -123,7 +141,7 @@ uv run python benchmarks/examine.py blind benchmarks/results.jsonl \
 ## What's tracked vs. local
 
 Tracked (in version control): `summarize_local.py`, `examine.py`, `judge.py`,
-this README, and the one benchmark PDF under `corpus/`.
+`models.yaml`, this README, and the one benchmark PDF under `corpus/`.
 
 Git-ignored (local only): `results*.jsonl`, `judged*.jsonl`, `blind*/`, the
 legacy `*-judged.csv`, `.env`. The earlier cloud-summarizer variants
