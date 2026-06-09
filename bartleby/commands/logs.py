@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from bartleby.db.connection import open_db, resolve_project_name
+from bartleby.session import read_active_session_id
 
 
 _ARGS_TRUNCATE = 80
@@ -30,7 +31,7 @@ def _format_duration(ms: int | None) -> str:
     return f"{ms / 1000:.2f}s"
 
 
-def _resolve_session(conn, session: str | None):
+def _resolve_session(conn, session: str | None, project_name: str):
     cur = conn.cursor()
     if session:
         row = cur.execute(
@@ -40,6 +41,13 @@ def _resolve_session(conn, session: str | None):
             _console.print(f"[red]No session named '{session}'.[/red]")
             sys.exit(1)
         return row
+    active_id = read_active_session_id(project_name)
+    if active_id is not None:
+        row = cur.execute(
+            "SELECT session_id, name FROM sessions WHERE session_id = ?", (active_id,)
+        ).fetchone()
+        if row is not None:
+            return row
     return cur.execute(
         "SELECT session_id, name FROM sessions ORDER BY session_id DESC LIMIT 1"
     ).fetchone()
@@ -54,7 +62,7 @@ def main(*, session: str | None = None, limit: int = 50, project: str | None = N
 
     conn = open_db(project_name)
     try:
-        resolved = _resolve_session(conn, session)
+        resolved = _resolve_session(conn, session, project_name)
         if resolved is None:
             _console.print("No sessions yet.")
             return
