@@ -2,13 +2,16 @@
 """Examine JSONL output from benchmarks/summarize_local.py.
 
 Subcommands:
-  timings     — markdown table of per-model wall-clock + tok/s + schema-valid %
+  timings     — per-model wall-clock + tok/s + schema gate
   blind       — write blinded summaries (one per model) + a key file
   errors      — list any failed runs, with raw-output previews
   leaderboard — merge timings + schema-valid % + judge scores into the final
                 ranked report, dropping schema-failers and starring the frontier
 
-Safe to run on a partially-written JSONL (malformed final line is skipped).
+`timings` and `leaderboard` render a colored rich table on a terminal and clean
+markdown when piped/redirected — so `> leaderboard.md` stays diffable and free
+of escape codes. Safe to run on a partially-written JSONL (a malformed final
+line is skipped).
 
 Examples:
   uv run python benchmarks/examine.py timings benchmarks/results.jsonl
@@ -26,6 +29,10 @@ import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 
 def load_records(path: Path) -> list[dict]:
@@ -56,15 +63,55 @@ def _runs_by_model(records: list[dict]) -> dict[str, list[dict]]:
 
 
 def _inference_seconds(run: dict) -> float:
-    """Wall-clock minus model load time — the comparable inference cost."""
+    """Wall-clock minus model load time — the load-corrected inference cost."""
     return run["wall_seconds"] - (run.get("load_duration_ns") or 0) / 1e9
 
 
-def _header(records: list[dict]) -> str:
-    cfg = _config(records)
-    return (f"{cfg.get('pdf_name', '?')} ({cfg.get('source_token_count', '?')} input "
-            f"tokens, temp {cfg.get('temperature', '?')}, "
-            f"max_tokens {cfg.get('max_tokens', '?')})")
+# ---- rendering: rich table on a TTY, markdown when piped ----
+
+_MD_ALIGN = {"left": "---", "right": "--:", "center": ":-:"}
+
+
+def _tty() -> bool:
+    return sys.stdout.isatty()
+
+
+def emit_table(title: str, columns: list[tuple[str, str]], rows: list[list[tuple[str, str | None]]]) -> None:
+    """Render a table. ``columns`` is [(header, justify)]; each row cell is
+    ``(text, style)`` where ``style`` is a rich style on a TTY and ignored in
+    markdown. Numbers/colour on a terminal; portable markdown when redirected.
+    An empty ``title`` is omitted (for tables that sit under their own heading)."""
+    if _tty():
+        table = Table(title=title or None, title_justify="left", header_style="bold")
+        for header, justify in columns:
+            table.add_column(header, justify=justify)
+        for row in rows:
+            table.add_row(*(Text(text, style=style or "") for text, style in row))
+        Console().print(table)
+    else:
+        if title:
+            print(f"# {title}\n")
+        print("| " + " | ".join(h for h, _ in columns) + " |")
+        print("|" + "|".join(_MD_ALIGN[j] for _, j in columns) + "|")
+        for row in rows:
+            print("| " + " | ".join(text for text, _ in row) + " |")
+
+
+def note(line: str) -> None:
+    """A footnote — dim on a TTY, italic in markdown."""
+    if _tty():
+        # highlight=False so rich doesn't recolor numbers/parens inside the note.
+        Console(highlight=False).print(line, style="dim")
+    else:
+        print(f"\n_{line}_")
+
+
+def heading(text: str, style: str = "bold") -> None:
+    """A section heading — styled on a TTY, `## ` in markdown."""
+    if _tty():
+        Console(highlight=False).print(f"\n{text}", style=style)
+    else:
+        print(f"\n## {text}\n")
 
 
 def cmd_timings(args) -> int:
@@ -74,36 +121,55 @@ def cmd_timings(args) -> int:
         print("No measured runs yet.", file=sys.stderr)
         return 1
 
-    print(f"# Timings — {_header(records)}\n")
-    print("| Model | OK / N | Schema-valid % | Inference sec (median) | Inference range | Tok/s (median) | Eval tokens (median) |")
-    print("|---|---|---|---|---|---|---|")
-
+    cfg = _config(records)
+    stats = []
     for model in sorted(by_model):
         rs = by_model[model]
         ok = [r for r in rs if r.get("ok")]
-        n_str = f"{len(ok)} / {len(rs)}"
-        valid_pct = f"{100 * len(ok) / len(rs):.0f}%" if rs else "—"
-        if not ok:
-            print(f"| {model} | {n_str} | {valid_pct} | — | — | — | — |")
-            continue
         infs = [_inference_seconds(r) for r in ok]
         tps = [r["tokens_per_second"] for r in ok if r.get("tokens_per_second")]
         evals = [r["eval_count"] for r in ok if r.get("eval_count")]
-        tps_med = f"{statistics.median(tps):.1f}" if tps else "—"
-        eval_med = f"{int(statistics.median(evals))}" if evals else "—"
-        print(f"| {model} | {n_str} | {valid_pct} | {statistics.median(infs):.1f}s | "
-              f"{min(infs):.1f}–{max(infs):.1f}s | {tps_med} | {eval_med} |")
+        stats.append({
+            "model": model, "n": len(rs), "ok": len(ok),
+            "infs": infs, "tps": statistics.median(tps) if tps else None,
+            "eval": statistics.median(evals) if evals else None,
+        })
+    fastest = max((s["tps"] for s in stats if s["tps"]), default=None)
 
-    print("\n_Inference sec = wall_seconds − load_duration. "
-          "Schema-valid % = share of runs that parsed into DocumentSummary (the hard gate)._")
-    cfg = _config(records)
+    columns = [("Model", "left"), ("Schema", "left"), ("Inference (s)", "right"),
+               ("Tok/s", "right"), ("Eval tok", "right")]
+    rows = []
+    for s in stats:
+        passed = s["ok"] == s["n"] and s["ok"] > 0
+        schema = (f"{'✓' if passed else '✗'} {s['ok']}/{s['n']}",
+                  "green" if passed else "red")
+        # Show the min–max range only when there are multiple runs AND it'd
+        # render as nonzero; otherwise just the median (no "7.3 (7.3–7.3)").
+        infs = s["infs"]
+        if not infs:
+            inf = ("—", None)
+        elif len(infs) > 1 and round(max(infs) - min(infs), 1) > 0:
+            inf = (f"{statistics.median(infs):.1f} ({min(infs):.1f}–{max(infs):.1f})", None)
+        else:
+            inf = (f"{statistics.median(infs):.1f}", None)
+        tps = ((f"{s['tps']:.1f}", "bold green" if s["tps"] == fastest else None)
+               if s["tps"] else ("—", None))
+        ev = (str(int(s["eval"])), None) if s["eval"] else ("—", None)
+        rows.append([(s["model"], None), schema, inf, tps, ev])
+
+    title = (f"Timings · {cfg.get('pdf_name', '?')} · "
+             f"{cfg.get('source_token_count', '?')} input tokens · "
+             f"temp {cfg.get('temperature', '?')}")
+    emit_table(title, columns, rows)
+    note("Inference (s) = wall − load_duration (cold-start excluded); Tok/s from "
+         "eval_duration. Schema = runs that parsed into DocumentSummary (the hard gate).")
     expected = cfg.get("runs_per_model")
-    if expected and any(len(by_model[m]) < expected for m in by_model):
-        print(f"\n_Note: expected {expected} runs per model; some are incomplete "
-              f"(benchmark still running?)._")
+    if expected and any(s["n"] < expected for s in stats):
+        note(f"Expected {expected} runs per model; some are incomplete "
+             f"(benchmark still running?).")
     missing = [m for m in cfg.get("models", []) if m not in by_model]
     if missing:
-        print(f"\n_Not yet seen: {', '.join(missing)}._")
+        note(f"Not yet seen: {', '.join(missing)}.")
     return 0
 
 
@@ -203,6 +269,7 @@ def cmd_leaderboard(args) -> int:
         return 1
 
     quality = _quality_by_model(args.judged) if args.judged else {}
+    cfg = _config(records)
 
     survivors: list[dict] = []
     failers: list[tuple[str, float]] = []
@@ -228,29 +295,40 @@ def cmd_leaderboard(args) -> int:
     front = _frontier(rankable) if rankable else set()
     survivors.sort(key=lambda s: (-(s["quality"] or -1), -s["tps"]))
 
-    print(f"# Summarizer leaderboard — {_header(records)}\n")
-    if not args.judged:
-        print("_No judge scores supplied (--judged); quality column blank. "
-              "Run benchmarks/judge.py to populate it._\n")
-    print("| Model | Schema-valid % | Tok/s (median) | Inference sec (median) | Mean quality (/5) | Frontier |")
-    print("|---|---|---|---|---|---|")
+    title = (f"Summarizer leaderboard · {cfg.get('pdf_name', '?')} · "
+             f"{cfg.get('source_token_count', '?')} input tokens · "
+             f"temp {cfg.get('temperature', '?')}")
+    columns = [("Model", "left"), ("Schema-valid %", "right"), ("Tok/s", "right"),
+               ("Inference (s)", "right"), ("Mean quality (/5)", "right"), ("Frontier", "center")]
+    rows = []
     for s in survivors:
-        q = f"{s['quality']:.2f}" if s["quality"] is not None else "—"
-        star = "★" if s["model"] in front else ""
-        print(f"| {s['model']} | {s['schema_pct']:.0f}% | {s['tps']:.1f} | "
-              f"{s['inference']:.1f}s | {q} | {star} |")
+        on_front = s["model"] in front
+        q = (f"{s['quality']:.2f}", None) if s["quality"] is not None else ("—", None)
+        rows.append([
+            (s["model"], "bold" if on_front else None),
+            (f"{s['schema_pct']:.0f}%", None),
+            (f"{s['tps']:.1f}", None),
+            (f"{s['inference']:.1f}", None),
+            q,
+            ("★", "bold cyan") if on_front else ("", None),
+        ])
+
+    emit_table(title, columns, rows)
+    if not args.judged:
+        note("No judge scores supplied (--judged); quality column blank. "
+             "Run benchmarks/judge.py to populate it.")
+    note("Hard gate: a summarizer must return parseable DocumentSummary JSON every "
+         "time; schema-failers are dropped below. ★ marks the speed/quality Pareto "
+         "frontier among judged survivors (no other survivor is both faster and "
+         "higher-quality).")
 
     if failers:
-        print(f"\n## Disqualified — schema-valid % below {args.min_schema:.0f}%\n")
-        print("These fail the hard structured-output gate and are unusable as "
-              "summarizers regardless of speed:\n")
-        for model, pct in sorted(failers):
-            print(f"- **{model}** — {pct:.0f}% schema-valid")
-
-    print("\n_Hard gate: a summarizer must return parseable DocumentSummary JSON every "
-          "time; schema-failers are dropped above. ★ marks the speed/quality Pareto "
-          "frontier among judged survivors (no other survivor is both faster and "
-          "higher-quality)._")
+        heading(f"Disqualified — schema-valid % below {args.min_schema:.0f}%",
+                style="bold red")
+        note("These fail the hard structured-output gate and are unusable as "
+             "summarizers regardless of speed.")
+        emit_table("", [("Model", "left"), ("Schema-valid %", "right")],
+                   [[(m, "red"), (f"{pct:.0f}%", "red")] for m, pct in sorted(failers)])
     return 0
 
 
@@ -258,7 +336,7 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    t = sub.add_parser("timings", help="Print a markdown timing + schema-valid table")
+    t = sub.add_parser("timings", help="Per-model timing + schema gate table")
     t.add_argument("results", type=Path)
     t.set_defaults(fn=cmd_timings)
 
