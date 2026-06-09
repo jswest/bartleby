@@ -43,12 +43,17 @@ class OpenAIProvider:
         *,
         model: str,
         temperature: float,
+        reasoning_effort: str | None = None,
     ) -> DocumentSummary:
         _drop_temperature(temperature)
+        # gpt-5 accepts minimal | low | medium | high directly. Pass it only when
+        # configured so non-reasoning models aren't handed an unknown parameter.
+        extra = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
         response = self._client.chat.completions.parse(
             model=model,
             messages=build_summary_messages(document_text),
             response_format=DocumentSummary,
+            **extra,
         )
         return _require_parsed(response, DocumentSummary)
 

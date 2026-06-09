@@ -620,6 +620,11 @@ def _parse_document(
             on_stage=on_stage, on_warn=on_warn,
         )
     if ext in PDF_EXTENSIONS:
+        # Reject HTML error pages saved with a `.pdf` extension before either
+        # backend dies deep in pdfminer with a cryptic "No /Root object!" — and
+        # *without* rerouting them into the HTML pipeline (they carry no
+        # document content; ingesting a portal error page pollutes the corpus).
+        pdfplumber_pipeline.reject_if_html(archived)
         if pdf_converter == "docling":
             return _parse_pdf_docling(
                 archived, file_hash=file_hash, file_name=file_name,
@@ -828,6 +833,7 @@ def _summarize_all(
     timings: bool,
     on_progress: Callable[[int, int], None] | None,
     on_lane: Callable[[object, str, str], None] | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, dict[int, tuple[str, float]]]:
     """Phase 3: summarize every document still owing one, concurrently (#188).
 
@@ -887,6 +893,7 @@ def _summarize_all(
         return summarize(
             text, provider=llm_provider, model=llm_model,
             temperature=temperature, max_summarize_tokens=max_summarize_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     if summarize_workers <= 1:
@@ -1352,6 +1359,7 @@ def main(
         timings=timings,
     )
     temperature = float(config.get("temperature", 0))
+    reasoning_effort = config.get("reasoning_effort")
     max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
     summaries_enabled = llm_provider is not None and bool(llm_model)
 
@@ -1530,6 +1538,7 @@ def main(
                         summarize_workers=summarize_workers, timings=timings,
                         on_progress=sum_phase.on_progress,
                         on_lane=sum_phase.lane,
+                        reasoning_effort=reasoning_effort,
                     )
                     incomplete_count += owed
                     if timings:

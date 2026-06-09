@@ -20,6 +20,10 @@ from bartleby.lib.consts import (
 from bartleby.providers import ALLOWED_PROVIDERS
 
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
+# Unified reasoning-effort enum mapped per-provider (OpenAI reasoning_effort,
+# Anthropic output_config.effort). Cheap by default — summarization is a
+# mechanical task where minimal/low reasoning is almost always enough.
+ALLOWED_REASONING_EFFORTS = ["minimal", "low", "medium", "high"]
 
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
@@ -37,6 +41,7 @@ VISION_PROVIDER_DEFAULT_MODEL = {
 
 DEFAULT_SUMMARY_DEPTH = "one-shot"
 DEFAULT_TEMPERATURE = 0.0
+DEFAULT_REASONING_EFFORT = "low"
 DEFAULT_MAX_SUMMARIZE_TOKENS = 50_000
 DEFAULT_MAX_READ_TOKENS = 50_000
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
@@ -151,6 +156,19 @@ def _prompt_temperature(existing: dict, *, help_text: str) -> float:
         console.print("[red]Temperature must be between 0 and 1[/red]")
 
 
+def _prompt_reasoning_effort(existing: dict, *, help_text: str) -> str:
+    default = existing.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
+    choices = " / ".join(ALLOWED_REASONING_EFFORTS)
+    _help(help_text)
+    while True:
+        effort = Prompt.ask(
+            f"Reasoning effort ({choices})", default=default
+        ).lower()
+        if effort in ALLOWED_REASONING_EFFORTS:
+            return effort
+        console.print(f"[red]Invalid effort. Choose from: {choices}[/red]")
+
+
 def _prompt_ollama_url(existing: dict) -> str:
     _help("Where your local Ollama server listens.")
     return Prompt.ask(
@@ -242,6 +260,13 @@ def main():
                 help_text="0 = deterministic, repeatable summaries; higher = "
                 "more varied wording.\nLeave at 0 unless summaries feel too rigid.",
             )
+            config["reasoning_effort"] = _prompt_reasoning_effort(
+                existing,
+                help_text="How hard the model reasons before summarizing. Lower = "
+                "fewer billed reasoning tokens and faster, which is plenty for "
+                "summaries.\nApplies to OpenAI (gpt-5) and effort-capable Anthropic "
+                "models; ignored by Ollama/wsjpt.",
+            )
             config["max_summarize_tokens"] = _prompt_positive_int(
                 "Max summarization input tokens",
                 int(existing.get("max_summarize_tokens", DEFAULT_MAX_SUMMARIZE_TOKENS)),
@@ -258,12 +283,14 @@ def main():
             )
         else:
             config.pop("temperature", None)
+            config.pop("reasoning_effort", None)
             config.pop("max_summarize_tokens", None)
             config.pop("summarize_workers", None)
     else:
         # No LLM → no summarization.
         for k in ("provider", "model", "summary_depth", "temperature",
-                 "max_summarize_tokens", "summarize_workers", "ollama_base_url",
+                 "reasoning_effort", "max_summarize_tokens", "summarize_workers",
+                 "ollama_base_url",
                  "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
             config.pop(k, None)
         config["summary_depth"] = "none"
