@@ -27,6 +27,43 @@ from bartleby.ingest import ocr as ocr_module
 
 PAGE_RENDER_DPI = 150
 
+
+class NotAPdfError(ValueError):
+    """A file dispatched as PDF whose bytes are not a PDF.
+
+    Upstream scrapers sometimes save an HTTP error page (``text/html``) with a
+    ``.pdf`` extension; without this guard pdfminer dies deep with the cryptic
+    ``No /Root object! - Is this really a PDF?``.
+    """
+
+
+# HTML error pages saved as `.pdf` reach the PDF backend and die deep in
+# pdfminer with "No /Root object! - Is this really a PDF?". Peek the head and
+# reject HTML with an actionable reason instead. We only reject content that
+# *clearly* looks like HTML — a head merely missing the `%PDF` marker is left
+# to the backend, which tolerates real-but-slightly-malformed PDFs.
+_HTML_HEAD_MARKERS = (b"<!doctype html", b"<html")
+
+
+def reject_if_html(path: Path) -> None:
+    """Raise :class:`NotAPdfError` if ``path`` is an HTML page, not a PDF.
+
+    The mirror image of #78: that *recovered* a mislabeled file into its true
+    type; here a `.pdf` whose bytes are an HTML error page is rejected outright
+    rather than rerouted into the HTML pipeline, which would ingest a portal
+    error page as a first-class document and pollute the corpus + embeddings.
+    """
+    with path.open("rb") as fh:
+        stripped = fh.read(1024).lstrip()
+    if stripped.startswith(b"%PDF"):
+        return
+    lowered = stripped[:64].lower()
+    if any(lowered.startswith(marker) for marker in _HTML_HEAD_MARKERS):
+        raise NotAPdfError(
+            "not a PDF — file contains an HTML page "
+            "(likely a failed download or portal error page)"
+        )
+
 # OCR'd-scan PDFs embed a single page-sized raster on each page with the OCR
 # text floating above it as a selectable layer. pdfplumber sees that raster as
 # an "embedded image" and we'd otherwise crop it and pump it through the VLM —

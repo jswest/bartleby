@@ -52,12 +52,16 @@ DEFAULT_VISION_MIN_DIMENSION = 64
 # memory can hold and OOM, and the auto-pick always leaves a couple of cores for
 # the OS and the rest of the machine instead of pinning every core for hours.
 # Each worker loads the embedding model and, for docling ingests, the layout/table
-# models, then grows as it parses; PER_WORKER_GB is a conservative resident-set
-# estimate for that footprint under load (image/table-heavy docling PDFs run well
-# above the bare model load). It's an estimate, not a measurement — revisit with a
-# measured docling RSS (#213). `max_workers` in config overrides the auto-pick
+# models, then grows as it parses. Measured on the `ny-puc` dmm corpus (128 GB /
+# 16-core box, #236): a single pdfplumber worker on a big multi-hundred-page filing
+# reached 10.5 GB resident — page renders plus embedded-image extraction, well above
+# the ~4 GB docling load #213 measured. At 4.0 the core-bound auto-pick launched ~14
+# workers that, peaking together, exhausted 128 GB and froze the machine. So 12.0
+# sizes against that pdfplumber *peak* (not steady state), deliberately over-estimating
+# so the RAM term binds before the box does: under-provisioning workers is cheap,
+# over-provisioning freezes the box. `max_workers` in config overrides the auto-pick
 # (and may use every core).
-PER_WORKER_GB = 4.0
+PER_WORKER_GB = 12.0
 
 # Held back by the auto-pick only (#211); an explicit `max_workers` can still use
 # every core. (The why — OS/machine headroom — is in the PER_WORKER_GB block.)
