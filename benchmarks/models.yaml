@@ -9,11 +9,15 @@
 # Override ad hoc without editing this file: `--models a b c`.
 
 models:
-  - gpt-oss:20b
-  - gpt-oss:120b
   - gemma4:e2b
   - gemma4:e4b
   - gemma4:26b
   - gemma4:31b
-  - qwen3:30b
-  - qwen3.6:35b-mlx
+  - granite4.1:3b
+  - granite4:3b-h
+  - granite4.1:8b
+  - gpt-oss:20b
+  - gpt-oss:120b
+  - phi4-mini
+  - qwen3.6:27b
+  - qwen3.6:35b
