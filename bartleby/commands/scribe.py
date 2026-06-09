@@ -620,6 +620,11 @@ def _parse_document(
             on_stage=on_stage, on_warn=on_warn,
         )
     if ext in PDF_EXTENSIONS:
+        # Reject HTML error pages saved with a `.pdf` extension before either
+        # backend dies deep in pdfminer with a cryptic "No /Root object!" — and
+        # *without* rerouting them into the HTML pipeline (they carry no
+        # document content; ingesting a portal error page pollutes the corpus).
+        pdfplumber_pipeline.reject_if_html(archived)
         if pdf_converter == "docling":
             return _parse_pdf_docling(
                 archived, file_hash=file_hash, file_name=file_name,
