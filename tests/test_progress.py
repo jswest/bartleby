@@ -110,7 +110,10 @@ def test_lanes_capped_to_terminal_height_on_a_tty(monkeypatch):
 def test_lanes_not_capped_off_a_terminal(monkeypatch):
     # Off a TTY (pipe, CI log, tests) Live appends rather than redrawing, so the
     # stacking bug can't occur and capping would only hide lanes — leave it alone.
-    not_a_tty = Console(file=sys.stderr, height=10)  # is_terminal False
+    # force_terminal=False pins the off-a-TTY path regardless of whether the
+    # suite's real stderr is a terminal (mirrors the force_terminal=True above) —
+    # otherwise this fails under any pty-backed runner.
+    not_a_tty = Console(file=sys.stderr, force_terminal=False, height=10)
     monkeypatch.setattr(console_mod, "get_console", lambda: not_a_tty)
 
     sp = ScribeProgress(n_lanes=16)
