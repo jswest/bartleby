@@ -132,6 +132,9 @@ def main(
 
     project_name = resolve_project_name(project)
 
+    # Fold the --provider override in once; both the config snapshot and the
+    # #314 summarize-worker clamp key off this, never bare config['provider'].
+    effective_provider = provider or config.get("provider")
     llm_provider, llm_model = resolve._resolve_llm_provider(
         config, provider_override=provider, model_override=model,
     )
@@ -205,7 +208,7 @@ def main(
             **config,
             "pdf_converter": pdf_converter_name,
             "html_converter": html_converter_name,
-            "provider": provider or config.get("provider"),
+            "provider": effective_provider,
             "model": model or config.get("model"),
         })
         for line in config_drift(writer.latest_config(), config_snapshot):
@@ -235,7 +238,9 @@ def main(
             resolve._resolve_max_workers(config, timings=timings) if to_parse else 1
         )
         caption_workers = resolve._resolve_caption_workers(config, timings=timings)
-        summarize_workers = resolve._resolve_summarize_workers(config, timings=timings)
+        summarize_workers = resolve._resolve_summarize_workers(
+            config, effective_provider=effective_provider, timings=timings
+        )
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"

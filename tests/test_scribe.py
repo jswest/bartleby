@@ -826,17 +826,15 @@ def test_resolve_summarize_workers_defaults_and_timings():
 
     # Default when unset or zero; explicit value respected.
     assert scribe_module._resolve_summarize_workers(
-        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {}, effective_provider="openai", timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 0}, effective_provider="openai", timings=False
+    ) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=False) == 9
-    # A cloud LLM provider keeps the configured/default count.
-    assert scribe_module._resolve_summarize_workers(
-        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 9}, effective_provider="openai", timings=False) == 9
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=True) == 1
+        {"summarize_workers": 9}, effective_provider="openai", timings=True) == 1
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
@@ -847,12 +845,28 @@ def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama"}, timings=False) == 1
+        {}, effective_provider="ollama", timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+        {"summarize_workers": 8}, effective_provider="ollama", timings=False) == 1
     assert any("summarize_workers > 1 ignored" in w for w in warnings)
+
+
+def test_resolve_summarize_workers_tracks_provider_override():
+    """The clamp keys off the effective provider, not config['provider'] (#314)."""
+    from bartleby.ingest import resolve as scribe_module
+
+    # --provider ollama over a cloud config clamps to 1 (the clamp must not be
+    # bypassed just because config['provider'] is a cloud backend).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai", "summarize_workers": 4},
+        effective_provider="ollama", timings=False) == 1
+    # --provider anthropic over an ollama config keeps the configured count
+    # (no spurious clamp when the run isn't actually against Ollama).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 4},
+        effective_provider="anthropic", timings=False) == 4
 
 
 def test_summarize_all_progress_callback_fires_per_document(
