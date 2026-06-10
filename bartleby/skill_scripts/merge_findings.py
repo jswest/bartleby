@@ -32,7 +32,12 @@ plus ``merged_from``:
     }
 
 ``FINDING_NOT_FOUND`` (with the offending ids) when the target or any source
-is missing; ``TARGET_IN_SOURCES`` when ``--into`` is also in ``--from``.
+is missing; ``TARGET_IN_SOURCES`` when ``--into`` is also in ``--from``. In a
+memory-off session every finding involved (the ``--into`` target and all
+``--from`` sources) must have been authored by *this* session; any finding
+written by another session raises ``{"code": "MEMORY_OFF"}`` (with the foreign
+ids) — merging consumes other sessions' findings, walled off to avoid
+contaminating an evaluation run.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     comma_int_list,
     load_finding_body,
+    memory_enabled,
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
@@ -80,12 +86,14 @@ def work(*, conn, args, session_id) -> dict:
     cur = conn.cursor()
     ids = sources + [target]
     ph = ",".join("?" * len(ids))
-    found = {
-        r[0] for r in cur.execute(
-            f"SELECT finding_id FROM findings WHERE finding_id IN ({ph})", ids,
+    owners = {
+        r[0]: r[1] for r in cur.execute(
+            f"SELECT finding_id, session_id FROM findings "
+            f"WHERE finding_id IN ({ph})",
+            ids,
         )
     }
-    missing = [fid for fid in ids if fid not in found]
+    missing = [fid for fid in ids if fid not in owners]
     if missing:
         raise SkillError(
             "FINDING_NOT_FOUND",
@@ -93,10 +101,26 @@ def work(*, conn, args, session_id) -> dict:
             missing_finding_ids=missing,
         )
 
+    # Merging deletes the sources and folds them into the target. A memory-off
+    # session may only touch findings it authored — mirroring read_finding's
+    # wall, across every finding involved. Gate before any write.
+    if not memory_enabled(conn, session_id):
+        foreign = [fid for fid in ids if owners[fid] != session_id]
+        if foreign:
+            raise SkillError(
+                "MEMORY_OFF",
+                "This session has memory disabled and finding(s) "
+                f"{foreign} were authored by another session, so they are not "
+                "accessible. Start a memory-enabled session (omit --no-memory) "
+                "to merge other sessions' findings.",
+                foreign_finding_ids=foreign,
+            )
+
     body, citations = load_finding_body(conn, args.body_file)
 
-    owning_session_id, current_title, current_description = cur.execute(
-        "SELECT session_id, title, description FROM findings WHERE finding_id = ?",
+    owning_session_id = owners[target]
+    current_title, current_description = cur.execute(
+        "SELECT title, description FROM findings WHERE finding_id = ?",
         (target,),
     ).fetchone()
     new_title = validated_replacement(

@@ -7,9 +7,39 @@ import json
 import pytest
 
 from bartleby.skill_scripts import delete_finding, save_finding
+from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.session import start_session
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+
+
+def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
+    """Insert a minimal finding owned by ``session_id``; return its id."""
+    conn.cursor().execute(
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, title, "hook", "body"),
+    )
+    finding_id = conn.last_insert_rowid()
+    insert_finding_chunks(conn, finding_id, [
+        ChunkInput(
+            text="body",
+            embedding=[0.01 * i for i in range(EMBEDDING_DIM)],
+            chunk_index=0,
+        ),
+    ])
+    return finding_id
+
+
+def _finding_exists(project, finding_id) -> bool:
+    conn = open_db(project)
+    try:
+        return conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id = ?", (finding_id,),
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 @pytest.fixture(autouse=True)
@@ -127,3 +157,50 @@ def test_delete_finding_unknown_id(seeded_project, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "FINDING_NOT_FOUND"
+
+
+def test_delete_finding_memory_off_other_session(seeded_project, capsys):
+    """A memory-off session cannot delete a finding another session authored,
+    and the foreign finding survives the rejected call."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
+            ("author", 1),
+        )
+        author = conn.last_insert_rowid()
+        finding_id = _seed_finding_as(conn, author)
+    finally:
+        conn.close()
+
+    start_session(project, memory_enabled=False)
+
+    with pytest.raises(SystemExit) as exc:
+        delete_finding.main([
+            "--project", project, "--finding", str(finding_id),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MEMORY_OFF"
+    # The gate fires before any delete — the finding is untouched.
+    assert _finding_exists(project, finding_id)
+
+
+def test_delete_finding_memory_off_own_session(seeded_project, capsys):
+    """A memory-off session can still delete a finding it authored itself."""
+    project = seeded_project["project"]
+    info = start_session(project, memory_enabled=False)
+
+    conn = open_db(project)
+    try:
+        finding_id = _seed_finding_as(conn, info["session_id"], title="own")
+    finally:
+        conn.close()
+
+    delete_finding.main(["--project", project, "--finding", str(finding_id)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "deleted"
+    assert out["finding_id"] == finding_id
+    assert not _finding_exists(project, finding_id)
