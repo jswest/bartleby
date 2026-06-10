@@ -167,8 +167,17 @@ def upgrade(conn: apsw.Connection, current_version: int) -> None:
     """Walk the chain from ``current_version`` up to ``SCHEMA_VERSION``.
 
     Raises if a step is missing — non-additive bumps have no entry and force
-    re-ingest.
+    re-ingest. Also raises, without stamping or mutating anything, if the DB is
+    newer than this code: the loop would never run and the unconditional
+    `upgraded_at` write below would otherwise rewrite a newer DB this code can't
+    reason about. Keep the wording in lockstep with the CLI guard in
+    `commands/project.py`.
     """
+    if current_version > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"DB schema v{current_version} is newer than this code "
+            f"(v{SCHEMA_VERSION}). Update the code, not the DB."
+        )
     v = current_version
     while v < SCHEMA_VERSION:
         step = _UPGRADES.get(v)
