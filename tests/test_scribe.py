@@ -14,6 +14,7 @@ import bartleby.config
 import bartleby.db.connection
 import bartleby.project
 from bartleby.commands import scribe
+from bartleby.ingest import parsers
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest.chunk import resolve_extension
@@ -219,7 +220,7 @@ def test_persist_parse_reuses_existing_file_hash(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="dup", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -247,7 +248,7 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     with pytest.raises(NotAPdfError) as exc:
-        scribe_module._parse_document(
+        parsers._parse_document(
             src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -461,7 +462,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     def _boom(*a, **k):
         raise AssertionError("docling path must not call pdfplumber")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", _boom
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", _boom
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -863,7 +864,7 @@ def test_summarize_all_progress_callback_fires_per_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -902,7 +903,7 @@ def test_summarize_all_lane_callback_reports_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -941,7 +942,7 @@ def test_summarize_all_skips_capped_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="caphash", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1128,7 +1129,7 @@ def test_parse_document_stage_callback_fires_extract_then_embed(
     _text_pdf(pdf)
 
     stages: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1149,7 +1150,7 @@ def test_parse_document_reports_page_count(
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
-    parsed = scribe_module._parse_document(
+    parsed = parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1170,7 +1171,7 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
 
     # Force every prepared image below the VLM minimum so the skip branch fires.
     monkeypatch.setattr(
-        scribe_module.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+        parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
     )
     # A worker must never touch the console; fail loudly if it tries.
     monkeypatch.setattr(
@@ -1179,10 +1180,10 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
     )
 
     warnings: list[str] = []
-    route = scribe_module._ImageRoute(
+    route = parsers._ImageRoute(
         bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
     )
-    images = scribe_module._parse_image_routes(
+    images = parsers._parse_image_routes(
         [route], archive_root=tmp_path / "archive", vision_enabled=True,
         vision_max_dimension=1024, vision_min_dimension=128,
         on_warn=warnings.append,
@@ -1206,7 +1207,7 @@ def test_parse_document_threads_on_warn_to_the_leaf(
     img.write_bytes(_png_bytes())
 
     warnings: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         img, ".png", file_hash="h", file_name="pic.png",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1233,7 +1234,7 @@ def test_caption_all_progress_callback_fires_per_image(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1274,7 +1275,7 @@ def test_caption_all_lane_callback_reports_owning_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -2090,7 +2091,7 @@ def test_scribe_resumes_missing_caption_without_reparsing(
         return real_convert(*a, **k)
 
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", counting_convert,
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", counting_convert,
     )
 
     pdf = tmp_path / "doc.pdf"
