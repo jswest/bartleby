@@ -125,13 +125,17 @@ Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
 intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
 only documents whose ``file_name`` matches a pattern and ANDs with the other
-scopes. ``--authored-after`` / ``--authored-before`` add inclusive
+scopes. ``--heading-like <pattern>`` (SQL ``LIKE``, repeatable for OR) is the
+*chunk*-level analogue: it keeps only chunks whose ``section_heading`` matches a
+pattern (chunks with no heading never match) and ANDs with the rest.
+``--authored-after`` / ``--authored-before`` add inclusive
 ``YYYY-MM-DD`` date bounds — because ``authored_date`` is summarizer-inferred
 and often NULL, a bound excludes undated documents by default (``--include-nulls``
 keeps them). Whenever any scope filter is active the response carries a
-``filters`` object echoing it — ``{tags, in_documents, file_like,
-authored_after, authored_before, include_nulls, excluded_null_dated}`` — so the
-counts are self-describing; it is absent on an unfiltered scan.
+``filters`` object echoing it — ``{tags, in_documents, file_like, heading_like,
+authored_after, authored_before, include_nulls, excluded_null_dated}`` (with
+``heading_like`` present only when that flag is) — so the counts are
+self-describing; it is absent on an unfiltered scan.
 """
 
 from __future__ import annotations
@@ -185,6 +189,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Restrict to documents carrying this tag. Repeat for OR semantics.",
     )
     add_file_like_arg(p)
+    p.add_argument(
+        "--heading-like",
+        action="append", default=None, dest="heading_like", metavar="PATTERN",
+        help=(
+            "Keep only chunks whose section_heading matches this SQL LIKE "
+            "pattern (%% = any run, _ = one char), e.g. '2023 Q%%'. Repeat for "
+            "OR; the group ANDs with --tag / --in-documents / --file-like / "
+            "date bounds. Chunks with no heading never match."
+        ),
+    )
     p.add_argument(
         "--count-by",
         default=None,
@@ -347,7 +361,13 @@ def work(*, conn, args, session_id) -> dict:
     restrict = scope.document_ids  # None = whole corpus, [] = empty, else a set
 
     def _envelope(extra: dict) -> dict:
-        return scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        env = scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        if args.heading_like:
+            # --heading-like is a chunk-level filter, so it lives outside Scope's
+            # document-level echo; fold it into the same filters object (creating
+            # one if the scope alone was unfiltered).
+            env.setdefault("filters", {})["heading_like"] = args.heading_like
+        return env
 
     fts_query = _build_fts_query(args.query, match_mode)
     # Nothing can match: an empty token set, or a scope that resolved to no
@@ -360,6 +380,12 @@ def work(*, conn, args, session_id) -> dict:
         placeholders = ",".join("?" * len(restrict))
         where += f" AND c.source_id IN ({placeholders})"
         params.extend(restrict)
+    if args.heading_like:
+        # OR the patterns within the group; the group ANDs with the rest. Pushed
+        # down parameterized — the agent's pattern never reaches the SQL text.
+        like_clause = " OR ".join("c.section_heading LIKE ?" for _ in args.heading_like)
+        where += f" AND ({like_clause})"
+        params.extend(args.heading_like)
 
     cur = conn.cursor()
 
