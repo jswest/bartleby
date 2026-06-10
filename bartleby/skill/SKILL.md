@@ -37,6 +37,8 @@ bartleby skill assign_tag --documents 9,12,30 --tag bad_ocr        # manual (no-
 
 Every script accepts `--help`, and **`--help` documents both halves of the contract: the arguments _and_ the exact JSON response shape** (an `Output:` block listing the top-level keys with a sample object). Run `bartleby skill <name> --help` whenever you're about to parse a script's output for the first time — don't guess the shape or discover it by running a real call and inspecting the result. The top-level keys differ by script on purpose (`search` returns `results`, `scan` returns `matches`, `list_documents` → `documents`, `list_findings` → `findings`, the `read_*` scripts return their object directly), so check `--help` rather than assuming one script's keys carry to another. Each prints one JSON object to stdout on success and a `{"error", "code", ...}` envelope on failure (exit 1).
 
+**Document identity comes in two shapes.** Document-only scripts (`scan`, `list_documents`, `describe_corpus`, `read_document`) identify rows by `file_name`, the raw documents-table filename. Mixed-source rows (`search`, `read_chunks`) always carry `source_name` — a display label that may be a filename, `"summary of X"`, a finding title, or `"image in X, p.N"` — plus a `file_name` that is null when there is no underlying file (findings). Use `source_name` when you need a label, `file_name` when you need the actual file; the distinction is deliberate — don't treat one as a stand-in for the other.
+
 ## What you can and cannot run
 
 You have a fixed set of tools, listed below. Don't go exploring the `bartleby` CLI (`bartleby project`, `bartleby session`, `bartleby logs`, etc.) — those are for the user, not for you. In particular:
