@@ -1379,6 +1379,54 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
         conn.close()
 
 
+def test_classify_dedupes_byte_identical_incomplete_resume(isolated_project, tmp_path):
+    """Two byte-identical copies of an incomplete, already-parsed file resume the
+    one document once: the first lands in to_resume, the twin is diverted to
+    duplicates. Without the dedup both resolve to the same document_id and both
+    land in to_resume, so the incomplete tally double-counts a phantom unit (#313)."""
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    a.write_bytes(b"identical image bytes")
+    b.write_bytes(b"identical image bytes")
+    file_hash = classify._hash_file(a)
+    assert classify._hash_file(b) == file_hash
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_hash, "a.jpg", str(a), None, 0),
+        )
+        doc_id = conn.last_insert_rowid()
+        # analysis_json IS NULL → uncaptioned → the document is incomplete, so the
+        # first copy resumes rather than skips.
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, NULL, NULL)",
+            ("imgblob", str(a), 100, 100),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, None, 0),
+        )
+        writer = scribe.Writer(conn)
+        to_parse, to_resume, skipped, duplicates = classify._classify(
+            writer, [(a, ".jpg"), (b, ".jpg")], vision_enabled=True,
+        )
+        assert to_parse == []
+        assert [r.document_id for r in to_resume] == [doc_id]
+        assert duplicates == ["b.jpg"]
+        assert skipped == []
+    finally:
+        conn.close()
+
+
 def test_documents_needing_summary_filters_summarized_and_empty(isolated_project):
     """The summarize work-list (issue #167) is documents with indexed chunks and
     no summary row; already-summarized docs and zero-chunk docs (nothing
