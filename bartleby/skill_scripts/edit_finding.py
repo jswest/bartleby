@@ -26,6 +26,11 @@ works after an edit):
 ``session_id`` / ``session_name`` (and ``model`` / ``harness``) describe the
 session that *owns* the finding (its original author), not the current
 session doing the edit; the audit log records the editor.
+
+In a memory-off session you can still edit findings *this* session authored;
+editing one written by another session raises ``{"code": "MEMORY_OFF"}``. The
+response echoes the body, so an ungated edit would leak another session's
+finding — the same wall ``read_finding`` enforces.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     finding_chunk_and_citation_ids,
     load_finding_body,
+    memory_enabled,
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
@@ -73,6 +79,19 @@ def work(*, conn, args, session_id) -> dict:
             "FINDING_NOT_FOUND", f"No finding with id {args.finding_id}.",
         )
     owning_session_id, current_title, current_description, current_body = existing
+
+    # The response echoes the body, so editing a finding owned by another
+    # session would leak its content (and mutate it as a side effect). A
+    # memory-off session may only touch findings it authored — mirroring
+    # read_finding's wall. Gate before any validation or write.
+    if not memory_enabled(conn, session_id) and owning_session_id != session_id:
+        raise SkillError(
+            "MEMORY_OFF",
+            f"This session has memory disabled and finding {args.finding_id} "
+            "was authored by another session, so it is not accessible. Start a "
+            "memory-enabled session (omit --no-memory) to edit other sessions' "
+            "findings.",
+        )
 
     new_title = validated_replacement(
         args.title, current_title, code="EMPTY_TITLE", label="title",
