@@ -7,16 +7,19 @@ to override the default set. Opt into neighbor chunks with ``--add-context N``
 (0..5) — each step roughly multiplies output size by (1 + 2N).
 
 ``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
-underlying document carries any of the given tags. Combines naturally with
-``--in-documents`` (intersection: the document must be in both sets) and
-drops findings the same way (findings have no document anchor).
+underlying document carries any of the given tags. ``--file-like <pattern>``
+(SQL ``LIKE``, repeatable for OR) restricts to chunks whose document's
+``file_name`` matches a pattern. Both combine naturally with ``--in-documents``
+(intersection: the document must be in every active set) and drop findings the
+same way (findings have no document anchor).
 
-Whenever a scope filter (``--in-documents`` / ``--tag``) is active the response
-carries a nested ``filters`` object echoing it — ``{tags, in_documents,
-authored_after, authored_before, include_nulls, excluded_null_dated}`` — the
-same contract ``scan`` / ``list_documents`` / ``describe_corpus`` emit (search
-takes no date bounds, so those keys are null/0). It is absent on an unfiltered
-search; the query terms themselves always stay top-level under ``query``.
+Whenever a scope filter (``--in-documents`` / ``--tag`` / ``--file-like``) is
+active the response carries a nested ``filters`` object echoing it — ``{tags,
+in_documents, file_like, authored_after, authored_before, include_nulls,
+excluded_null_dated}`` — the same contract ``scan`` / ``list_documents`` /
+``describe_corpus`` emit (search takes no date bounds, so those keys are
+null/0). It is absent on an unfiltered search; the query terms themselves always
+stay top-level under ``query``.
 
 Output:
     {
@@ -64,8 +67,8 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, chunk_locations, comma_int_list, memory_enabled,
-    positive_int, source_names,
+    add_file_like_arg, apply_preview, chunk_locations, comma_int_list,
+    memory_enabled, positive_int, source_names,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -116,6 +119,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "as an intersection."
         ),
     )
+    add_file_like_arg(p)
     p.add_argument(
         "--add-context",
         type=_context_value,
@@ -365,7 +369,10 @@ def work(*, conn, args, session_id) -> dict:
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
-    scope = resolve_scope(conn, in_documents=args.in_documents, tags=args.tags)
+    scope = resolve_scope(
+        conn, in_documents=args.in_documents, tags=args.tags,
+        file_like=args.file_like,
+    )
     # None = whole corpus, [] = a filter matched nothing, else the resolved slice.
     restrict = scope.document_ids
 

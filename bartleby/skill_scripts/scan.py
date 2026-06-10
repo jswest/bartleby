@@ -123,13 +123,15 @@ Count-by capture (``--count-by '/regex/'``):
 
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
-intersect. ``--authored-after`` / ``--authored-before`` add inclusive
+intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
+only documents whose ``file_name`` matches a pattern and ANDs with the other
+scopes. ``--authored-after`` / ``--authored-before`` add inclusive
 ``YYYY-MM-DD`` date bounds — because ``authored_date`` is summarizer-inferred
 and often NULL, a bound excludes undated documents by default (``--include-nulls``
 keeps them). Whenever any scope filter is active the response carries a
-``filters`` object echoing it — ``{tags, in_documents, authored_after,
-authored_before, include_nulls, excluded_null_dated}`` — so the counts are
-self-describing; it is absent on an unfiltered scan.
+``filters`` object echoing it — ``{tags, in_documents, file_like,
+authored_after, authored_before, include_nulls, excluded_null_dated}`` — so the
+counts are self-describing; it is absent on an unfiltered scan.
 """
 
 from __future__ import annotations
@@ -141,7 +143,8 @@ from collections import Counter
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, apply_preview, comma_int_list, nonneg_int, positive_int,
+    add_date_filter_args, add_file_like_arg, apply_preview, comma_int_list,
+    nonneg_int, positive_int,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -181,6 +184,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--tag", action="append", default=None, dest="tags",
         help="Restrict to documents carrying this tag. Repeat for OR semantics.",
     )
+    add_file_like_arg(p)
     p.add_argument(
         "--count-by",
         default=None,
@@ -335,6 +339,7 @@ def work(*, conn, args, session_id) -> dict:
         conn,
         in_documents=args.in_documents,
         tags=args.tags,
+        file_like=args.file_like,
         authored_after=args.authored_after,
         authored_before=args.authored_before,
         include_nulls=args.include_nulls,

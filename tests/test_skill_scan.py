@@ -174,6 +174,46 @@ def test_scan_in_documents_scope(scan_corpus, capsys):
     assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
 
 
+def test_scan_file_like_single_pattern(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "filing_a%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_a%"]
+    assert out["total"] == 2  # the two marker chunks in filing_a.txt
+    assert all(m["document_id"] == scan_corpus["d1"] for m in out["matches"])
+
+
+def test_scan_file_like_repeated_ors(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "filing_a%", "--file-like", "filing_b%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_a%", "filing_b%"]
+    # filing_a (2 markers) OR filing_b (1 marker); filing_c has none.
+    assert out["total"] == 3
+    assert {m["document_id"] for m in out["matches"]} == {
+        scan_corpus["d1"], scan_corpus["d2"],
+    }
+
+
+def test_scan_file_like_ands_with_in_documents(scan_corpus, capsys):
+    # in-documents={d1,d2} AND file_like=filing_b% → only d2 survives.
+    _run(scan_corpus, [
+        MARKER,
+        "--in-documents", f"{scan_corpus['d1']},{scan_corpus['d2']}",
+        "--file-like", "filing_b%",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_b%"]
+    assert out["total"] == 1
+    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+
+
+def test_scan_file_like_no_match_empties(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "nonexistent%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []
+    assert out["filters"]["file_like"] == ["nonexistent%"]
+
+
 def test_scan_unfiltered_omits_filters_object(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)
