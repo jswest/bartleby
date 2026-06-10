@@ -604,30 +604,23 @@ def chunk_locations(
     for kind, cids in by_kind.items():
         sids = list({out[cid]["source_id"] for cid in cids})
         sid_ph = ",".join("?" * len(sids))
-        if kind == "document":
-            meta = {
-                did: (fname, authored_date)
-                for did, fname, authored_date in cur.execute(
+        if kind in ("document", "summary"):
+            if kind == "document":
+                query = (
                     f"SELECT d.document_id, d.file_name, s.authored_date "
                     f"FROM documents d "
                     f"LEFT JOIN summaries s USING (document_id) "
-                    f"WHERE d.document_id IN ({sid_ph})",
-                    sids,
+                    f"WHERE d.document_id IN ({sid_ph})"
                 )
-            }
-            for cid in cids:
-                row = meta.get(out[cid]["source_id"])
-                if row:
-                    out[cid]["file_name"], out[cid]["authored_date"] = row
-        elif kind == "summary":
-            meta = {
-                sid: (fname, authored_date)
-                for sid, fname, authored_date in cur.execute(
+            else:
+                query = (
                     f"SELECT s.summary_id, d.file_name, s.authored_date "
                     f"FROM summaries s JOIN documents d USING (document_id) "
-                    f"WHERE s.summary_id IN ({sid_ph})",
-                    sids,
+                    f"WHERE s.summary_id IN ({sid_ph})"
                 )
+            meta = {
+                key: (fname, authored_date)
+                for key, fname, authored_date in cur.execute(query, sids)
             }
             for cid in cids:
                 row = meta.get(out[cid]["source_id"])
