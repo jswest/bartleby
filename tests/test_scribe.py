@@ -16,6 +16,9 @@ import bartleby.project
 from bartleby.commands import scribe
 from bartleby.ingest import parsers
 from bartleby.ingest import classify
+from bartleby.ingest import caption
+from bartleby.ingest import parse
+from bartleby.ingest import summary
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest.chunk import resolve_extension
@@ -87,7 +90,6 @@ def mock_embed(monkeypatch):
     def fake(texts):
         return _emb(0.0, len(texts))
     # Patch every import site (commands.scribe imports it directly).
-    monkeypatch.setattr("bartleby.commands.scribe.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.images.embed_texts", fake)
     return fake
@@ -283,7 +285,7 @@ def test_scribe_writes_summary_when_provider_configured(
     # Bypass docling for the summary chunking too — return one chunk.
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -348,7 +350,7 @@ def test_scribe_summarizes_existing_document_on_later_run(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -737,7 +739,7 @@ def test_scribe_summarizes_many_documents_concurrently_in_one_run(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -796,7 +798,7 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -876,7 +878,7 @@ def test_summarize_all_progress_callback_fires_per_document(
 
         pending = writer.documents_needing_summary()
         seen: list[tuple[int, int]] = []
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -915,7 +917,7 @@ def test_summarize_all_lane_callback_reports_document(
 
         pending = writer.documents_needing_summary()
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._summarize_all(
+        summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -956,7 +958,7 @@ def test_summarize_all_skips_capped_document(
             writer.record_failure("caphash", "doc.txt", "summary", RuntimeError("x"))
 
         stub = _StubProvider()
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, writer.documents_needing_summary(),
             llm_provider=stub, llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -1245,9 +1247,9 @@ def test_caption_all_progress_callback_fires_per_image(
         document_id = writer.persist_parse(parsed)
 
         seen: list[tuple[int, int]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=lambda done, total: seen.append((done, total)),
@@ -1286,9 +1288,9 @@ def test_caption_all_lane_callback_reports_owning_document(
         document_id = writer.persist_parse(parsed)
 
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=None,
@@ -1486,7 +1488,7 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1524,7 +1526,7 @@ def test_scribe_persists_authored_date_from_summary(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1560,7 +1562,7 @@ def test_scribe_drops_malformed_authored_date(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1596,7 +1598,7 @@ def test_scribe_truncation_note_in_summary(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1746,7 +1748,7 @@ def test_scribe_summarizes_standalone_image_from_image_chunks(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -2306,7 +2308,7 @@ def test_scribe_timings_includes_decoupled_summarize_stage(
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
