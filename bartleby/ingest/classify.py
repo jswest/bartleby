@@ -110,18 +110,26 @@ def _classify(
     Hashing + the resume lookups run here on the main process; only the parse
     bucket crosses to workers.
 
-    A fourth bucket, ``duplicates``, catches two byte-identical files *within one
-    run*: ``documents.file_hash`` is UNIQUE, so only the first can persist. The
-    DB lookup can't see the in-run twin (neither is committed yet), so we track
-    hashes queued this run and divert the rest here rather than let the second
-    crash ``persist_parse`` (#225)."""
+    A fourth bucket, ``duplicates``, catches a byte-identical twin seen earlier
+    *within one run* — whatever the first copy did, the twin is redundant. We
+    track every hash classified this run and divert the rest here. This guards
+    two things at once: the never-parsed case, where
+    ``documents.file_hash`` is UNIQUE and the second would crash ``persist_parse``
+    since the DB lookup can't see an uncommitted in-run twin (#225); and the
+    already-parsed resume case, where two copies resolving to the same
+    ``document_id`` would otherwise both land in ``to_resume`` and double-count
+    the one incomplete document (#313)."""
     to_parse: list[parsers.ParseRequest] = []
     to_resume: list[_ResumeItem] = []
     skipped: list[str] = []
     duplicates: list[str] = []
-    queued_hashes: set[str] = set()
+    seen_hashes: set[str] = set()
     for path, ext in sources:
         file_hash = _hash_file(path)
+        if file_hash in seen_hashes:
+            duplicates.append(path.name)
+            continue
+        seen_hashes.add(file_hash)
         document_id = writer.document_id_for(file_hash)
         if document_id is not None:
             if _is_complete(writer, document_id):
@@ -129,15 +137,11 @@ def _classify(
             else:
                 to_resume.append(_ResumeItem(document_id, path.name, file_hash))
             continue
-        if file_hash in queued_hashes:
-            duplicates.append(path.name)
-            continue
         if ext in IMAGE_EXTENSIONS and not vision_enabled:
             console.warn(
                 f"{path.name}: skipping image (no vision provider configured)."
             )
             continue
-        queued_hashes.add(file_hash)
         to_parse.append(
             parsers.ParseRequest(
                 path=path, ext=ext, file_hash=file_hash, file_name=path.name
