@@ -67,11 +67,10 @@ def work(*, conn, args, session_id) -> dict:
         (args.finding_id,),
     ).fetchone()[0]
 
-    with conn:
-        removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
-        cur.execute(
-            "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
-        )
+    removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
+    cur.execute(
+        "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
+    )
 
     return {
         "status": "deleted",
