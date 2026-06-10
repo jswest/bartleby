@@ -163,8 +163,9 @@ attended moment:
   step that asks you anything.
 - **`/ultraship run #<omnibus>`** — fully unattended. A **stage-manager** fans the
   sub-issues out (in dependency waves derived from `depends-on` + `touches`-
-  overlap) to headless **player** processes, each in its own sibling worktree
-  running the same `pytest → simplify-refactor → pytest` gates; merges their
+  overlap) to **player** subagents, each in its own sibling worktree running the
+  `pytest` gate (the `simplify-refactor` half runs at the stage-manager over each
+  sub-PR's diff, since a subagent can't spawn another agent); merges their
   "Part of #N" sub-PRs through a **serialized merge train** (conflict or red suite
   → *park*, never resolved unattended); runs a bounded **critic** loop; has the
   director **grade** the result against the goal; and leaves a finished
@@ -177,13 +178,16 @@ The state is reconstructed from GitHub on every restart (merged sub-PR = done,
 open = parked, neither = untouched), so a run that dies at 3 a.m. resumes by
 re-reading GitHub rather than replaying a journal.
 
-Two safety rules bend **deliberately and only here** (see
-[`docs/decisions/GH-0244-…`](./docs/decisions/GH-0244-ultraship-authority-boundary-0001.md)):
+One safety rule bends **deliberately and only here** (see
+[`docs/decisions/GH-0244-…`](./docs/decisions/GH-0244-ultraship-authority-boundary-0001.md),
+refined by [`GH-0335-…`](./docs/decisions/GH-0335-ultraship-subagent-players-gate-at-stage-manager-0001.md)):
 the stage-manager merges sub-issue → omnibus autonomously (recoverable branch,
-serialized, gated, never force-pushed), and players run with pre-granted
-permissions (else they hang on the first prompt at 1 a.m.). The boundary that does
-**not** move: **a human still merges omnibus → `main`** via the `/ship #<omnibus>`
-promotion mode above, and the `guard-main-write.sh` hook is untouched.
+serialized, gated, never force-pushed). Players are **subagents** running under
+the session's own permission posture, so — unlike the spawned `claude -p` process
+GH-0244 first specified — they need no pre-granted permissions and can't hang on a
+1 a.m. prompt. The boundary that does **not** move: **a human still merges omnibus
+→ `main`** via the `/ship #<omnibus>` promotion mode above, and the
+`guard-main-write.sh` hook is untouched.
 
 ### The helper agents
 
