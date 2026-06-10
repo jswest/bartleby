@@ -427,7 +427,7 @@ def resolve_classifier() -> tuple[Provider, str, float]:
     if not name or not model:
         raise SkillError(
             "NO_PROVIDER",
-            "No LLM provider configured. Run `bartleby ready` first.",
+            "No LLM provider configured. Run `bartleby config` first.",
         )
     ensure_provider_env(name, config)
     provider = get_provider(name, ollama_base_url=config.get("ollama_base_url"))
