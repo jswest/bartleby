@@ -37,11 +37,6 @@ from bartleby.providers import ImageAnalysis, Provider
 
 JPEG_QUALITY = 82
 
-# Whether we've already warned that Tesseract is unusable this process. The OCR
-# pass is only a cheap text-image classifier; when it's broken every image just
-# routes to the VLM, so we surface that once rather than once per image.
-_ocr_degraded_warned = False
-
 # Tesseract-on-image dispositioning thresholds. Stricter than the page-level
 # sparse threshold (100 chars / 30 confidence) so a labeled chart — which has
 # real OCR-able text but isn't text-dominated — still routes to the VLM for a
@@ -141,7 +136,12 @@ def analyze(
     try:
         ocr_result = ocr_module.run(prepared.jpeg_bytes)
     except Exception as exc:
-        _warn_ocr_degraded_once(exc)
+        console.warn_once(
+            "ocr_degraded",
+            f"OCR classification unavailable ({exc}); captioning every image "
+            "via the VLM instead. Images are still described — only the "
+            "text-image shortcut is lost.",
+        )
         ocr_result = None
     if ocr_result is not None and _is_text_image(ocr_result):
         return ImageAnalysis(
@@ -158,19 +158,6 @@ def analyze(
         text="",
         description=vlm.description,
         notes=vlm.notes,
-    )
-
-
-def _warn_ocr_degraded_once(exc: Exception) -> None:
-    """Warn once per process that OCR is down and images now go straight to VLM."""
-    global _ocr_degraded_warned
-    if _ocr_degraded_warned:
-        return
-    _ocr_degraded_warned = True
-    console.warn(
-        f"OCR classification unavailable ({exc}); captioning every image via "
-        "the VLM instead. Images are still described — only the "
-        "text-image shortcut is lost."
     )
 
 
