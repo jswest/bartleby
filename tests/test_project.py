@@ -432,3 +432,51 @@ def test_upgrade_resumes_after_mid_chain_crash(projects_root, monkeypatch):
         assert "ingests" in names and "failed_ingests" in names  # v8 landed
     finally:
         conn.close()
+
+
+def test_upgrade_refuses_db_newer_than_code(projects_root):
+    """A DB stamped newer than the code is refused without mutation.
+
+    With `current_version > SCHEMA_VERSION` the chain loop never runs, so the
+    unconditional `upgraded_at` write at the tail used to rewrite a newer DB's
+    `schema_version` *down* to the code's — silently corrupting the version
+    contract. `upgrade()` must raise before touching anything, and the CLI
+    wrapper must surface that as exit 1 ("Update the code, not the DB").
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    db_path = project_db_path("alpha")
+
+    # Stamp the DB one version ahead of the code.
+    newer = SCHEMA_VERSION + 1
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(newer),)
+        )
+        before = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+    finally:
+        conn.close()
+
+    # Library: raises, and stamps/mutates nothing.
+    with pytest.raises(RuntimeError, match="newer than this code"):
+        upgrades_mod.upgrade(apsw.Connection(str(db_path)), newer)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        after = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert after["schema_version"] == str(newer)  # not rewritten down
+        assert "upgraded_at" not in after  # tail write never ran
+        assert after == before  # nothing mutated at all
+    finally:
+        conn.close()
+
+    # CLI: refuses with exit 1.
+    with pytest.raises(SystemExit) as exc:
+        project_cmd.upgrade(name="alpha")
+    assert exc.value.code == 1
