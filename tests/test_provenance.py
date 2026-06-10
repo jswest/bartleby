@@ -195,6 +195,72 @@ def test_persist_caption_replay_is_noop(project_conn):
     assert texts == ["a captioned figure"]
 
 
+def test_persist_parse_clears_failed_ingest(project_conn):
+    # A unit that failed once then parses successfully must shed its
+    # failed_ingests row in the same transaction as the parse — no separate
+    # clear that a crash could skip (#310).
+    writer = Writer(project_conn)
+    writer.record_failure("h1", "doc.txt", "parse", RuntimeError("boom"))
+    assert writer.attempts("h1", "parse") == 1
+
+    writer.persist_parse(_parsed("h1"))
+
+    assert writer.attempts("h1", "parse") == 0
+    assert writer.failures() == []
+
+
+def test_persist_caption_clears_failed_ingest(project_conn):
+    writer = Writer(project_conn)
+    image_id = _persist_image_doc(writer, project_conn, "h2", "imghash")
+    writer.record_failure("imghash", "img.pdf", "caption", RuntimeError("boom"))
+
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json="{}", analysis_model="vlm-x",
+        chunks=[_chunk("a captioned figure")],
+    ))
+
+    assert writer.attempts("imghash", "caption") == 0
+    assert writer.failures() == []
+
+
+def test_persist_caption_clears_failed_ingest_on_replay(project_conn):
+    # Even when the caption UPDATE matches nothing (the image was already
+    # captioned via a sibling document), a lingering caption failure for that
+    # image is still cleared — the clear runs before the no-op guard (#310).
+    writer = Writer(project_conn)
+    image_id = _persist_image_doc(writer, project_conn, "h2", "imghash")
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"first": true}',
+        analysis_model="vlm-x", chunks=[_chunk("a captioned figure")],
+    ))
+    writer.record_failure("imghash", "img.pdf", "caption", RuntimeError("ghost"))
+
+    # Replay: analysis_json is already set, so the UPDATE changes no row.
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"second": true}',
+        analysis_model="vlm-y", chunks=[_chunk("ignored on replay")],
+    ))
+
+    assert writer.attempts("imghash", "caption") == 0
+    assert writer.failures() == []
+
+
+def test_persist_summary_clears_failed_ingest(project_conn):
+    writer = Writer(project_conn)
+    document_id = writer.persist_parse(_parsed("h1", chunks=[_chunk("body")]))
+    writer.record_failure("h1", "doc.txt", "summary", RuntimeError("boom"))
+
+    writer.persist_summary(
+        document_id,
+        SummaryResult(title="T", description="D", text="S", model="m",
+                      truncated_from_tokens=None, authored_date=None),
+        [_chunk("summary chunk")],
+    )
+
+    assert writer.attempts("h1", "summary") == 0
+    assert writer.failures() == []
+
+
 def test_no_run_leaves_provenance_null(project_conn):
     # The skill write path constructs a Writer but never opens a run.
     writer = Writer(project_conn)

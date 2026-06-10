@@ -2342,7 +2342,10 @@ def test_writer_persist_parse_dedupes_shared_image(isolated_project, tmp_path):
 
 def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
     """record_failure upserts (bumping attempts), failures() reports them with
-    the capped flag, and clear_failure removes the row."""
+    the capped flag, and _clear_failure removes the row.
+
+    _clear_failure assumes the caller already holds a transaction (it is folded
+    into the persist_* writes, #310), so the test wraps it in ``with conn``."""
     from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
 
     conn = open_db("test_proj")
@@ -2359,7 +2362,8 @@ def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
         assert "boom" in failure.error
         assert failure.capped is True
 
-        writer.clear_failure("h", "parse")
+        with conn:
+            writer._clear_failure("h", "parse")
         assert writer.attempts("h", "parse") == 0
         assert writer.failures() == []
     finally:
