@@ -87,6 +87,56 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
         conn.close()
 
 
+def test_save_finding_memory_off_session_can_write(seeded_project, tmp_path, capsys):
+    """The write half of the memory wall stays open: a ``memory_enabled=0``
+    session can still author its own finding, and the new row is attributed to
+    that session. Pins the "save stays open" enforcement shape
+    (``ARCHITECTURE.md`` "Memory-off enforcement") so a blanket
+    block-on-memory-off refactor can't pass the suite while breaking the eval
+    workflow."""
+    from bartleby.session import start_session
+
+    project = seeded_project["project"]
+    info = start_session(project, memory_enabled=False)
+
+    conn = open_db(project)
+    try:
+        cited_id = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    body_file = tmp_path / "finding.md"
+    body_file.write_text(f"A memory-off claim[^{cited_id}].", encoding="utf-8")
+    save_finding.main([
+        "--project", project,
+        "--title", "memory-off write",
+        "--description", "Writing under a memory-off session.",
+        "--body-file", str(body_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    # Success: the finding was written with its citation intact ...
+    assert out["finding_id"] >= 1
+    assert [c["chunk_id"] for c in out["citations"]] == [cited_id]
+    # ... and attributed to the memory-off session that authored it.
+    assert out["session_id"] == info["session_id"]
+    assert out["session_name"] == info["name"]
+
+    conn = open_db(project)
+    try:
+        row_session_id = conn.cursor().execute(
+            "SELECT session_id FROM findings WHERE finding_id = ?",
+            (out["finding_id"],),
+        ).fetchone()[0]
+        assert row_session_id == info["session_id"]
+    finally:
+        conn.close()
+
+
 def test_save_finding_dedupes_repeated_markers(seeded_project, tmp_path, capsys):
     """Same chunk cited twice → one finding_citations row, preserving order."""
     conn = open_db(seeded_project["project"])
