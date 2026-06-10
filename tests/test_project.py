@@ -434,6 +434,77 @@ def test_upgrade_resumes_after_mid_chain_crash(projects_root, monkeypatch):
         conn.close()
 
 
+def test_upgrade_refuses_below_chain_first_step_without_mutation(
+    projects_root, monkeypatch
+):
+    """A DB below the chain's first entry is refused, leaving the DB unchanged.
+
+    The chain's first step is keyed at v4 (`_upgrade_v4_to_v5`), so a DB stamped
+    at v3 has no step to walk from: `upgrade()`'s loop hits `_UPGRADES.get(3) is
+    None` and raises ("non-additive bump; re-ingest is required"), and the CLI
+    wrapper surfaces that as exit 1. This pins the refusal property the
+    per-step-commit structure makes load-bearing — a refused upgrade must not
+    persist any DDL or move the version stamp. We assert both the full
+    `sqlite_master` DDL and the `schema_version` stamp are byte-identical
+    before and after.
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    db_path = project_db_path("alpha")
+
+    # Stamp the DB at v3 — one below the chain's first entry (v4). No code
+    # branches on schema version, so the stale stamp alone reproduces the
+    # "below the chain" condition; the structural DDL stays at the fresh shape.
+    below_first = min(upgrades_mod._UPGRADES) - 1
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+            (str(below_first),),
+        )
+    finally:
+        conn.close()
+
+    def _snapshot():
+        conn = apsw.Connection(str(db_path))
+        try:
+            cur = conn.cursor()
+            master = cur.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "ORDER BY type, name"
+            ).fetchall()
+            stamp = cur.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            return master, stamp
+        finally:
+            conn.close()
+
+    before = _snapshot()
+    assert before[1] == str(below_first)
+
+    # CLI: refuses with exit 1 and the re-ingest guidance.
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    monkeypatch.setattr(project_cmd, "_console", Console(file=buf, width=200))
+    with pytest.raises(SystemExit) as exc:
+        project_cmd.upgrade(name="alpha")
+    assert exc.value.code == 1
+    assert "re-ingest" in buf.getvalue().lower()
+
+    # The refusal mutated nothing: full DDL and the version stamp are identical.
+    after = _snapshot()
+    assert after == before
+
+
 def test_upgrade_refuses_db_newer_than_code(projects_root):
     """A DB stamped newer than the code is refused without mutation.
 
