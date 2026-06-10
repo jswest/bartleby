@@ -1114,6 +1114,102 @@ def test_merge_value_tags_keeps_target_reports_dropped(seeded_project, capsys):
     ) == ("200", None)
 
 
+def test_merge_value_tags_carries_value_onto_null_destination(
+    seeded_project, capsys,
+):
+    """A plain (value-NULL) destination row absorbs the source's value+anchor.
+
+    Regression: the destination had a value-tag assignment with no extracted
+    value while the source held one for the same doc. The old INSERT OR IGNORE
+    kept the NULL destination row and then deleted the source — losing the
+    value silently. The merge must carry the source value onto the destination.
+    """
+    src = _seed_value_tag(
+        seeded_project["project"], name="rev_src", pattern=r"(?P<value>\d+)",
+    )
+    dst = _seed_value_tag(
+        seeded_project["project"], name="rev_dst", pattern=r"(?P<value>\d+)",
+    )
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Destination: a plain assignment (value NULL, no chunk anchor).
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value) VALUES (?, ?, ?)",
+            (seeded_project["doc_a"], dst, None),
+        )
+        # Source: holds an extracted value + chunk anchor for the same doc.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_a"], src, "777", 1),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"],
+        "--from", "rev_src", "--into", "rev_dst",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    # Not a kept/dropped collision — the destination had no competing value.
+    assert out["value_collisions"] == []
+    # The source's value + anchor were carried onto the destination, not lost.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_a"], dst,
+    ) == ("777", 1)
+
+
+def test_merge_value_tag_into_boolean_tag_refused(seeded_project, capsys):
+    """value-tag → boolean tag is refused before any mutation (MIXED_TYPE_MERGE)."""
+    src = _seed_value_tag(
+        seeded_project["project"], name="rev_src", pattern=r"(?P<value>\d+)",
+    )
+    _seed_tag(seeded_project["project"], name="boolcat", description="a category")
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_a"], src, "500", 1),
+        )
+    finally:
+        conn.close()
+
+    with pytest.raises(SystemExit):
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "rev_src", "--into", "boolcat",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MIXED_TYPE_MERGE"
+    # Nothing mutated: source tag and its value row both survive.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_a"], src,
+    ) == ("500", 1)
+    conn = open_db(seeded_project["project"])
+    try:
+        assert tags_helpers.get_tag_by_name(conn, "rev_src") is not None
+    finally:
+        conn.close()
+
+
+def test_merge_boolean_tag_into_value_tag_refused(seeded_project, capsys):
+    """boolean tag → value-tag is refused too (MIXED_TYPE_MERGE)."""
+    _seed_tag(seeded_project["project"], name="boolcat", description="a category")
+    _seed_value_tag(
+        seeded_project["project"], name="rev_dst", pattern=r"(?P<value>\d+)",
+    )
+    with pytest.raises(SystemExit):
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "boolcat", "--into", "rev_dst",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MIXED_TYPE_MERGE"
+
+
 def test_list_documents_surfaces_value_chip(seeded_project, capsys):
     tag_id = _seed_value_tag(seeded_project["project"])
     conn = open_db(seeded_project["project"])

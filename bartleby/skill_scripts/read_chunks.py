@@ -208,13 +208,19 @@ def _read_by_chunk_ids(
     # Cross-namespace hint: a missing chunk_id that exists as a document_id is
     # very likely a --document id passed to --chunks. Surface a per-id hint so a
     # silently-wrong-namespace lookup gets caught before it becomes a citation.
-    # (Memory-walled foreign finding chunks also land in ``missing`` but aren't
-    # document_ids, so they never trigger a hint.)
+    # Memory-walled foreign finding chunks also land in ``missing``, but their
+    # ids ARE chunk ids (chunk and document ids overlap freely), so a walled id
+    # that happens to collide with a live document_id would otherwise mis-fire
+    # this hint. Suppress the hint for any missing id that still exists as a
+    # chunk_id — the id is genuinely a chunk in this corpus, just walled, so the
+    # director's rule (never hint on an id valid in the requested namespace)
+    # holds. The hint fires only for ids that are not chunks here at all.
+    live_chunk_ids = _live_chunk_ids(conn, missing)
     doc_ids = _live_document_ids(conn, missing)
     hints = {
         str(cid): f"{cid} is a document_id — did you mean --document {cid}?"
         for cid in missing
-        if cid in doc_ids
+        if cid in doc_ids and cid not in live_chunk_ids
     }
 
     out = {
