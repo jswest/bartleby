@@ -146,6 +146,40 @@ def main():
     )
     embed_parser.add_argument("text", type=str)
 
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="Benchmark summarizer models against the committed corpus"
+    )
+    benchmark_sub = benchmark_parser.add_subparsers(dest="benchmark_command")
+    bs = benchmark_sub.add_parser(
+        "summarize",
+        help="Append summarize runs for every model × corpus doc (or a subset)",
+    )
+    bs.add_argument(
+        "--models", type=str, default=None,
+        help="Comma-separated <provider>/<model> list (e.g. ollama/gemma4:e2b); "
+             "default: every model in models.yaml.",
+    )
+    bs.add_argument(
+        "--documents", type=str, default=None,
+        help="Comma-separated doc-id list; default: every doc in corpus.yaml.",
+    )
+    bs.add_argument(
+        "--runs", type=int, default=1,
+        help="Runs to append per (model, doc) cell this invocation (default 1).",
+    )
+    bs.add_argument(
+        "--seed", type=int, default=None,
+        help="Seed for the matrix-order shuffle so the plan is reproducible.",
+    )
+    bs.add_argument(
+        "--ollama-host", type=str, default=None,
+        help="Override the Ollama host (default http://localhost:11434).",
+    )
+    bs.add_argument(
+        "--benchmarks-dir", type=str, default="benchmarks",
+        help="Benchmarks directory (default ./benchmarks).",
+    )
+
     logs_parser = subparsers.add_parser("logs", help="View the audit log for a session")
     logs_parser.add_argument("--session", type=str, default=None)
     logs_parser.add_argument("--limit", type=int, default=50)
@@ -175,6 +209,7 @@ def main():
         "scribe": lambda: _scribe(args),
         "session": lambda: _session(args, session_parser),
         "embed": lambda: _embed(args),
+        "benchmark": lambda: _benchmark(args, benchmark_parser),
         "logs": lambda: _logs(args),
         "serve": lambda: _serve(),
     }
@@ -219,6 +254,16 @@ def _scribe(args):
 def _embed(args):
     from bartleby.commands.embed import main as embed_main
     embed_main(args.text)
+
+
+def _benchmark(args, parser):
+    from bartleby.commands import benchmark as benchmark_cmd
+
+    if not args.benchmark_command:
+        parser.print_help()
+        sys.exit(1)
+
+    getattr(benchmark_cmd, args.benchmark_command)(args)
 
 
 def _logs(args):

@@ -84,7 +84,9 @@ def check_slug_collisions(refs: list[ModelRef]) -> None:
     """Normalization maps ``:``/``/`` to ``-``, so distinct refs can collide on
     the filename slug; refuse up front rather than silently sharing a store."""
     by_slug: dict[str, ModelRef] = {}
-    for ref in refs:
+    for i, ref in enumerate(refs):
+        if ref in refs[:i]:
+            raise SystemExit(f"Duplicate model reference {ref} in models.yaml")
         other = by_slug.setdefault(ref.slug, ref)
         if other != ref:
             raise SystemExit(

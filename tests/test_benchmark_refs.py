@@ -58,3 +58,8 @@ def test_slug_collision_refused():
 
 def test_no_collision_passes():
     check_slug_collisions([ModelRef("ollama", "a:b"), ModelRef("openai", "a-b")])
+
+
+def test_exact_duplicate_refused():
+    with pytest.raises(SystemExit):
+        check_slug_collisions([ModelRef("ollama", "a:b"), ModelRef("ollama", "a:b")])
