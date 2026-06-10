@@ -124,7 +124,9 @@ def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
     return max(1, configured)
 
 
-def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
+def _resolve_summarize_workers(
+    config: dict, *, effective_provider: str | None, timings: bool
+) -> int:
     """Resolve how many documents summarize concurrently in the post-parse pass.
 
     Like captioning (and unlike RAM-bound parse workers), summarization is
@@ -136,6 +138,12 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
     ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
     and parallel workers only queue. An explicit ``summarize_workers`` > 1 is
     ignored (with a warning) rather than honored — the clamp is the point.
+
+    ``effective_provider`` is the provider summaries *actually* run against —
+    ``--provider`` override folded in, not bare ``config['provider']`` (#314).
+    Clamping on the config alone bypasses the clamp when ``--provider ollama``
+    overrides a cloud config, and falsely clamps a cloud override over an Ollama
+    config; the caller computes the effective name and threads it in.
     """
     configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
     if timings:
@@ -145,7 +153,7 @@ def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
                 "clean baseline."
             )
         return 1
-    if config.get("provider") == "ollama":
+    if effective_provider == "ollama":
         # Re-read the raw value (not `configured`, which has the default folded
         # in) so the warning fires only on an explicit count, not the default.
         if int(config.get("summarize_workers") or 0) > 1:

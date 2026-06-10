@@ -47,7 +47,7 @@ from bartleby.ingest import resolve
 from bartleby.ingest import summary
 from bartleby.ingest.progress import ScribeProgress
 from bartleby.ingest.chunk import resolve_format_filter
-from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
+from bartleby.ingest.writer import FailedUnit, MAX_INGEST_ATTEMPTS, Writer
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
@@ -61,10 +61,9 @@ from bartleby.lib.consts import (
 from bartleby.project import get_project_dir
 
 
-def _report_failures(writer: Writer) -> None:
+def _report_failures(failures: list[FailedUnit]) -> None:
     """Surface every still-unresolved ingest unit so a skipped one never reads
     as a green run. Capped units won't be retried; the rest resume next run."""
-    failures = writer.failures()
     if not failures:
         return
     capped = sum(1 for f in failures if f.capped)
@@ -132,6 +131,9 @@ def main(
 
     project_name = resolve_project_name(project)
 
+    # Fold the --provider override in once; both the config snapshot and the
+    # #314 summarize-worker clamp key off this, never bare config['provider'].
+    effective_provider = provider or config.get("provider")
     llm_provider, llm_model = resolve._resolve_llm_provider(
         config, provider_override=provider, model_override=model,
     )
@@ -205,7 +207,7 @@ def main(
             **config,
             "pdf_converter": pdf_converter_name,
             "html_converter": html_converter_name,
-            "provider": provider or config.get("provider"),
+            "provider": effective_provider,
             "model": model or config.get("model"),
         })
         for line in config_drift(writer.latest_config(), config_snapshot):
@@ -235,7 +237,9 @@ def main(
             resolve._resolve_max_workers(config, timings=timings) if to_parse else 1
         )
         caption_workers = resolve._resolve_caption_workers(config, timings=timings)
-        summarize_workers = resolve._resolve_summarize_workers(config, timings=timings)
+        summarize_workers = resolve._resolve_summarize_workers(
+            config, effective_provider=effective_provider, timings=timings
+        )
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
@@ -344,7 +348,13 @@ def main(
                     f"some unit(s) still missing (see below)."
                 )
 
-        _report_failures(writer)
+        failures = writer.failures()
+        _report_failures(failures)
+        # The exit code is a scripted caller's only signal: a run that left any
+        # unit unresolved (a parse failure recorded in failed_ingests, or a
+        # document still owing captions/summary) must not read as green. Capture
+        # before `finally` closes the connection.
+        had_failures = incomplete_count > 0 or bool(failures)
     finally:
         writer.finish_run()
         conn.close()
@@ -367,4 +377,8 @@ def main(
             console.info(line)
         print(json.dumps(agg), flush=True)
 
+    if had_failures:
+        # Warnings above already named what failed; skip the green "Done." and
+        # exit non-zero so `bartleby scribe ... && next-step` halts the chain.
+        sys.exit(1)
     console.complete("Done.")

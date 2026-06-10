@@ -262,6 +262,29 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     assert "No /Root object" not in str(exc.value)
 
 
+def test_scribe_exits_nonzero_when_a_unit_fails(
+    isolated_project, tmp_path, mock_embed
+):
+    """A run that leaves any unit unresolved exits non-zero, so a scripted
+    caller (`bartleby scribe ... && next-step`) halts instead of reading the
+    nothing-ingested run as green (#311). The `.pdf` is really HTML, so parse
+    fails into failed_ingests and no document lands."""
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
+
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(src))
+    assert exc.value.code == 1
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM failed_ingests").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_writes_summary_when_provider_configured(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -619,7 +642,8 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 ):
     """A single image whose VLM call raises is recorded as a caption failure;
     the other images in the same concurrent run are still captioned — one bad
-    image never tears down the phase."""
+    image never tears down the phase. The run still exits non-zero, because that
+    one caption is an unresolved unit (#311)."""
     import threading
 
     class _OneFailVision:
@@ -658,7 +682,9 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
         )
         pdfs.append(str(pdf))
 
-    scribe.main(project="test_proj", files=pdfs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=pdfs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -764,7 +790,8 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 ):
     """A single document whose summarize call raises is recorded as a summary
     failure; the others in the same concurrent run still summarize — one bad
-    document never tears down the pass."""
+    document never tears down the pass. The run still exits non-zero, because
+    that one summary is an unresolved unit (#311)."""
     import threading
 
     class _OneFailLLM:
@@ -806,7 +833,9 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
         for i in range(3)
     ]
-    scribe.main(project="test_proj", files=srcs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=srcs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -826,17 +855,15 @@ def test_resolve_summarize_workers_defaults_and_timings():
 
     # Default when unset or zero; explicit value respected.
     assert scribe_module._resolve_summarize_workers(
-        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {}, effective_provider="openai", timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 0}, effective_provider="openai", timings=False
+    ) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=False) == 9
-    # A cloud LLM provider keeps the configured/default count.
-    assert scribe_module._resolve_summarize_workers(
-        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 9}, effective_provider="openai", timings=False) == 9
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=True) == 1
+        {"summarize_workers": 9}, effective_provider="openai", timings=True) == 1
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
@@ -847,12 +874,28 @@ def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama"}, timings=False) == 1
+        {}, effective_provider="ollama", timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+        {"summarize_workers": 8}, effective_provider="ollama", timings=False) == 1
     assert any("summarize_workers > 1 ignored" in w for w in warnings)
+
+
+def test_resolve_summarize_workers_tracks_provider_override():
+    """The clamp keys off the effective provider, not config['provider'] (#314)."""
+    from bartleby.ingest import resolve as scribe_module
+
+    # --provider ollama over a cloud config clamps to 1 (the clamp must not be
+    # bypassed just because config['provider'] is a cloud backend).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai", "summarize_workers": 4},
+        effective_provider="ollama", timings=False) == 1
+    # --provider anthropic over an ollama config keeps the configured count
+    # (no spurious clamp when the run isn't actually against Ollama).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 4},
+        effective_provider="anthropic", timings=False) == 4
 
 
 def test_summarize_all_progress_callback_fires_per_document(
@@ -1375,6 +1418,54 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
         )
         assert classify._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
+    finally:
+        conn.close()
+
+
+def test_classify_dedupes_byte_identical_incomplete_resume(isolated_project, tmp_path):
+    """Two byte-identical copies of an incomplete, already-parsed file resume the
+    one document once: the first lands in to_resume, the twin is diverted to
+    duplicates. Without the dedup both resolve to the same document_id and both
+    land in to_resume, so the incomplete tally double-counts a phantom unit (#313)."""
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    a.write_bytes(b"identical image bytes")
+    b.write_bytes(b"identical image bytes")
+    file_hash = classify._hash_file(a)
+    assert classify._hash_file(b) == file_hash
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_hash, "a.jpg", str(a), None, 0),
+        )
+        doc_id = conn.last_insert_rowid()
+        # analysis_json IS NULL → uncaptioned → the document is incomplete, so the
+        # first copy resumes rather than skips.
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, NULL, NULL)",
+            ("imgblob", str(a), 100, 100),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, None, 0),
+        )
+        writer = scribe.Writer(conn)
+        to_parse, to_resume, skipped, duplicates = classify._classify(
+            writer, [(a, ".jpg"), (b, ".jpg")], vision_enabled=True,
+        )
+        assert to_parse == []
+        assert [r.document_id for r in to_resume] == [doc_id]
+        assert duplicates == ["b.jpg"]
+        assert skipped == []
     finally:
         conn.close()
 
@@ -2101,7 +2192,10 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     _pdf_with_image(pdf, _png_bytes(), text="Durable body text " * 12)
 
     # Run 1: the VLM fails. Text chunks land; the image is recorded uncaptioned.
-    scribe.main(project="test_proj", files=str(pdf))
+    # The uncaptioned image is an unresolved unit, so the run exits non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == 1
     conn = open_db("test_proj")
     try:
@@ -2170,9 +2264,12 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     pdf = tmp_path / "doc.pdf"
     _pdf_with_image(pdf, _png_bytes(), text="Body text " * 12)
 
-    # Each run makes exactly one more attempt until the cap is reached.
+    # Each run makes exactly one more attempt until the cap is reached. The
+    # image never captions, so every run exits non-zero on the unresolved unit (#311).
     for _ in range(MAX_INGEST_ATTEMPTS):
-        scribe.main(project="test_proj", files=str(pdf))
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
 
     conn = open_db("test_proj")
@@ -2188,8 +2285,11 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     finally:
         conn.close()
 
-    # A further run is a no-op against the VLM — the unit is capped.
-    scribe.main(project="test_proj", files=str(pdf))
+    # A further run is a no-op against the VLM — the unit is capped. It's still
+    # unresolved, so the run keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
     conn = open_db("test_proj")
     try:
@@ -2279,7 +2379,7 @@ def test_report_failures_silent_when_no_failures(isolated_project, monkeypatch):
 
     conn = open_db("test_proj")
     try:
-        scribe._report_failures(Writer(conn))
+        scribe._report_failures(Writer(conn).failures())
     finally:
         conn.close()
     assert warnings == []
@@ -2306,7 +2406,7 @@ def test_report_failures_warns_with_caps_and_display_limit(
         for i in range(11):
             writer.record_failure(f"retry{i}", f"retry{i}.pdf", "summary", "later")
 
-        scribe._report_failures(writer)
+        scribe._report_failures(writer.failures())
     finally:
         conn.close()
 
@@ -2548,7 +2648,10 @@ def test_scribe_records_then_clears_a_parse_failure(
     pdf = _text_pdf(tmp_path / "doc.pdf", text="Durable body text " * 12)
 
     # Run 1: the parse fails. Recorded as a parse failure; nothing persisted.
-    scribe.main(project="test_proj", files=str(pdf))
+    # The unresolved unit makes the run exit non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == 1
     conn = open_db("test_proj")
     try:
@@ -2601,8 +2704,11 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
     pdf = _text_pdf(tmp_path / "doc.pdf", text="Body text " * 12)
 
     # Each run makes exactly one more parse attempt until the cap is reached.
+    # The parse never lands, so every run exits non-zero on the unresolved unit (#311).
     for _ in range(MAX_INGEST_ATTEMPTS):
-        scribe.main(project="test_proj", files=str(pdf))
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
     assert parses["n"] == MAX_INGEST_ATTEMPTS
 
     conn = open_db("test_proj")
@@ -2617,8 +2723,11 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
     finally:
         conn.close()
 
-    # A further run is a no-op against the converter — the unit is capped.
-    scribe.main(project="test_proj", files=str(pdf))
+    # A further run is a no-op against the converter — the unit is capped. Still
+    # unresolved, so it keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == MAX_INGEST_ATTEMPTS                # NOT re-parsed
     conn = open_db("test_proj")
     try:
