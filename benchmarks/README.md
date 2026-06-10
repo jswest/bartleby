@@ -52,6 +52,39 @@ Model references are always `<provider>/<model>` — YAML configs and command
 line alike. The first slash splits, so Ollama names keep their colons:
 `ollama/gemma4:e2b`.
 
+### Judge backends — auth & legal
+
+Two judge providers, two auth models:
+
+- **`openai/<model>`** — a cloud structured-output call. Needs `OPENAI_API_KEY`
+  in the environment or `benchmarks/.env`; billed to your OpenAI account.
+- **`anthropic-cc/<model>`** — grades through the local **Claude Code CLI**
+  (`claude -p`) under **your own Claude subscription**, no OpenAI key:
+
+  ```sh
+  bartleby benchmark judge --model anthropic-cc/claude-opus-4-8
+  bartleby benchmark judge --model anthropic-cc/fable5   # friendly aliases resolve
+  ```
+
+  Requires a logged-in `claude` (run `claude` or `claude auth login` first).
+  Run it once per model to judge with several — records are tagged per judge so
+  they never collide, and `leaderboard --judges` filters them.
+
+  **On the up-and-up, by design.** This is sanctioned for *ordinary, individual*
+  use — your own login, your own machine. It is **not** for shared, production,
+  or multi-tenant automation; route that through a Console API key instead. The
+  backend never stores or proxies credentials, and it strips
+  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the `claude` environment (and
+  never runs `--bare`) so the judge draws on your subscription's Agent SDK
+  credit, never a pay-as-you-go API account. When that monthly credit is
+  exhausted, judging stops unless you've enabled usage-credit overflow. Claude
+  Code exposes no temperature knob, so cc judge sampling isn't pinned the way the
+  OpenAI judge is — fine for the averaged multi-pass rubric. See Anthropic's
+  [Agent SDK + your Claude plan][cc-plan] and [Claude Code legal & compliance][cc-legal].
+
+  [cc-plan]: https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan
+  [cc-legal]: https://code.claude.com/docs/en/legal-and-compliance
+
 ## The stores
 
 ```

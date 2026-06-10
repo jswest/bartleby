@@ -181,6 +181,12 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
     root.require()
     refs = models if models is not None else root.load_models()
     check_slug_collisions(refs)
+    cc = [r for r in refs if r.provider == "anthropic-cc"]
+    if cc:
+        raise SystemExit(
+            f"anthropic-cc is a judge-only provider, not a summarize backend "
+            f"(got {', '.join(str(r) for r in cc)}). Use it with "
+            f"`bartleby benchmark judge --model anthropic-cc/<model>`.")
     corpus = select_documents(load_corpus(root), documents)
     sources = {doc_id: ensure_source(root, doc_id, pdf)
                for doc_id, pdf in corpus.items()}

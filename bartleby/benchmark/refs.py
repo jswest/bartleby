@@ -10,12 +10,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-PROVIDERS = ("ollama", "openai")
+PROVIDERS = ("ollama", "openai", "anthropic-cc")
 
 # Providers whose timings are measured on this machine and therefore comparable
 # on the leaderboard's speed axis. Everything else is a reference row: quality
-# only, excluded from the Pareto frontier.
-LOCAL_PROVIDERS = ("ollama",)
+# only, excluded from the Pareto frontier. ``anthropic-cc`` runs the local
+# Claude Code CLI, so its wall-clock is machine-local too (it's a judge-only
+# backend today — see bartleby.benchmark.cc_judge).
+LOCAL_PROVIDERS = ("ollama", "anthropic-cc")
 
 
 @dataclass(frozen=True, order=True)
