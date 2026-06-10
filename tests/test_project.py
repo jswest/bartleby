@@ -341,3 +341,94 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
         assert count == 1
     finally:
         conn.close()
+
+
+def test_upgrade_resumes_after_mid_chain_crash(projects_root, monkeypatch):
+    """A crash mid-chain leaves the DB at the last completed step; a re-run finishes.
+
+    Each `_upgrade_vN_to_vN+1` now stamps `meta.schema_version` inside its own
+    `with conn:`, so a step that raises after earlier steps committed leaves the
+    DB at an intermediate version (not a structural-vs-meta mismatch). A re-run
+    resumes from there and completes to SCHEMA_VERSION with no double-application
+    (re-walking a committed step would raise "table already exists").
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    # Simulate a v4 DB by undoing every additive step since (mirrors the
+    # chain-walk test's teardown).
+    db_path = project_db_path("alpha")
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        for table in ("documents", "summaries", "chunks"):
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
+        cur.execute("DROP TABLE ingests")
+        cur.execute("DROP TABLE failed_ingests")
+        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
+        cur.execute("ALTER TABLE sessions DROP COLUMN model")
+        cur.execute("DROP INDEX idx_document_tags_tag")
+        cur.execute("DROP TABLE document_tags")
+        cur.execute("DROP TABLE tags")
+        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
+        cur.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+    finally:
+        conn.close()
+
+    # Kill the chain at the v6→v7 step: v4→v5 and v5→v6 commit first, then this
+    # raises. The DB must come to rest at v6 (the last completed step), with the
+    # v5/v6 shapes present and the v7 shape absent.
+    real_v6_to_v7 = upgrades_mod._UPGRADES[6]
+    crashed = {"hit": False}
+
+    def boom(_conn):
+        crashed["hit"] = True
+        raise apsw.SQLError("simulated mid-chain crash")
+
+    monkeypatch.setitem(upgrades_mod._UPGRADES, 6, boom)
+
+    with pytest.raises(apsw.Error):
+        upgrades_mod.upgrade(apsw.Connection(str(db_path)), 4)
+    assert crashed["hit"]
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        meta = dict(cur.execute("SELECT key, value FROM meta"))
+        # Stamped to the last completed step, not the original v4 or the target.
+        assert meta["schema_version"] == "6"
+        names = {
+            row[0] for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "tags" in names and "document_tags" in names  # v6 landed
+        scols = [r[1] for r in cur.execute("PRAGMA table_info(sessions)")]
+        assert "model" not in scols  # v7 did NOT land
+    finally:
+        conn.close()
+
+    # Re-run with the real step restored: it must resume from v6 (never
+    # re-applying v5/v6 — that would raise "table already exists") and complete.
+    monkeypatch.setitem(upgrades_mod._UPGRADES, 6, real_v6_to_v7)
+    project_cmd.upgrade(name="alpha")
+
+    conn = open_db("alpha")
+    try:
+        cur = conn.cursor()
+        meta = dict(cur.execute("SELECT key, value FROM meta"))
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+        scols = [r[1] for r in cur.execute("PRAGMA table_info(sessions)")]
+        assert "model" in scols and "harness" in scols  # v7 now landed
+        names = {
+            row[0] for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "ingests" in names and "failed_ingests" in names  # v8 landed
+    finally:
+        conn.close()
