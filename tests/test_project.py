@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import bartleby.config
@@ -255,22 +257,68 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
     finally:
         conn.close()
 
-    # The upgraded DB must be schema-equivalent to a freshly-created v8: same
-    # tables, same columns per table. This is the regression gate that keeps
-    # the upgrade chain in lockstep with db/schema.py.
+    # The upgraded DB must be schema-equivalent to a freshly-created DB down to
+    # the full DDL: same tables AND indexes, with identical column types,
+    # NOT NULL / DEFAULT / CHECK constraints, and FK clauses. This is the
+    # regression gate that keeps the upgrade chain in lockstep with
+    # db/schema.py — comparing only table+column names (the old check) let
+    # dropped indexes, type drift, and constraint/FK drift slip through.
     bartleby.project.create_project("beta")
 
+    def _top_level_defs(body: str) -> tuple[str, ...]:
+        """Split a CREATE TABLE body on its top-level commas, normalized + sorted.
+
+        Each piece is one column or table-constraint definition (carrying its
+        type, ``NOT NULL`` / ``DEFAULT`` / ``CHECK``, and ``REFERENCES`` FK
+        clause). Splitting only at paren-depth 0 keeps a ``CHECK (... IN (...))``
+        or a multi-column ``PRIMARY KEY (a, b)`` intact. Sorting makes the set
+        order-independent: the chain's ``ALTER TABLE ADD COLUMN`` appends, so a
+        chain-built table lists the same columns in a different order than
+        schema.py — equivalent schemas we must not flag.
+        """
+        parts, depth, current = [], 0, ""
+        for ch in body:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append(current)
+                current = ""
+            else:
+                current += ch
+        parts.append(current)
+        return tuple(sorted(" ".join(p.split()) for p in parts if p.strip()))
+
+    def _normalize(sql: str):
+        # Strip `--` line comments (schema.py annotates columns; the chain's
+        # hand-built CREATEs don't — pure layout, not structural drift) and
+        # collapse whitespace, so only real DDL differences survive.
+        sql = re.sub(r"--[^\n]*", "", sql)
+        sql = " ".join(sql.split())
+        if sql.upper().startswith("CREATE TABLE"):
+            open_paren, close_paren = sql.find("("), sql.rfind(")")
+            head = sql[:open_paren].strip().upper()
+            return (head, _top_level_defs(sql[open_paren + 1 : close_paren]))
+        # Indexes (and any non-plain-table CREATE) compare whole: a dropped or
+        # altered index changes this normalized string outright.
+        return (sql.upper(),)
+
     def _schema(conn):
-        tables = [
-            row[0] for row in conn.cursor().execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        ]
+        # Compare the full DDL of every table and index — column types,
+        # NOT NULL / DEFAULT / CHECK constraints, FK clauses, and index
+        # definitions — between the chain-upgraded DB and a fresh one, after
+        # normalizing away whitespace, comments, and (within a table) column
+        # order so pure formatting never false-positives. Rows with NULL sql
+        # (autoindexes, the FTS5 / vec0 shadow internals) carry no
+        # author-written DDL to diff and are skipped; both DBs build those
+        # identically from the same CREATEs.
         return {
-            t: sorted(
-                r[1] for r in conn.cursor().execute(f"PRAGMA table_info({t})")
+            (kind, name): _normalize(sql)
+            for kind, name, sql in conn.cursor().execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'index') AND sql IS NOT NULL"
             )
-            for t in tables
         }
 
     upgraded, fresh = open_db("alpha"), open_db("beta")
