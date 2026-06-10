@@ -133,7 +133,6 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
             )
         ]
         assert finding_chunk_texts == [new_body]
-        # The chunks_fts mirror is in sync with the new body too.
         finding_chunk_ids = [
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
@@ -141,11 +140,9 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
                 (finding_id,),
             )
         ]
-        for cid in finding_chunk_ids:
-            fts_text = cur.execute(
-                "SELECT text FROM chunks_fts WHERE rowid = ?", (cid,)
-            ).fetchone()
-            assert fts_text == (new_body,)
+        # The chunks_fts mirror is in sync with the new body too; that is
+        # asserted by the triple-table sync guard below (a per-rowid read of
+        # the external-content chunks_fts goes THROUGH chunks and is vacuous).
         # The chunks_vec mirror tracks the rebuild: the new body chunks are
         # present in vec, and any old chunk id NOT reused by the new body is
         # gone. (SQLite reuses chunk_id values, so disjointness can't be

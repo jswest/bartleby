@@ -31,13 +31,19 @@ def assert_chunk_tables_consistent(conn) -> None:
       so any non-MATCH read (rowid lookup, ``COUNT``) is satisfied THROUGH
       ``chunks`` and would be vacuous. The only way to catch drift between the
       FTS index and its content table is FTS5's own ``'integrity-check'``
-      command, which raises if they disagree.
+      command. It MUST be invoked in the two-argument ``rank=1`` form
+      (``VALUES('integrity-check', 1)``): the rank argument is what makes
+      integrity-check actually re-derive the index from the external-content
+      ``chunks`` table and compare them, raising on drift in either direction.
+      The one-argument form is a no-op for content/index drift in this SQLite
+      (apsw 3.51 / SQLite 3.51) — it passes even when the index is missing rows
+      or holds stale entries.
     - ``chunks_vec`` is a real ``vec0`` table with its own row storage, so its
       ``rowid`` set can be compared against ``chunks`` directly.
     """
     cur = conn.cursor()
-    # FTS leg: external-content integrity check (raises on drift).
-    cur.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+    # FTS leg: external-content integrity check (rank=1 raises on drift).
+    cur.execute("INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)")
     # Vector leg: rowid sets must match exactly.
     chunk_ids = {r[0] for r in cur.execute("SELECT chunk_id FROM chunks")}
     vec_ids = {r[0] for r in cur.execute("SELECT rowid FROM chunks_vec")}

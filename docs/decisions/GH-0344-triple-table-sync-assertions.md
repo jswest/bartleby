@@ -22,9 +22,13 @@ check that is *non-vacuous* for that leg:
   and therefore can never observe index/content drift. The pre-existing
   `SELECT … FROM chunks_fts WHERE rowid = ?` assertions in `delete_finding` and
   `edit_finding` were exactly this vacuous shape. The only thing that catches a
-  drifted external-content index is `INSERT INTO chunks_fts(chunks_fts)
-  VALUES('integrity-check')`, which raises if the FTS index disagrees with its
-  content table.
+  drifted external-content index is the **two-argument `rank=1`** form,
+  `INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)`: the
+  `rank` argument is what makes FTS5 re-derive the index from the `chunks`
+  content table and compare them, raising on drift in either direction. The
+  one-argument form (`VALUES('integrity-check')`) is inert here (apsw 3.51 /
+  SQLite 3.51) — it passes even when the index is missing rows or holds stale
+  entries — so it must not be used.
 - **Vector leg → direct rowid-set comparison.** `chunks_vec` is a real `vec0`
   table with its own row storage, so `{rowid FROM chunks_vec}` must equal
   `{chunk_id FROM chunks}` exactly, and a mismatch is a true observation.

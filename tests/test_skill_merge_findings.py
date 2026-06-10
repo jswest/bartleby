@@ -171,19 +171,16 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
             if cid in target_chunk_ids:
                 continue  # chunk_id reused by the rebuilt target body
             assert cur.execute(
-                "SELECT COUNT(*) FROM chunks_fts WHERE rowid = ?", (cid,),
-            ).fetchone()[0] == 0
-            assert cur.execute(
                 "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
             ).fetchone()[0] == 0
         for cid in target_chunk_ids:
             assert cur.execute(
-                "SELECT COUNT(*) FROM chunks_fts WHERE rowid = ?", (cid,),
-            ).fetchone()[0] == 1
-            assert cur.execute(
                 "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
             ).fetchone()[0] == 1
 
+        # The FTS leg is covered by the triple-table sync guard below; a
+        # per-rowid COUNT over the external-content chunks_fts reads THROUGH
+        # chunks and is vacuous.
         assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
