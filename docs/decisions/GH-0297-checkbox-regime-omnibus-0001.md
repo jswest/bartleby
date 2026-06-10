@@ -1,4 +1,4 @@
-# Omnibus issues carry a comment-anchored checkbox block that `/ship` reads and writes (issue #297)
+# Omnibus tracking has two layers `/ship` keeps in step: native GitHub sub-issues + a comment-anchored checkbox block (issue #297)
 
 > Source: [#297](https://github.com/jswest/bartleby/issues/297)
 
@@ -38,6 +38,26 @@ away from the human-readable prose checklist — the same rejection [#265](https
 made. Comment markers keep the prose narrative and give `/ship` a stable,
 parseable, anchored region to edit without free-form rewriting a hand-curated
 body.
+
+**The second layer: native GitHub sub-issues.** The block is body text; it does
+not populate GitHub's issue *hierarchy*. So `/ship` also links each tracked issue
+as a native **sub-issue** of the omnibus parent — distinct from a task-list `- [ ]
+#N` reference, a sub-issue is a first-class parent/child relationship that lives
+off the body and drives GitHub's progress panel. `gh` ships no sub-issue
+subcommand (verified on 2.92.0), so the skill uses the REST `…/issues/<omnibus>/
+sub_issues` (POST/list) and `…/sub_issue` (DELETE) endpoints, keyed by the
+child's REST `.id` (not its issue number) and
+passed as a **typed integer** — a string `sub_issue_id` returns `Invalid request`
+(the failure mode hit while dogfooding on #282). Links are reconciled to the
+omnibus body's tracked set: an issue deferred out of the bundle (e.g. #254, pulled
+from #282 mid-flight) is *not* linked, and a stale link is removed.
+
+The two layers answer different questions and are kept deliberately separate: the
+sub-issue panel tracks issue **closure** (under `onto`, sub-issues stay open until
+the omnibus → `main` promotion, so the panel reads 0-closed until then), while the
+checklist block tracks **branch-landing** (ticked as each sub-PR is opened, then
+reconciled against actually-merged PRs at promotion). Neither subsumes the other —
+closure and landing are genuinely different states during an omnibus's life.
 
 **Relationship to #265 and #191.** This is the *format/discipline* layer; #265
 is the *concurrency-safe writer* over it — a single serialized reconciler that
