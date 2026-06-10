@@ -34,3 +34,14 @@ def summarize(args) -> None:
         seed=args.seed,
         ollama_host=args.ollama_host,
     )
+
+
+def judge(args) -> None:
+    from bartleby.benchmark import judging as mod
+    from bartleby.benchmark.refs import ModelRef
+
+    mod.run(
+        _root(args),
+        judge=ModelRef.from_flag(args.model) if args.model else None,
+        passes=args.passes,
+    )

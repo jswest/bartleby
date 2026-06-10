@@ -175,10 +175,24 @@ def main():
         "--ollama-host", type=str, default=None,
         help="Override the Ollama host (default http://localhost:11434).",
     )
-    bs.add_argument(
-        "--benchmarks-dir", type=str, default="benchmarks",
-        help="Benchmarks directory (default ./benchmarks).",
+    bj = benchmark_sub.add_parser(
+        "judge",
+        help="Top up blind judge scores for every distinct summary on record",
     )
+    bj.add_argument(
+        "--model", type=str, default=None,
+        help="Judge as <provider>/<model>; default: the first entry in judges.yaml.",
+    )
+    bj.add_argument(
+        "--passes", type=int, default=3,
+        help="Judgments each distinct summary should have (default 3); "
+             "idempotent — re-running tops up, never duplicates.",
+    )
+    for sub in (bs, bj):
+        sub.add_argument(
+            "--benchmarks-dir", type=str, default="benchmarks",
+            help="Benchmarks directory (default ./benchmarks).",
+        )
 
     logs_parser = subparsers.add_parser("logs", help="View the audit log for a session")
     logs_parser.add_argument("--session", type=str, default=None)

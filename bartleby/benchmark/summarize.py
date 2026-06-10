@@ -172,19 +172,6 @@ def _warn_missing_ollama(client, models: list[str]) -> None:
               file=sys.stderr)
 
 
-def _make_openai_client(root: BenchmarkRoot):
-    import os
-
-    from dotenv import load_dotenv
-
-    load_dotenv(dotenv_path=root.root / ".env")
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit(
-            f"OPENAI_API_KEY not set (looked in env and {root.root / '.env'})")
-    from openai import OpenAI
-    return OpenAI()
-
-
 def run(root: BenchmarkRoot, models: list[ModelRef] | None,
         documents: list[str] | None, runs: int = 1, seed: int | None = None,
         ollama_host: str | None = None,
@@ -205,7 +192,8 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
         _warn_missing_ollama(
             ollama_client, [r.model for r in refs if r.provider == "ollama"])
     if openai_client is None and any(r.provider == "openai" for r in refs):
-        openai_client = _make_openai_client(root)
+        from bartleby.benchmark.clients import make_openai_client
+        openai_client = make_openai_client(root)
 
     plan = [(ref, doc_id) for ref in refs for doc_id in corpus
             for _ in range(runs)]
