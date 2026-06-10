@@ -42,6 +42,13 @@ Whenever any scope filter is active the response carries a ``filters`` object
 echoing it — ``{tags, in_documents, authored_after, authored_before,
 include_nulls, excluded_null_dated}`` — the same nested contract ``search`` /
 ``scan`` / ``describe_corpus`` emit; it is absent on an unfiltered listing.
+
+Value-tags: when a ``--tag`` names a value-tag (one carrying a per-document
+value), each returned document gains a ``tag_values`` object mapping that tag's
+name to ``{"value": str|null, "chunk_id": int|null}`` for the document — its
+value chip. A document with no extracted value for the tag maps to null entries.
+``tag_values`` is omitted (not empty) on rows when no value-tag is among the
+filters and on ``--brief`` rows.
 """
 
 from __future__ import annotations
@@ -99,6 +106,39 @@ _ORDER_BY = {
 }
 
 
+def _value_tag_values(conn, tag_names, doc_ids):
+    """Per-document value chips for any value-tags among ``tag_names``.
+
+    Returns ``{tag_name: {document_id: {"value": str|null, "chunk_id":
+    int|null}}}`` for the value-tags in the filter, or ``None`` when no
+    value-tag is filtered (so the caller omits ``tag_values`` entirely). Only
+    value-tags (``value_type IS NOT NULL``) surface a chip — boolean tags don't.
+    """
+    if not tag_names or not doc_ids:
+        return None
+    cur = conn.cursor()
+    name_ph = ",".join("?" * len(tag_names))
+    value_tags = list(cur.execute(
+        f"SELECT tag_id, name FROM tags "
+        f"WHERE name IN ({name_ph}) AND value_type IS NOT NULL",
+        tag_names,
+    ))
+    if not value_tags:
+        return None
+    tag_ids = [tid for tid, _ in value_tags]
+    tag_ph = ",".join("?" * len(tag_ids))
+    doc_ph = ",".join("?" * len(doc_ids))
+    out = {name: {} for _, name in value_tags}
+    by_id = dict(value_tags)
+    for tag_id, document_id, value, chunk_id in cur.execute(
+        f"SELECT tag_id, document_id, value, chunk_id FROM document_tags "
+        f"WHERE tag_id IN ({tag_ph}) AND document_id IN ({doc_ph})",
+        tag_ids + list(doc_ids),
+    ):
+        out[by_id[tag_id]][document_id] = {"value": value, "chunk_id": chunk_id}
+    return out
+
+
 def work(*, conn, args, session_id) -> dict:
     from bartleby.skill_scripts._tags import resolve_scope
 
@@ -140,6 +180,9 @@ def work(*, conn, args, session_id) -> dict:
     )
 
     documents = []
+    rows = list(rows)
+    doc_ids = [r[0] for r in rows]
+    value_tag_values = _value_tag_values(conn, args.tags, doc_ids)
     for (
         doc_id, file_name, page_count, token_count, created_at,
         title, description, authored_date, has_summary, chunk_count, image_count,
@@ -163,6 +206,13 @@ def work(*, conn, args, session_id) -> dict:
                 "token_count": token_count,
                 "chunk_count": chunk_count,
             })
+        if value_tag_values is not None:
+            doc["tag_values"] = {
+                name: value_tag_values[name].get(
+                    doc_id, {"value": None, "chunk_id": None}
+                )
+                for name in value_tag_values
+            }
         documents.append(doc)
 
     hint = pagination_hint(args.offset, len(documents), total)

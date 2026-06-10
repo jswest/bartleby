@@ -133,12 +133,16 @@ CREATE TABLE tags (
     tag_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
+    value_type TEXT CHECK (value_type IN ('number', 'string', 'date')),
+    pattern TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE document_tags (
     document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+    value TEXT,
+    chunk_id INTEGER REFERENCES chunks(chunk_id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (document_id, tag_id)
 );

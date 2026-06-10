@@ -102,11 +102,42 @@ def _upgrade_v7_to_v8(conn: apsw.Connection) -> None:
         )
 
 
+def _upgrade_v8_to_v9(conn: apsw.Connection) -> None:
+    # Schema v9 is the value-bearing-tags bump (#114): tags gain an optional
+    # per-document value, produced by a stored regex run over chunks. All
+    # purely additive — nullable columns, NULL truthful on pre-upgrade rows
+    # (an ordinary boolean tag leaves them all NULL), so existing corpora run
+    # `bartleby project upgrade` rather than re-ingest. Keep this DDL in
+    # lockstep with db/schema.py.
+    #
+    # DORMANT while SCHEMA_VERSION == 8: the upgrade loop walks v < 8 only, so
+    # this step never fires until the v0.9.0 assembly commit bumps to 9 and
+    # removes the held-at-8 xfail on the chain-walk test. #254 appends its own
+    # ALTERs to THIS function (same v8→v9 step), so they ship as one bump.
+    cur = conn.cursor()
+    # tags: the value-tag method. value_type is the discriminator (NULL = an
+    # ordinary boolean category tag); pattern is the extraction regex.
+    cur.execute(
+        "ALTER TABLE tags ADD COLUMN value_type TEXT "
+        "CHECK (value_type IN ('number', 'string', 'date'))"
+    )
+    cur.execute("ALTER TABLE tags ADD COLUMN pattern TEXT")
+    # document_tags: the extracted value + its chunk anchor (the citation
+    # source). Nullable with no default, so the FK-bearing ADD COLUMN is legal
+    # on a populated table; old rows keep value/chunk_id NULL.
+    cur.execute("ALTER TABLE document_tags ADD COLUMN value TEXT")
+    cur.execute(
+        "ALTER TABLE document_tags ADD COLUMN "
+        "chunk_id INTEGER REFERENCES chunks(chunk_id)"
+    )
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
     6: _upgrade_v6_to_v7,
     7: _upgrade_v7_to_v8,
+    8: _upgrade_v8_to_v9,
 }
 
 

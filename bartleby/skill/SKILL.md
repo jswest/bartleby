@@ -67,14 +67,15 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `delete_finding --finding <id>` | **Retract a finding outright** — its row, body chunks, and citations. The cited *document* chunks (evidence) are untouched. |
 | `list_findings` | **Browse what findings exist**, newest first — the `list_documents` of memory. `--brief` for a cheap survey. (`search --findings` ranks fragments; this lists what's there.) |
 | `read_finding --finding <id>` | **Read one whole finding by id** — full `body` plus resolved citations. Use it after `list_findings`. Findings are hints — never cite one. `dangling_citations` lists chunk ids whose `[^N]` marker no longer resolves (the cited source was since removed); when compiling a report, flag such a marker as "cited source no longer available" — don't silently drop it. |
-| `read_tags` | List the controlled vocabulary. **Always run this before any other tag operation.** Empty until someone adds tags. |
-| `add_tag --name <n> --description <d>` | Create a tag (runs a similarity + name-conflict check; returns `status: "conflict"` on a near-match instead of duplicating). **Humans drive tag creation** — only propose one when explicitly asked. |
+| `read_tags` | List the controlled vocabulary. **Always run this before any other tag operation.** Empty until someone adds tags. Reports `value_type`/`pattern` (non-null only for **value-tags**); `--boolean-only` scopes to plain category tags. |
+| `add_tag --name <n> --description <d> [--value-type <number\|string\|date> --pattern <re>]` | Create a tag (runs a similarity + name-conflict check; returns `status: "conflict"` on a near-match instead of duplicating). With `--value-type`+`--pattern` (both or neither) creates a **value-tag** that carries a per-document value — `--pattern` is a regex with a `(?P<value>…)` group (compiled with re2). **Humans drive tag creation** — only propose one when explicitly asked. |
 | `delete_tag --name <n>` | Drop a tag. Cascades to all its assignments. |
 | `rename_tag --old <a> --new <b>` | Rename in place. Errors if `--new` already exists — use `merge_tags` to combine. |
-| `merge_tags --from <a> --into <b>` | Move all assignments from `--from` onto `--into`, then delete `--from`. |
+| `merge_tags --from <a> --into <b>` | Move all assignments from `--from` onto `--into`, then delete `--from`. For value-tags the target's value is kept on overlap; dropped source values are reported in `value_collisions`. |
 | `tag [--document <id> \| --all] [--tag <name>] [--force]` | Classify documents against the vocabulary with the configured summarizer model — `--all` (full-vocab) or `--tag <name>` (single-tag). The classifier reads the summary, not the body. **`tag --all` runs one LLM call per document — confirm with the human first** (report the count and the model). |
-| `assign_tag --documents <id,id,...> --tag <name>` | Attach one tag to one or more documents **directly, with no LLM** — the manual counterpart to `tag`, and the only way to apply *body-level* tags the summary-based classifier can't see (OCR quality, language, "contains tables"). Pass the whole set in one call. |
+| `assign_tag --documents <id,id,...> --tag <name> [--value <v> [--chunk <id>]]` | Attach one tag to one or more documents **directly, with no LLM** — the manual counterpart to `tag`, and the only way to apply *body-level* tags the summary-based classifier can't see (OCR quality, language, "contains tables"). Pass the whole set in one call. `--value` (value-tags only) records a value you determined out-of-band, cast per the tag's `value_type`; `--chunk` anchors it. |
 | `unassign_tag --documents <id,id,...> --tag <name>` | Detach the `(document, tag)` assignment from the named documents. Unlike `delete_tag` (which drops the tag and cascades *every* document's assignment), this touches only the documents you name. |
+| `extract --tag <name> --chunks <id,id,...>` | Run a **value-tag's** stored regex over an explicit set of chunk ids (you locate them first via `search`/`scan` — no implicit sweep), storing each captured value anchored to its chunk. Batch many ids in one call. Honest by construction: non-matching chunks → `no_match`; two *distinct* values for one document → `conflicts` (stores neither, never picks); never fabricates a value. |
 
 ## Default research loop
 
@@ -134,6 +135,17 @@ Tags are a controlled vocabulary the user curates to slice the corpus by categor
 - **`tag --all` requires explicit human confirmation.** It runs the configured summarizer model once per document. Before invoking it, tell the human roughly how many documents will be classified and which model will be used (the model is configured in `bartleby config`).
 - **`add_tag` may return `{status: "conflict", ...}`** when the proposed description is too similar to an existing tag. Surface the conflict to the human verbatim — don't create the tag anyway, don't pick a different name silently. The user decides: accept the existing tag, rename it, or merge.
 - **Two ways to assign a tag.** `tag` lets the summarizer model decide (good for *topical* categories the summary describes). `assign_tag` / `unassign_tag` record a decision *you* made, with no LLM — the only path for *body-level* categories (OCR quality, language, "contains tables") that the summary doesn't capture. Reach for `assign_tag` when you've already established membership yourself; reach for `tag` when you want the model to judge.
+
+### Value-tags (tags that carry a value)
+
+A plain tag answers *"which documents are X?"*; a **value-tag** answers *"what is X's value in each document?"* — a number/string/date pulled from each document's text by a stored regex. It's the same vocabulary and lifecycle, just with an optional value payload — not a new subsystem.
+
+- **Create** with `add_tag --value-type <number|string|date> --pattern '<re>'` (both or neither). The pattern needs a `(?P<value>…)` capture group marking the substring to keep; it's compiled with re2 (linear-time — no catastrophic backtracking), so write the pattern to *isolate* the span. For `number`, a normalizer strips `$ , %` and reads `(…)` as negative, so the regex only has to find the digits.
+- **Populate** with `extract --tag <name> --chunks <id,id,…>`. **You pass the chunk ids** — locate them first with `search`/`scan`; there is no corpus-wide sweep. It runs the stored pattern over each chunk, casts the capture, and stores the value anchored to its chunk (the citation source). It's honest by construction: a chunk that doesn't match → `no_match`; two chunks of the *same* document yielding *distinct* values → `conflicts` (it stores neither and never picks); a value is **never fabricated**. Re-runnable as the corpus grows — re-locate chunks, re-run the same tag.
+- **One value per (document, tag).** A later unambiguous extraction overwrites the prior value.
+- **Manual override:** when the regex can't reach it (odd formatting, a value you read by eye), `assign_tag --tag <name> --value <v> [--chunk <id>]` records it directly (cast per the tag's `value_type`).
+- **Read** values via `list_documents --tag <name>` (each row gains a `tag_values` chip) or directly from `read_tags` (which shows the tag's method). Cite a value through its `chunk_id`, never directly — same "reached through a chunk" rule as everything else.
+- **Out of scope here:** extraction from structured/tabular content (do a structured read + `jq`), LLM-based extraction (the method is a deterministic regex), and cross-document roll-up tables.
 
 ## Memory rules
 
