@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0275 — `delete_finding` (title echo + destroy) and `merge_findings` (consume foreign sources) gate on ownership under memory-off; supersedes GH-0056's "ungated write siblings" stance for these two (issue #275)](GH-0275-gate-delete-merge-on-memory-wall-0001.md)
 - [GH-0272 — `edit_finding` gates on ownership under memory-off (its body echo made it a read-by-write bypass); refines GH-0056's "edit is an ungated write sibling" — gate iff the response discloses unsupplied content (issue #272)](GH-0272-edit-finding-memory-off-gate-0001.md)
 - [GH-0271 — read_chunks honors the memory wall: a memory-off session can't read other sessions' finding chunks (foreign `--chunks` ids fall to `missing`, foreign `--around-chunk` raises `MEMORY_OFF`) (issue #271)](GH-0271-read-chunks-honors-the-memory-wall-0001.md)
 - [GH-0248 — `scan --count-by` groups by a regex capture (per-match counts); a fold primitive with a stated not-a-query-engine boundary, `--extract` deferred, agent-proportionate runaway guard (issue #248)](GH-0248-count-by-regex-capture-0001.md)

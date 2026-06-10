@@ -7,9 +7,29 @@ import json
 import pytest
 
 from bartleby.skill_scripts import merge_findings, save_finding
+from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.session import start_session
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+
+
+def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
+    """Insert a minimal finding owned by ``session_id``; return its id."""
+    conn.cursor().execute(
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, title, "hook", "body"),
+    )
+    finding_id = conn.last_insert_rowid()
+    insert_finding_chunks(conn, finding_id, [
+        ChunkInput(
+            text="body",
+            embedding=[0.01 * i for i in range(EMBEDDING_DIM)],
+            chunk_index=0,
+        ),
+    ])
+    return finding_id
 
 
 @pytest.fixture(autouse=True)
@@ -215,5 +235,84 @@ def test_merge_rejects_body_without_citations(seeded_project, tmp_path, capsys):
             "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
             (target, src),
         ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, capsys):
+    """A memory-off session cannot consume a foreign session's finding, and the
+    gate fires before any deletion — both findings survive."""
+    project = seeded_project["project"]
+    c0 = _doc_chunk_ids(project, seeded_project["doc_a"])[0]
+
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
+            ("author", 1),
+        )
+        author = conn.last_insert_rowid()
+        foreign_src = _seed_finding_as(conn, author)
+    finally:
+        conn.close()
+
+    # A separate memory-off session owns the target but tries to fold in the
+    # foreign source.
+    start_session(project, memory_enabled=False)
+    target = _save(project, tmp_path, capsys, name="t", title="Mine", cite=c0)
+
+    merged_file = tmp_path / "m.md"
+    merged_file.write_text(f"Body[^{c0}].", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(foreign_src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MEMORY_OFF"
+    assert out["foreign_finding_ids"] == [foreign_src]
+
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
+            (target, foreign_src),
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_merge_memory_off_all_own(seeded_project, tmp_path, capsys):
+    """A memory-off session can merge findings it authored itself."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    c0, c1 = chunks[0], chunks[1]
+
+    start_session(project, memory_enabled=False)
+    target = _save(project, tmp_path, capsys, name="t", title="Keep", cite=c0)
+    src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
+
+    merged_file = tmp_path / "merged.md"
+    merged_file.write_text(f"# C\n\nTogether[^{c0}][^{c1}].", encoding="utf-8")
+    merge_findings.main([
+        "--project", project,
+        "--from", str(src),
+        "--into", str(target),
+        "--body-file", str(merged_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["finding_id"] == target
+    assert out["merged_from"] == [src]
+
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id = ?", (src,),
+        ).fetchone()[0] == 0
     finally:
         conn.close()
