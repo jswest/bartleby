@@ -7,6 +7,12 @@
   $: doc = data.document;
   $: summaryHtml = doc.summary_text ? marked.parse(doc.summary_text) : null;
 
+  // A markdown source renders to sanitized HTML in the viewer pane (set by the
+  // loader for `.md` documents); marked.parse flows through the singleton's
+  // postprocess hook in +layout.svelte (DOMPurify), the same path the summary
+  // uses. Everything else (PDF/HTML/image/text) keeps the iframe below.
+  $: sourceHtml = data.sourceMarkdown != null ? marked.parse(data.sourceMarkdown) : null;
+
   // ?page=N (set by search/scan result links) jumps the PDF viewer to the
   // cited page. Sanitized to a positive integer; anything else opens page 1.
   $: pageNum = (() => {
@@ -50,9 +56,15 @@
   </article>
 
   <aside class="viewer">
-    {#key viewerSrc}
-      <iframe title="Source document" src={viewerSrc} sandbox={isPdf ? undefined : ""}></iframe>
-    {/key}
+    {#if sourceHtml}
+      <div class="md-source markdown-body">
+        {@html sourceHtml}
+      </div>
+    {:else}
+      {#key viewerSrc}
+        <iframe title="Source document" src={viewerSrc} sandbox={isPdf ? undefined : ""}></iframe>
+      {/key}
+    {/if}
   </aside>
 </div>
 
