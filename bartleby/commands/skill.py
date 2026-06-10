@@ -35,6 +35,7 @@ SCRIPTS = (
     "tag",
     "assign_tag",
     "unassign_tag",
+    "extract",
 )
 
 

@@ -62,18 +62,27 @@ class TagRow:
     tag_id: int
     name: str
     description: str
+    value_type: str | None = None
+    pattern: str | None = None
+
+    @property
+    def is_value_tag(self) -> bool:
+        """A value-tag carries a method (value_type set); else a boolean tag."""
+        return self.value_type is not None
 
 
 def fetch_vocabulary(conn) -> list[TagRow]:
     rows = conn.cursor().execute(
-        "SELECT tag_id, name, description FROM tags ORDER BY name"
+        "SELECT tag_id, name, description, value_type, pattern "
+        "FROM tags ORDER BY name"
     ).fetchall()
     return [TagRow(*row) for row in rows]
 
 
 def get_tag_by_name(conn, name: str) -> TagRow | None:
     row = conn.cursor().execute(
-        "SELECT tag_id, name, description FROM tags WHERE name = ?",
+        "SELECT tag_id, name, description, value_type, pattern "
+        "FROM tags WHERE name = ?",
         (name,),
     ).fetchone()
     return TagRow(*row) if row else None
@@ -507,4 +516,137 @@ def unassign(conn, document_id: int, tag_id: int) -> None:
     conn.cursor().execute(
         "DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?",
         (document_id, tag_id),
+    )
+
+
+# ---------- value-bearing tags ----------
+
+
+# The three casts a value-tag may declare. ``value_type`` is also the
+# discriminator: NULL = an ordinary boolean tag, non-NULL = a value-tag.
+VALUE_TYPES = ("number", "string", "date")
+
+# A value-tag's pattern MUST expose the captured substring through a named
+# group ``(?P<value>…)`` so extraction is unambiguous about which span to
+# store. (re2 supports named groups identically to stock ``re``.)
+_VALUE_GROUP = "value"
+# Minimal ISO-date shape we require when ``value_type == "date"``: YYYY-MM-DD.
+# The pattern isolates a date substring; the cast just validates its shape so
+# stored dates sort and compare like the summarizer's ``authored_date``.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def validate_value_type(raw: str | None) -> str | None:
+    """Return a validated ``value_type`` (or None for a boolean tag).
+
+    Raises ``INVALID_VALUE_TYPE`` on anything outside :data:`VALUE_TYPES`.
+    """
+    if raw is None:
+        return None
+    if raw not in VALUE_TYPES:
+        raise SkillError(
+            "INVALID_VALUE_TYPE",
+            f"--value-type must be one of {', '.join(VALUE_TYPES)}; got {raw!r}.",
+        )
+    return raw
+
+
+def compile_pattern(pattern: str):
+    """Compile a value-tag pattern with re2, requiring a ``(?P<value>…)`` group.
+
+    re2 (google-re2) guarantees linear-time matching, so agent-authored
+    patterns run across many chunks can't trigger catastrophic backtracking
+    the way stock ``re`` can. Raises ``INVALID_PATTERN`` on a malformed regex
+    or a pattern missing the named ``value`` capture group.
+    """
+    import re2
+
+    try:
+        compiled = re2.compile(pattern)
+    except Exception as e:  # re2 raises its own error types on bad syntax
+        raise SkillError(
+            "INVALID_PATTERN", f"Pattern is not a valid regex: {e}",
+        ) from None
+    if _VALUE_GROUP not in (compiled.groupindex or {}):
+        raise SkillError(
+            "INVALID_PATTERN",
+            "Pattern must contain a named capture group "
+            "(?P<value>…) marking the substring to extract.",
+        )
+    return compiled
+
+
+def normalize_number(raw: str) -> str:
+    """Strip ``$ , %`` and read ``(…)`` as negative, then validate as a number.
+
+    The regex only has to *isolate* a numeric substring; this normalizer cleans
+    common accounting formatting before the cast so patterns stay simple. The
+    canonical stored form is the cleaned numeric string (e.g. ``"(1,234.5)"`` →
+    ``"-1234.5"``). Raises ``INVALID_VALUE`` if the result isn't a number.
+    """
+    s = raw.strip()
+    negative = s.startswith("(") and s.endswith(")")
+    if negative:
+        s = s[1:-1].strip()
+    s = s.replace("$", "").replace(",", "").replace("%", "").strip()
+    if negative and s and not s.startswith("-"):
+        s = "-" + s
+    try:
+        float(s)
+    except ValueError:
+        raise SkillError(
+            "INVALID_VALUE",
+            f"Captured {raw!r} does not normalize to a number.",
+        ) from None
+    return s
+
+
+def cast_value(value_type: str, captured: str) -> str:
+    """Cast a captured substring per ``value_type``, returning canonical text.
+
+    - ``number``: normalized via :func:`normalize_number`.
+    - ``date``: must already be ``YYYY-MM-DD`` (the pattern isolates it).
+    - ``string``: stored verbatim (stripped).
+
+    Stored canonically as text in every case (cast on read by the consumer).
+    Raises ``INVALID_VALUE`` when the captured span can't satisfy the type.
+    """
+    if value_type == "number":
+        return normalize_number(captured)
+    if value_type == "date":
+        s = captured.strip()
+        if not _DATE_RE.match(s):
+            raise SkillError(
+                "INVALID_VALUE",
+                f"Captured {captured!r} is not a YYYY-MM-DD date.",
+            )
+        return s
+    return captured.strip()
+
+
+def require_value_tag(tag: TagRow) -> None:
+    """Raise ``NOT_A_VALUE_TAG`` unless ``tag`` carries a value method."""
+    if not tag.is_value_tag:
+        raise SkillError(
+            "NOT_A_VALUE_TAG",
+            f"Tag {tag.name!r} is a boolean tag (no value_type/pattern); "
+            "create it with --value-type/--pattern to extract values.",
+        )
+
+
+def upsert_value(
+    conn, document_id: int, tag_id: int, value: str, chunk_id: int | None,
+) -> None:
+    """Write a document's value for a tag, anchored to ``chunk_id``.
+
+    One value per ``(tag, document)`` by the table's PK: an existing row is
+    overwritten (ON CONFLICT), so a re-extraction replaces the prior value and
+    its anchor rather than erroring or duplicating.
+    """
+    conn.cursor().execute(
+        "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (document_id, tag_id) DO UPDATE SET "
+        "value = excluded.value, chunk_id = excluded.chunk_id",
+        (document_id, tag_id, value, chunk_id),
     )
