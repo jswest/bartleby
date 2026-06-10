@@ -2313,7 +2313,7 @@ def test_report_failures_silent_when_no_failures(isolated_project, monkeypatch):
 
     conn = open_db("test_proj")
     try:
-        scribe._report_failures(Writer(conn))
+        scribe._report_failures(Writer(conn).failures())
     finally:
         conn.close()
     assert warnings == []
@@ -2340,7 +2340,7 @@ def test_report_failures_warns_with_caps_and_display_limit(
         for i in range(11):
             writer.record_failure(f"retry{i}", f"retry{i}.pdf", "summary", "later")
 
-        scribe._report_failures(writer)
+        scribe._report_failures(writer.failures())
     finally:
         conn.close()
 
@@ -2582,7 +2582,10 @@ def test_scribe_records_then_clears_a_parse_failure(
     pdf = _text_pdf(tmp_path / "doc.pdf", text="Durable body text " * 12)
 
     # Run 1: the parse fails. Recorded as a parse failure; nothing persisted.
-    scribe.main(project="test_proj", files=str(pdf))
+    # The unresolved unit makes the run exit non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == 1
     conn = open_db("test_proj")
     try:
@@ -2635,8 +2638,11 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
     pdf = _text_pdf(tmp_path / "doc.pdf", text="Body text " * 12)
 
     # Each run makes exactly one more parse attempt until the cap is reached.
+    # The parse never lands, so every run exits non-zero on the unresolved unit (#311).
     for _ in range(MAX_INGEST_ATTEMPTS):
-        scribe.main(project="test_proj", files=str(pdf))
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
     assert parses["n"] == MAX_INGEST_ATTEMPTS
 
     conn = open_db("test_proj")
@@ -2651,8 +2657,11 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
     finally:
         conn.close()
 
-    # A further run is a no-op against the converter — the unit is capped.
-    scribe.main(project="test_proj", files=str(pdf))
+    # A further run is a no-op against the converter — the unit is capped. Still
+    # unresolved, so it keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == MAX_INGEST_ATTEMPTS                # NOT re-parsed
     conn = open_db("test_proj")
     try:
