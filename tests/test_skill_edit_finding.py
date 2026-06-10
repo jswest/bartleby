@@ -9,7 +9,11 @@ import pytest
 from bartleby.skill_scripts import edit_finding, save_finding
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -63,16 +67,26 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
     finding_id = saved["finding_id"]
     a, b = saved["_chunks"]
 
-    # Fetch a third chunk to verify swapping citations works.
+    # Fetch a third chunk to verify swapping citations works, and capture the
+    # finding's current body-chunk ids before the edit replaces them.
     conn = open_db(seeded_project["project"])
     try:
-        c = conn.cursor().execute(
+        cur = conn.cursor()
+        c = cur.execute(
             "SELECT chunk_id FROM chunks WHERE source_kind='document' "
             "AND source_id = ? AND chunk_index = 2",
             (seeded_project["doc_a"],),
         ).fetchone()[0]
+        old_finding_chunk_ids = {
+            row[0] for row in cur.execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ?",
+                (finding_id,),
+            )
+        }
     finally:
         conn.close()
+    assert old_finding_chunk_ids  # sanity: the finding had body chunks
 
     new_body = f"# Fixed\n\nOnly claim now[^{c}]."
     new_body_file = tmp_path / "edited.md"
@@ -119,7 +133,6 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
             )
         ]
         assert finding_chunk_texts == [new_body]
-        # The chunks_fts mirror is in sync with the new body too.
         finding_chunk_ids = [
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
@@ -127,11 +140,24 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
                 (finding_id,),
             )
         ]
-        for cid in finding_chunk_ids:
-            fts_text = cur.execute(
-                "SELECT text FROM chunks_fts WHERE rowid = ?", (cid,)
-            ).fetchone()
-            assert fts_text == (new_body,)
+        # The chunks_fts mirror is in sync with the new body too; that is
+        # asserted by the triple-table sync guard below (a per-rowid read of
+        # the external-content chunks_fts goes THROUGH chunks and is vacuous).
+        # The chunks_vec mirror tracks the rebuild: the new body chunks are
+        # present in vec, and any old chunk id NOT reused by the new body is
+        # gone. (SQLite reuses chunk_id values, so disjointness can't be
+        # assumed — only the ids that fell out of the finding must be absent.)
+        new_finding_chunk_ids = set(finding_chunk_ids)
+        for cid in new_finding_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 1
+        for cid in old_finding_chunk_ids - new_finding_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 0
+
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 
@@ -270,6 +296,57 @@ def test_edit_finding_rejects_unknown_chunk_marker(
     assert out["unknown_chunk_ids"] == [999999]
 
 
+def test_edit_finding_rejects_citation_to_own_chunk(
+    seeded_project, tmp_path, capsys
+):
+    """A replacement body citing the finding's *own* pre-edit body chunk is
+    refused upfront with CITES_OWN_CHUNKS naming the offending id, instead of
+    crashing with a bare INTERNAL_ERROR (the chunk would be deleted before its
+    citation row is replaced). The finding is left untouched."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+    a, _ = saved["_chunks"]
+
+    conn = open_db(seeded_project["project"])
+    try:
+        own_chunk = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (finding_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    new_body_file = tmp_path / "self-cite.md"
+    new_body_file.write_text(
+        f"# Reworked\n\nValid doc cite[^{a}] plus my own chunk[^{own_chunk}].",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding", str(finding_id),
+            "--body-file", str(new_body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CITES_OWN_CHUNKS"
+    assert out["offending_chunk_ids"] == [own_chunk]
+
+    # The edit aborted before any write: the finding's title and body survive.
+    conn = open_db(seeded_project["project"])
+    try:
+        title, body = conn.cursor().execute(
+            "SELECT title, body FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        assert title == "Original title"
+        assert body == saved["body"]
+    finally:
+        conn.close()
+
+
 def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys):
     """A memory-off session cannot edit (and thereby read back) a finding
     authored by another session — the response echoes the body, so an ungated
@@ -332,6 +409,96 @@ def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
             (finding_id,),
         ).fetchone()[0]
         assert title == "Self-renamed"
+    finally:
+        conn.close()
+
+
+def test_edit_finding_failure_mid_write_leaves_finding_intact(
+    seeded_project, tmp_path, capsys, monkeypatch
+):
+    """A failure during the body re-chunk (after the findings UPDATE) rolls back
+    the whole edit: the prior title, body, chunks, and citations all survive
+    intact (issue #340). Without the transaction wrap, the UPDATE and the
+    ``delete_chunks_for`` inside ``write_finding_chunks`` would have committed
+    independently, leaving the new body saved with zero chunks and stale
+    citations. The failure is injected at ``chunks._pack_embedding`` — during
+    the chunk insert, after the UPDATE — so it's a true mid-write rollback."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+    a, b = saved["_chunks"]
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        before_title, before_body = cur.execute(
+            "SELECT title, body FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        before_chunk_texts = [
+            r[0] for r in cur.execute(
+                "SELECT text FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ? ORDER BY chunk_index",
+                (finding_id,),
+            )
+        ]
+        before_citations = sorted(
+            r[0] for r in cur.execute(
+                "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
+                (finding_id,),
+            )
+        )
+    finally:
+        conn.close()
+    assert before_chunk_texts  # sanity: the finding had body chunks
+
+    def _boom(embedding):
+        raise RuntimeError("injected chunk-write failure")
+
+    monkeypatch.setattr("bartleby.db.chunks._pack_embedding", _boom)
+
+    # Edit the body (and title) — the rebuild must fail and roll everything back.
+    new_body_file = tmp_path / "doomed.md"
+    new_body_file.write_text(f"# Doomed\n\nNew claim[^{a}].", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding", str(finding_id),
+            "--title", "Doomed title",
+            "--body-file", str(new_body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Title and body unchanged — the UPDATE rolled back with the failed
+        # chunk write.
+        title, body = cur.execute(
+            "SELECT title, body FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        assert title == before_title
+        assert body == before_body
+        # The original body chunks survive, byte-for-byte.
+        chunk_texts = [
+            r[0] for r in cur.execute(
+                "SELECT text FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ? ORDER BY chunk_index",
+                (finding_id,),
+            )
+        ]
+        assert chunk_texts == before_chunk_texts
+        # And the original citations survive.
+        citations = sorted(
+            r[0] for r in cur.execute(
+                "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
+                (finding_id,),
+            )
+        )
+        assert citations == before_citations
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 

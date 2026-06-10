@@ -20,6 +20,7 @@ from bartleby.skill_scripts import (
     tag as tag_script,
     unassign_tag,
 )
+from bartleby import skill_runner
 from bartleby.skill_runner import SkillError
 from bartleby.skill_scripts import _tags as tags_helpers
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
@@ -232,6 +233,9 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
     assert out["status"] == "merged"
     assert out["from"]["name"] == "a"
     assert out["into"]["name"] == "b"
+    # Partial overlap: doc_a is new on b, doc_b already on b.
+    assert out["inserted"] == 1
+    assert out["already_present"] == 1
 
     conn = open_db(seeded_project["project"])
     try:
@@ -252,6 +256,218 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
         ])
     finally:
         conn.close()
+
+
+def test_merge_tags_disjoint_reports_all_inserted(seeded_project, capsys):
+    """No overlap: every source assignment is newly inserted onto the dest."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+        a_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('b', 'd2')")
+        # a tags doc_a and doc_b; b tags nothing → no collision on merge.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?), (?, ?)",
+            (seeded_project["doc_a"], a_id, seeded_project["doc_b"], a_id),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"], "--from", "a", "--into", "b",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["inserted"] == 2
+    assert out["already_present"] == 0
+
+
+def test_merge_tags_full_overlap_reports_none_inserted(seeded_project, capsys):
+    """Full overlap: dest already carries every source doc → nothing inserted."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+        a_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('b', 'd2')")
+        b_id = conn.last_insert_rowid()
+        # Both tags cover doc_a and doc_b — a's assignments are all duplicates.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) "
+            "VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
+            (seeded_project["doc_a"], a_id, seeded_project["doc_b"], a_id,
+             seeded_project["doc_a"], b_id, seeded_project["doc_b"], b_id),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"], "--from", "a", "--into", "b",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["inserted"] == 0
+    assert out["already_present"] == 2
+
+
+def _fail_on_sql(monkeypatch, needle: str) -> None:
+    """Make every connection the runner opens raise on the first SQL statement
+    whose text contains ``needle`` (issue #340 atomicity injection).
+
+    Installs an apsw exec-trace on the connection ``skill_runner`` opens, so the
+    failure fires *inside* ``work()`` — under the runner's transaction wrap —
+    rather than before it. A raising exec-trace aborts that one statement and
+    propagates, exercising rollback of whatever the same ``work()`` already
+    wrote."""
+    real_open_db = skill_runner.open_db
+
+    def _patched(project):
+        conn = real_open_db(project)
+
+        def _trace(cursor, sql, bindings):
+            if needle in sql:
+                raise RuntimeError(f"injected failure on: {needle}")
+            return True
+
+        conn.set_exec_trace(_trace)
+        return conn
+
+    monkeypatch.setattr(skill_runner, "open_db", _patched)
+
+
+def test_merge_tags_failure_mid_write_leaves_both_tags_untouched(
+    seeded_project, capsys, monkeypatch
+):
+    """A failure between copying assignments and deleting the source tag rolls
+    the whole merge back: no assignments copied onto the destination, and the
+    source tag (with its assignments) survives (issue #340). Without the
+    transaction wrap the copy would commit and the source tag would linger with
+    its assignments already duplicated onto the destination."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+        a_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('b', 'd2')")
+        b_id = conn.last_insert_rowid()
+        # 'a' tags doc_a + doc_b; 'b' tags nothing. A clean merge would copy two.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?), (?, ?)",
+            (seeded_project["doc_a"], a_id, seeded_project["doc_b"], a_id),
+        )
+    finally:
+        conn.close()
+
+    # Fail the source-tag DELETE — the second write, after the copy INSERT.
+    _fail_on_sql(monkeypatch, "DELETE FROM tags")
+
+    with pytest.raises(SystemExit) as exc:
+        merge_tags.main([
+            "--project", seeded_project["project"], "--from", "a", "--into", "b",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Source tag survives with its two assignments — the copy rolled back.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM tags WHERE name = 'a'"
+        ).fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_tags WHERE tag_id = ?", (a_id,)
+        ).fetchone()[0] == 2
+        # Destination carries nothing — no assignments were copied.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_tags WHERE tag_id = ?", (b_id,)
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_assign_tag_failure_mid_batch_assigns_nothing(
+    seeded_project, capsys, monkeypatch
+):
+    """A failure partway through a multi-document assign rolls back the whole
+    batch — neither document ends up tagged (issue #340). The per-document loop
+    writes doc_a, then the injected failure fires on doc_b's insert; the runner
+    transaction unwinds doc_a too."""
+    tag_id = _seed_tag(seeded_project["project"])
+
+    calls = {"n": 0}
+    real_assign = tags_helpers.assign
+
+    def _assign(conn, document_id, tag_ids):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("injected failure on second document")
+        return real_assign(conn, document_id, tag_ids)
+
+    monkeypatch.setattr("bartleby.skill_scripts.assign_tag.assign", _assign)
+
+    with pytest.raises(SystemExit) as exc:
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--documents", f"{seeded_project['doc_a']},{seeded_project['doc_b']}",
+            "--tag", "bad_ocr",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+
+    # Neither document is tagged — the first write rolled back with the second.
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 0
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_b"], tag_id,
+    ) == 0
+
+
+def test_unassign_tag_failure_mid_batch_removes_nothing(
+    seeded_project, capsys, monkeypatch
+):
+    """A failure partway through a multi-document unassign rolls back the whole
+    batch — both assignments survive (issue #340)."""
+    tag_id = _seed_tag(seeded_project["project"])
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().executemany(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+            [(seeded_project["doc_a"], tag_id), (seeded_project["doc_b"], tag_id)],
+        )
+    finally:
+        conn.close()
+
+    calls = {"n": 0}
+    real_unassign = tags_helpers.unassign
+
+    def _unassign(conn, document_id, tag_id_):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("injected failure on second document")
+        return real_unassign(conn, document_id, tag_id_)
+
+    monkeypatch.setattr("bartleby.skill_scripts.unassign_tag.unassign", _unassign)
+
+    with pytest.raises(SystemExit) as exc:
+        unassign_tag.main([
+            "--project", seeded_project["project"],
+            "--documents", f"{seeded_project['doc_a']},{seeded_project['doc_b']}",
+            "--tag", "bad_ocr",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+
+    # Both assignments survive — the first delete rolled back with the second.
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_a"], tag_id,
+    ) == 1
+    assert _assignment_count(
+        seeded_project["project"], seeded_project["doc_b"], tag_id,
+    ) == 1
 
 
 # ---------- tag (classification) ----------

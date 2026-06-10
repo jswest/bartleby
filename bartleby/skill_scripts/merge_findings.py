@@ -51,6 +51,7 @@ from bartleby.skill_scripts._common import (
     comma_int_list,
     load_finding_body,
     rebuild_finding_chunks,
+    reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
@@ -108,6 +109,15 @@ def work(*, conn, args, session_id) -> dict:
 
     body, citations = load_finding_body(conn, args.body_file)
 
+    # The merge deletes-and-rebuilds the body chunks of the target *and* the
+    # sources. A citation pointing at any of those chunks would either be
+    # cascade-deleted into a dangling [^N] (sources) or hit an FK violation
+    # surfacing as a bare INTERNAL_ERROR (target rebuilt before its citations
+    # are replaced). Reject upfront, naming the offending chunk ids.
+    reject_citations_to_involved_findings(
+        conn, citations, ids, code="CITES_MERGED_CHUNKS", action="merge",
+    )
+
     owning_session_id = owners[target]
     current_title, current_description = cur.execute(
         "SELECT title, description FROM findings WHERE finding_id = ?",
@@ -121,20 +131,19 @@ def work(*, conn, args, session_id) -> dict:
         code="EMPTY_DESCRIPTION", label="description",
     )
 
-    with conn:
-        cur.execute(
-            "UPDATE findings SET title = ?, description = ?, body = ? "
-            "WHERE finding_id = ?",
-            (new_title, new_description, body, target),
-        )
-        chunk_ids = rebuild_finding_chunks(conn, target, body)
-        replace_finding_citations(conn, target, citations)
-        for src in sources:
-            delete_chunks_for(conn, "finding", src)
-        src_ph = ",".join("?" * len(sources))
-        cur.execute(
-            f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
-        )
+    cur.execute(
+        "UPDATE findings SET title = ?, description = ?, body = ? "
+        "WHERE finding_id = ?",
+        (new_title, new_description, body, target),
+    )
+    chunk_ids = rebuild_finding_chunks(conn, target, body)
+    replace_finding_citations(conn, target, citations)
+    for src in sources:
+        delete_chunks_for(conn, "finding", src)
+    src_ph = ",".join("?" * len(sources))
+    cur.execute(
+        f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
+    )
 
     return {
         "finding_id": target,
@@ -148,7 +157,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="merge_findings", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="merge_findings", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":

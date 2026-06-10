@@ -11,7 +11,11 @@ from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
@@ -59,6 +63,20 @@ def _doc_chunk_ids(project, doc_id) -> list[int]:
         conn.close()
 
 
+def _finding_chunk_ids(project, finding_id) -> list[int]:
+    conn = open_db(project)
+    try:
+        return [
+            r[0] for r in conn.cursor().execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ? ORDER BY chunk_index",
+                (finding_id,),
+            )
+        ]
+    finally:
+        conn.close()
+
+
 def _save(project, tmp_path, capsys, *, name, title, cite) -> int:
     body_file = tmp_path / f"{name}.md"
     body_file.write_text(f"# {title}\n\nClaim[^{cite}].", encoding="utf-8")
@@ -80,6 +98,11 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
     target = _save(project, tmp_path, capsys, name="t", title="Keep me", cite=c0)
     src1 = _save(project, tmp_path, capsys, name="s1", title="Dup one", cite=c1)
     src2 = _save(project, tmp_path, capsys, name="s2", title="Dup two", cite=c2)
+
+    # Capture the source findings' body-chunk ids before the merge consumes
+    # them, so we can assert they leave all three chunk tables.
+    src_chunk_ids = _finding_chunk_ids(project, src1) + _finding_chunk_ids(project, src2)
+    assert src_chunk_ids  # sanity: the sources had body chunks
 
     merged_body = f"# Consolidated\n\nAll together[^{c0}][^{c1}][^{c2}]."
     merged_file = tmp_path / "merged.md"
@@ -133,6 +156,32 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
                 "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
                 (src,),
             ).fetchone()[0] == 0
+
+        # The source body chunks left BOTH mirrors, and the target's NEW body
+        # chunks are present in both. The merged body re-chunks the target, so
+        # its chunk ids are whatever the finding now owns.
+        target_chunk_ids = [
+            r[0] for r in cur.execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ?", (target,),
+            )
+        ]
+        assert target_chunk_ids  # sanity: the merged target has body chunks
+        for cid in src_chunk_ids:
+            if cid in target_chunk_ids:
+                continue  # chunk_id reused by the rebuilt target body
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 0
+        for cid in target_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 1
+
+        # The FTS leg is covered by the triple-table sync guard below; a
+        # per-rowid COUNT over the external-content chunks_fts reads THROUGH
+        # chunks and is vacuous.
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 
@@ -229,6 +278,54 @@ def test_merge_rejects_body_without_citations(seeded_project, tmp_path, capsys):
     assert out["code"] == "NO_INLINE_CITATIONS"
 
     # The merge aborted before touching the DB: both findings still exist.
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
+            (target, src),
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("cite_role", ["source", "target"])
+def test_merge_rejects_citation_to_involved_finding_chunk(
+    seeded_project, tmp_path, capsys, cite_role
+):
+    """A merged body that cites a finding-kind chunk owned by a finding involved
+    in the merge — a source (would cascade-delete into a dangling [^N]) or the
+    target (would FK-violate into a bare INTERNAL_ERROR) — is refused upfront
+    with CITES_MERGED_CHUNKS naming the offending chunk id; nothing is deleted."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    c0, c1 = chunks[0], chunks[1]
+
+    target = _save(project, tmp_path, capsys, name="t", title="Keep", cite=c0)
+    src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
+
+    # Cite a body chunk owned by whichever involved finding we're exercising.
+    involved = target if cite_role == "target" else src
+    bad_chunk = _finding_chunk_ids(project, involved)[0]
+
+    merged_file = tmp_path / "merged.md"
+    merged_file.write_text(
+        f"# C\n\nDoc cite[^{c0}] plus a finding chunk[^{bad_chunk}].",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CITES_MERGED_CHUNKS"
+    assert out["offending_chunk_ids"] == [bad_chunk]
+
+    # The merge aborted before any deletion: both findings still exist.
     conn = open_db(project)
     try:
         assert conn.cursor().execute(

@@ -272,8 +272,10 @@ def test_search_with_summaries_source_kind(seeded_project, capsys):
             (seeded_project["doc_a"],),
         ).fetchone()[0]
         emb = [0.1 * i for i in range(EMBEDDING_DIM)]
+        # The seeded summary already owns chunk_index 0 and 1, so append at 2
+        # to avoid the (source_kind, source_id, chunk_index) UNIQUE collision.
         insert_summary_chunks(conn, summary_id, [
-            ChunkInput(text="this is a summary-keyword chunk", embedding=emb, chunk_index=0),
+            ChunkInput(text="this is a summary-keyword chunk", embedding=emb, chunk_index=2),
         ])
     finally:
         conn.close()

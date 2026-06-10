@@ -5,12 +5,19 @@ The missing curation primitive: ``save_finding`` / ``edit_finding`` only ever
 add or revise, so stale duplicates (zero-citation drafts, superseded
 iterations) accumulate with no way out. This removes one finding outright.
 
-Deletion touches only the finding's own rows — its body chunks (``source_kind
-= 'finding'``, cleared from ``chunks`` / ``chunks_fts`` / ``chunks_vec`` via
-``delete_chunks_for``) and its ``finding_citations`` (which cascade when the
-``findings`` row is deleted). The cited *document* chunks are untouched:
-findings are derivative hints, never evidence, so a deletion has no
-referential fallout for the corpus.
+Deletion touches the finding's own rows — its body chunks (``source_kind =
+'finding'``, cleared from ``chunks`` / ``chunks_fts`` / ``chunks_vec`` via
+``delete_chunks_for``) and its outgoing ``finding_citations`` (which cascade
+when the ``findings`` row is deleted). The cited *document* chunks are
+untouched: findings are derivative hints, never evidence.
+
+There *is* referential fallout in one case: a finding's body chunks are
+themselves citable, so another finding may have cited *this* one. When this
+finding's chunks are deleted, ``finding_citations.chunk_id ... ON DELETE
+CASCADE`` strips those incoming citation rows too — leaving the other
+finding's body with a now-unresolved ``[^N]`` marker. That dangling marker is
+surfaced at the read seam (``read_finding``'s ``dangling_citations`` and the
+web finding view), not counted here.
 
 Output:
     {
@@ -18,7 +25,9 @@ Output:
       "finding_id": int,
       "title": str,
       "removed_chunks": int,        # finding body chunks removed
-      "removed_citations": int      # finding_citations rows removed
+      # this finding's OWN outgoing finding_citations rows removed — NOT the
+      # incoming citations the cascade severs in other findings.
+      "removed_citations": int
     }
 
 ``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
@@ -67,11 +76,10 @@ def work(*, conn, args, session_id) -> dict:
         (args.finding_id,),
     ).fetchone()[0]
 
-    with conn:
-        removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
-        cur.execute(
-            "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
-        )
+    removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
+    cur.execute(
+        "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
+    )
 
     return {
         "status": "deleted",
@@ -83,7 +91,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="delete_finding", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="delete_finding", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":

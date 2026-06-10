@@ -9,7 +9,11 @@ import pytest
 from bartleby.skill_scripts import save_finding
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -295,6 +299,72 @@ def test_finding_scripts_surface_session_provenance(seeded_project, tmp_path, ca
     row = next(f for f in list_out["findings"] if f["finding_id"] == finding_id)
     assert row["model"] == "qwen3.6:35b-mlx"
     assert row["harness"] == "ollama-cli"
+
+
+def test_save_finding_failure_mid_write_leaves_no_trace(
+    seeded_project, tmp_path, capsys, monkeypatch
+):
+    """A failure during chunk insertion (after the findings row is inserted)
+    rolls back the whole call: no findings row, no finding chunks in any of the
+    three chunk tables, no citation rows (issue #340). The runner seam wraps
+    ``work()`` in one transaction, so the earlier INSERT INTO findings unwinds
+    with the failed chunk write.
+
+    The failure is injected at ``chunks._pack_embedding`` — i.e. *during* the
+    chunk insert, after the findings row already landed — so this is a genuine
+    mid-write rollback, not a pre-write validation bounce."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cited_id = cur.execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+        findings_before = cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+        finding_chunks_before = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='finding'"
+        ).fetchone()[0]
+        citations_before = cur.execute(
+            "SELECT COUNT(*) FROM finding_citations"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    def _boom(embedding):
+        raise RuntimeError("injected chunk-write failure")
+
+    monkeypatch.setattr("bartleby.db.chunks._pack_embedding", _boom)
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text(f"A claim[^{cited_id}].", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        save_finding.main([
+            "--project", seeded_project["project"],
+            "--title", "doomed",
+            "--description", "x",
+            "--body-file", str(body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Every affected table is exactly as before — no orphaned finding row,
+        # no chunks in any of the three chunk tables, no citations.
+        assert cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0] == \
+            findings_before
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='finding'"
+        ).fetchone()[0] == finding_chunks_before
+        assert cur.execute(
+            "SELECT COUNT(*) FROM finding_citations"
+        ).fetchone()[0] == citations_before
+        assert_chunk_tables_consistent(conn)
+    finally:
+        conn.close()
 
 
 def test_save_finding_missing_body_file(seeded_project, capsys):

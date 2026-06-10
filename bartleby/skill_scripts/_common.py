@@ -158,6 +158,48 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
         )
 
 
+def reject_citations_to_involved_findings(
+    conn, citations: list[int], finding_ids, *, code: str, action: str,
+) -> None:
+    """Reject ``[^N]`` markers citing finding-kind chunks the op will destroy.
+
+    Findings may legitimately cite *finding-kind* chunks, but the merge/edit
+    write paths delete-and-rebuild the body chunks of every finding *involved*
+    in the operation. If the new body cites one of those soon-to-die chunk ids,
+    two silent failures follow (both via ``finding_citations`` →
+    ``chunks(chunk_id) ON DELETE CASCADE``): a citation row inserted while the
+    chunk still exists gets cascade-deleted, leaving a dangling ``[^N]``; or the
+    chunk is deleted *before* the citation is replaced, surfacing as an opaque
+    ``INTERNAL_ERROR`` from the FK violation. One upfront ownership check on the
+    cited *chunk rows* (their ``source_kind='finding'`` + owning ``source_id``)
+    covers both — never by matching body text. Raises ``code`` (e.g.
+    ``CITES_MERGED_CHUNKS`` / ``CITES_OWN_CHUNKS``) naming the offending chunk
+    ids in ``offending_chunk_ids`` so the agent knows which markers to fix.
+    """
+    ids = list(finding_ids)
+    if not citations or not ids:
+        return
+    cite_ph = ",".join("?" * len(citations))
+    find_ph = ",".join("?" * len(ids))
+    offending = sorted(
+        row[0] for row in conn.cursor().execute(
+            f"SELECT chunk_id FROM chunks "
+            f"WHERE source_kind = 'finding' "
+            f"AND chunk_id IN ({cite_ph}) AND source_id IN ({find_ph})",
+            (*citations, *ids),
+        )
+    )
+    if not offending:
+        return
+    raise SkillError(
+        code,
+        f"Inline citations reference chunk_ids {offending}, which belong to "
+        f"finding(s) {sorted(ids)} this {action} is about to rewrite — those "
+        "chunks will not survive. Remove or repoint those [^N] markers.",
+        offending_chunk_ids=offending,
+    )
+
+
 def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
     """Read a finding body file and return ``(body, validated_citations)``.
 
@@ -206,19 +248,24 @@ def validated_replacement(
     return new_value
 
 
-def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
-    """Replace this finding's chunks with freshly chunked + embedded ones.
+def embed_body_chunks(body: str) -> list[ChunkInput]:
+    """Chunk + embed ``body`` into ``ChunkInput``s, no DB touch (issue #340).
 
-    Deletes any existing finding chunks, chunks the body, embeds each chunk,
-    inserts them via the typed helper, and returns the new chunk_ids in
-    insertion order. Callers also need to manage ``finding_citations``.
+    The EMBED phase of the finding/summary write path, split out from the WRITE
+    phase so callers can run it *before* opening any write — embedding doesn't
+    need the row's id. ``embed_texts`` is in-process sentence-transformers with a
+    ~5-10s lazy model load on first call in a fresh process; under the runner's
+    transaction wrap, doing it after the first write would hold the write lock
+    across that load (``busy_timeout`` is only 5000ms → ``BusyError`` under
+    concurrency). Hoisting it ahead of the first write keeps apsw's deferred
+    transaction from grabbing a lock until the millisecond SQL tail. Returns
+    ``[]`` for an empty body.
     """
-    delete_chunks_for(conn, "finding", finding_id)
     rows = chunk_markdown_string(body)
     if not rows:
         return []
     embeddings = embed_texts([r.text for r in rows])
-    chunk_inputs = [
+    return [
         ChunkInput(
             text=row.text,
             embedding=emb,
@@ -228,7 +275,37 @@ def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
         )
         for i, (row, emb) in enumerate(zip(rows, embeddings))
     ]
+
+
+def write_finding_chunks(
+    conn, finding_id: int, chunk_inputs: list[ChunkInput]
+) -> list[int]:
+    """Replace this finding's chunks with pre-embedded ones (WRITE phase).
+
+    Deletes any existing finding chunks and inserts ``chunk_inputs`` (built by
+    :func:`embed_body_chunks`) via the typed helper, returning the new chunk_ids
+    in insertion order. This is the only part that writes, so callers hoist
+    :func:`embed_body_chunks` above their first write and call this at the SQL
+    tail. Callers also need to manage ``finding_citations``.
+    """
+    delete_chunks_for(conn, "finding", finding_id)
+    if not chunk_inputs:
+        return []
     return insert_finding_chunks(conn, finding_id, chunk_inputs)
+
+
+def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
+    """Embed ``body`` then replace this finding's chunks (embed + write in one).
+
+    The original single-call helper, now a thin composition of
+    :func:`embed_body_chunks` and :func:`write_finding_chunks`. ``save_finding``
+    and ``edit_finding`` call the two phases separately so the embed runs *before*
+    their first write (issue #340 — keeping the model load out of the txn's
+    write-lock window). ``merge_findings`` still calls this combined form: it
+    already holds a write txn across embedding by its own design, so the hoist
+    buys it nothing and that script is owned elsewhere.
+    """
+    return write_finding_chunks(conn, finding_id, embed_body_chunks(body))
 
 
 def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> None:

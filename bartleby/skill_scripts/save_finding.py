@@ -37,11 +37,12 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    embed_body_chunks,
     load_finding_body,
-    rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
+    write_finding_chunks,
 )
 
 
@@ -64,6 +65,11 @@ def work(*, conn, args, session_id) -> dict:
 
     body, citations = load_finding_body(conn, args.body_file)
 
+    # Embed BEFORE the first write so the transaction's write lock doesn't span
+    # the lazy model load (issue #340 — apsw's txn is deferred, so no lock is
+    # held until the INSERT below).
+    chunk_inputs = embed_body_chunks(body)
+
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO findings (session_id, title, description, body) "
@@ -72,7 +78,7 @@ def work(*, conn, args, session_id) -> dict:
     )
     finding_id = conn.last_insert_rowid()
 
-    chunk_ids = rebuild_finding_chunks(conn, finding_id, body)
+    chunk_ids = write_finding_chunks(conn, finding_id, chunk_inputs)
     replace_finding_citations(conn, finding_id, citations)
 
     return {
@@ -86,7 +92,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="save_finding", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="save_finding", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,12 @@ and calls :func:`run`. The runner:
 - Prints either the worker's dict result, or
   ``{"error": ..., "code": ...}`` on failure, to stdout.
 - Exits 0 on success and 1 on failure.
+
+A script that mutates the DB passes ``mutates=True`` to :func:`run`; the runner
+then wraps the ``work`` call in a single ``with conn:`` transaction so the whole
+mutation commits or rolls back atomically. Read-only scripts (the default) open
+no transaction. The audit write always lands, transaction or not — including
+when a mutation rolled back.
 """
 
 from __future__ import annotations
@@ -73,6 +79,7 @@ def run(
     parse_args: Callable[[list[str] | None], argparse.Namespace],
     work: Callable[..., dict],
     argv: list[str] | None = None,
+    mutates: bool = False,
 ) -> None:
     # Skill scripts emit JSON to stdout; any third-party noise corrupts it.
     # The only HF model the skill path loads is the embedding model (semantic
@@ -119,7 +126,20 @@ def run(
             session_id = ensure_named_session(project, session_name)
         else:
             session_id = ensure_active_session(project)
-        result = work(conn=conn, args=args, session_id=session_id)
+        if mutates:
+            # One transaction at the seam: a mutating script's entire ``work``
+            # commits or rolls back atomically. apsw's ``with conn:`` is a
+            # deferred transaction (no write lock until the first write), and
+            # the ``with conn:`` blocks inside the chunk helpers nest under it
+            # as savepoints rather than committing independently — so a partial
+            # write (e.g. chunks deleted but the row delete then raises) leaves
+            # nothing behind. The audit ``log_call`` below stays OUTSIDE this
+            # block on purpose: a rolled-back mutation must still record that it
+            # was attempted and failed.
+            with conn:
+                result = work(conn=conn, args=args, session_id=session_id)
+        else:
+            result = work(conn=conn, args=args, session_id=session_id)
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
     except Exception as e:  # noqa: BLE001 — catch-all by design
