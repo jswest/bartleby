@@ -18,14 +18,16 @@ from tests._skill_fixtures import (  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
+    # save_summary embeds via _common.embed_body_chunks; patch the names where
+    # that helper looks them up.
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_summary.embed_texts",
+        "bartleby.skill_scripts._common.embed_texts",
         lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
     )
     # Force single-chunk output so chunk_count assertions stay stable.
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.skill_scripts.save_summary.chunk_markdown_string",
+        "bartleby.skill_scripts._common.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 

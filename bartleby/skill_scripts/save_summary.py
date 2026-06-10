@@ -12,15 +12,10 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.db.chunks import (
-    ChunkInput,
-    delete_chunks_for,
-    insert_summary_chunks,
-)
-from bartleby.ingest.chunk import chunk_markdown_string
-from bartleby.ingest.embed import embed_texts
+from bartleby.db.chunks import delete_chunks_for, insert_summary_chunks
 from bartleby.ingest.summarize import normalize_authored_date
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._common import embed_body_chunks
 
 
 _AUTHOR_MODEL = "agent"
@@ -70,20 +65,8 @@ def work(*, conn, args, session_id) -> dict:
     # transaction's write lock doesn't span the lazy model load (issue #340 —
     # apsw's txn is deferred, so no lock is held until the first DELETE/INSERT).
     # On a failed replace this also means the prior summary and its chunks are
-    # still untouched if embedding raises.
-    rows = chunk_markdown_string(args.text)
-    chunk_inputs = [
-        ChunkInput(
-            text=row.text,
-            embedding=emb,
-            chunk_index=i,
-            section_heading=row.section_heading,
-            content_type=row.content_type,
-        )
-        for i, (row, emb) in enumerate(
-            zip(rows, embed_texts([r.text for r in rows]))
-        )
-    ] if rows else []
+    # still untouched if embedding raises. Same chunk+embed as the finding path.
+    chunk_inputs = embed_body_chunks(args.text)
 
     if prior:
         delete_chunks_for(conn, "summary", prior[0])
