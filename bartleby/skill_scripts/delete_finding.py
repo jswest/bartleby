@@ -21,7 +21,11 @@ Output:
       "removed_citations": int      # finding_citations rows removed
     }
 
-``FINDING_NOT_FOUND`` when the id doesn't exist.
+``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
+can only delete findings *this* session authored; deleting a finding written by
+another session raises ``{"code": "MEMORY_OFF"}`` — the response echoes the
+deleted title (a content reveal) and the deletion mutates another session's
+work, both walled off to avoid contaminating an evaluation run.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import argparse
 
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._common import assert_findings_accessible
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -42,13 +47,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def work(*, conn, args, session_id) -> dict:
     cur = conn.cursor()
     row = cur.execute(
-        "SELECT title FROM findings WHERE finding_id = ?", (args.finding_id,),
+        "SELECT title FROM findings WHERE finding_id = ?",
+        (args.finding_id,),
     ).fetchone()
     if row is None:
         raise SkillError(
             "FINDING_NOT_FOUND", f"No finding with id {args.finding_id}.",
         )
-    title = row[0]
+    (title,) = row
+
+    # The response echoes the deleted title, and the deletion mutates the
+    # finding outright. A memory-off session may only delete findings it
+    # authored — mirroring read_finding's wall. Gate before any read-back or
+    # write.
+    assert_findings_accessible(conn, session_id, [args.finding_id], action="delete")
 
     n_citations = cur.execute(
         "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",

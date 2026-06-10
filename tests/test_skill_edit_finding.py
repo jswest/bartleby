@@ -270,6 +270,72 @@ def test_edit_finding_rejects_unknown_chunk_marker(
     assert out["unknown_chunk_ids"] == [999999]
 
 
+def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys):
+    """A memory-off session cannot edit (and thereby read back) a finding
+    authored by another session — the response echoes the body, so an ungated
+    --title-only edit would be a read-by-write bypass of the memory wall."""
+    from bartleby.session import start_session
+
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+
+    # The seed finding belongs to the (memory-on) default session; open a
+    # fresh memory-off session as the would-be attacker.
+    start_session(seeded_project["project"], memory_enabled=False)
+
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding", str(finding_id),
+            "--title", "Hijacked title",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MEMORY_OFF"
+    # No body or citation content leaks back through the error.
+    assert "body" not in out
+    assert "citations" not in out
+
+    # And the foreign finding was not mutated.
+    conn = open_db(seeded_project["project"])
+    try:
+        title = conn.cursor().execute(
+            "SELECT title FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()[0]
+        assert title == "Original title"
+    finally:
+        conn.close()
+
+
+def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
+    """A memory-off session can still edit findings it authored itself."""
+    from bartleby.session import start_session
+
+    start_session(seeded_project["project"], memory_enabled=False)
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+
+    edit_finding.main([
+        "--project", seeded_project["project"],
+        "--finding", str(finding_id),
+        "--title", "Self-renamed",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["finding_id"] == finding_id
+    assert out["body"] == saved["body"]  # own body still echoes back
+
+    conn = open_db(seeded_project["project"])
+    try:
+        title = conn.cursor().execute(
+            "SELECT title FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()[0]
+        assert title == "Self-renamed"
+    finally:
+        conn.close()
+
+
 def test_edit_finding_rejects_empty_title(seeded_project, tmp_path, capsys):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     with pytest.raises(SystemExit) as exc:

@@ -19,6 +19,14 @@ Three modes (mutually exclusive):
       derived from the target chunk — no need to pass --document. Works
       for any source kind, though image chunks have no neighbors.
 
+In a memory-off session the finding wall (see ``read_finding``) extends here:
+finding-kind chunks authored by *another* session are walled off so an
+evaluation run can't read prior conclusions by chunk_id. ``--chunks`` drops
+such ids into ``missing`` (no text or source_name is returned); an
+``--around-chunk`` whose target is a foreign finding chunk raises
+``{"code": "MEMORY_OFF"}``. A session's own findings and all
+document/summary/image chunks are unaffected.
+
 All modes accept ``--preview N`` to truncate each chunk's ``text`` to the
 first ``N`` characters (followed by ``…`` when truncation occurred). Useful
 for structural scans when you don't need full prose. Omit ``--preview`` to
@@ -84,8 +92,8 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, chunk_locations, comma_int_list, nonneg_int, positive_int,
-    source_names,
+    apply_preview, assert_findings_accessible, chunk_locations, comma_int_list,
+    memory_enabled, nonneg_int, owned_finding_ids, positive_int, source_names,
 )
 
 
@@ -138,7 +146,9 @@ def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
     ]
 
 
-def _read_by_chunk_ids(conn, chunk_ids: list[int], preview: int | None) -> dict:
+def _read_by_chunk_ids(
+    conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int
+) -> dict:
     # De-dupe while preserving the agent's requested order.
     seen: set[int] = set()
     ordered: list[int] = []
@@ -157,6 +167,19 @@ def _read_by_chunk_ids(conn, chunk_ids: list[int], preview: int | None) -> dict:
             ordered,
         )
     }
+
+    # Memory wall: a memory-off session never sees another session's finding
+    # chunks. Drop them before any text/source_name is read, so they fall into
+    # ``missing`` as if they didn't exist (mirrors read_finding's MEMORY_OFF).
+    if not mem:
+        finding_sids = {r[2] for r in rows.values() if r[1] == "finding"}
+        owned = owned_finding_ids(conn, finding_sids, session_id)
+        rows = {
+            cid: r
+            for cid, r in rows.items()
+            if not (r[1] == "finding" and r[2] not in owned)
+        }
+
     names = source_names(conn, {(r[1], r[2]) for r in rows.values()})
     locations = chunk_locations(conn, list(rows.keys()))
 
@@ -228,7 +251,7 @@ def _read_by_document(conn, args) -> dict:
     }
 
 
-def _read_around_chunk(conn, args) -> dict:
+def _read_around_chunk(conn, args, *, session_id: int) -> dict:
     cur = conn.cursor()
     target = cur.execute(
         "SELECT chunk_id, source_kind, source_id, chunk_index "
@@ -241,6 +264,12 @@ def _read_around_chunk(conn, args) -> dict:
             f"No chunk with id {args.around_chunk}.",
         )
     target_id, sk, sid, target_idx = target
+
+    # Memory wall: refuse a window centred on another session's finding chunk.
+    # The window never crosses (source_kind, source_id), so gating the target
+    # also keeps foreign finding chunks out of the neighbourhood.
+    if sk == "finding":
+        assert_findings_accessible(conn, session_id, [sid], action="read")
 
     rows = list(cur.execute(
         "SELECT chunk_id, chunk_index, section_heading, page_number, "
@@ -269,10 +298,13 @@ def _read_around_chunk(conn, args) -> dict:
 
 
 def work(*, conn, args, session_id) -> dict:
+    mem = memory_enabled(conn, session_id)
     if args.chunk_ids is not None:
-        return _read_by_chunk_ids(conn, args.chunk_ids, args.preview)
+        return _read_by_chunk_ids(
+            conn, args.chunk_ids, args.preview, mem=mem, session_id=session_id,
+        )
     if args.around_chunk is not None:
-        return _read_around_chunk(conn, args)
+        return _read_around_chunk(conn, args, session_id=session_id)
     return _read_by_document(conn, args)
 
 
