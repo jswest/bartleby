@@ -22,6 +22,60 @@ def _emb(seed: float = 0.0) -> list[float]:
     return [seed + i * 0.001 for i in range(EMBEDDING_DIM)]
 
 
+def _strip_db_to_v4(db_path) -> None:
+    """Undo every additive step since v4 on the DB at ``db_path``, stamping it
+    back to schema v4 so the upgrade chain can be re-walked end-to-end.
+
+    Used by both upgrade-chain tests. Opens a raw connection (FK enforcement
+    OFF, so dropping FK-referenced tables/columns is legal) and reverses the
+    chain newest-first.
+    """
+    import apsw
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        # v9 value-bearing-tags (#114) + anchor-splitting (#254) columns: strip
+        # them first so the re-walked v8→v9 step can re-ALTER them without a
+        # `duplicate column name` (flagged by #355).
+        cur.execute("ALTER TABLE tags DROP COLUMN value_type")
+        cur.execute("ALTER TABLE tags DROP COLUMN pattern")
+        cur.execute("ALTER TABLE document_tags DROP COLUMN value")
+        cur.execute("ALTER TABLE document_tags DROP COLUMN chunk_id")
+        # `documents` can't be reduced with DROP COLUMN here: schema.py annotates
+        # the #254 columns with a multi-line `--` comment block, and SQLite's
+        # DROP COLUMN re-parses the residual CREATE — once the annotated columns
+        # are gone the dangling comment yields `incomplete input`. FK enforcement
+        # is OFF on this raw connection and the table is empty, so rebuild it
+        # straight to its v4 shape (no ingest_run_id, no #254 columns) instead.
+        cur.execute("DROP TABLE documents")
+        cur.execute(
+            "CREATE TABLE documents ("
+            "  document_id INTEGER PRIMARY KEY, "
+            "  file_hash TEXT NOT NULL UNIQUE, "
+            "  file_name TEXT NOT NULL, "
+            "  file_path TEXT NOT NULL, "
+            "  page_count INTEGER, "
+            "  token_count INTEGER, "
+            "  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        # v8 provenance (drop the FK-bearing columns before the table).
+        for table in ("summaries", "chunks"):
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
+        cur.execute("DROP TABLE ingests")
+        cur.execute("DROP TABLE failed_ingests")
+        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
+        cur.execute("ALTER TABLE sessions DROP COLUMN model")
+        cur.execute("DROP INDEX idx_document_tags_tag")
+        cur.execute("DROP TABLE document_tags")
+        cur.execute("DROP TABLE tags")
+        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
+        cur.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+    finally:
+        conn.close()
+
+
 @pytest.fixture
 def projects_root(tmp_path, monkeypatch):
     """Point every PROJECTS_DIR reference at a fresh tmp dir + isolate config."""
@@ -182,44 +236,22 @@ def test_list_projects_marks_active(projects_root):
     assert by_name["beta"]["has_db"] and by_name["beta"]["is_active"]
 
 
-@pytest.mark.xfail(reason="held at 8 pending v0.9.0 assembly", strict=False)
 def test_upgrade_chain_walks_from_v4_through_current(projects_root):
-    """Upgrading a v4 DB walks v4→v5→v6→v7→v8, leaving all new shapes present.
+    """Upgrading a v4 DB walks v4→v5→v6→v7→v8→v9, leaving all new shapes present.
 
-    Held at 8: #114 adds value-bearing-tags columns to schema.py + a dormant
-    `_upgrade_v8_to_v9` step keyed at 8 that the loop never reaches while
-    SCHEMA_VERSION==8. The chain strips back to v4 and recreates `tags` /
-    `document_tags` via the v5→v6 step (which has no new columns), so the
-    upgraded-vs-fresh schema-equivalence gate cannot hold until the assembly
-    commit bumps to 9. xfail (non-strict) until then.
+    The v0.9.0 assembly bumped SCHEMA_VERSION to 9, activating the additive
+    `_upgrade_v8_to_v9` step (#114 value-bearing-tags + #254 anchor-splitting
+    columns). The chain strips a fresh DB back to v4 — including the eight v9
+    columns — then re-walks the whole chain and asserts the upgraded DB is
+    byte-identical in DDL to a freshly-created one.
     """
-    import apsw
-
     from bartleby.commands import project as project_cmd
     from bartleby.db.connection import project_db_path
 
     bartleby.project.create_project("alpha")
     # Simulate a v4 DB by undoing every additive step since.
     db_path = project_db_path("alpha")
-    conn = apsw.Connection(str(db_path))
-    try:
-        cur = conn.cursor()
-        # v8 provenance (drop the FK-bearing columns before the table).
-        for table in ("documents", "summaries", "chunks"):
-            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
-        cur.execute("DROP TABLE ingests")
-        cur.execute("DROP TABLE failed_ingests")
-        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
-        cur.execute("ALTER TABLE sessions DROP COLUMN model")
-        cur.execute("DROP INDEX idx_document_tags_tag")
-        cur.execute("DROP TABLE document_tags")
-        cur.execute("DROP TABLE tags")
-        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
-        cur.execute(
-            "UPDATE meta SET value = '4' WHERE key = 'schema_version'"
-        )
-    finally:
-        conn.close()
+    _strip_db_to_v4(db_path)
 
     project_cmd.upgrade(name="alpha")
 
@@ -359,25 +391,9 @@ def test_upgrade_resumes_after_mid_chain_crash(projects_root, monkeypatch):
     from bartleby.db.connection import project_db_path
 
     bartleby.project.create_project("alpha")
-    # Simulate a v4 DB by undoing every additive step since (mirrors the
-    # chain-walk test's teardown).
+    # Simulate a v4 DB by undoing every additive step since.
     db_path = project_db_path("alpha")
-    conn = apsw.Connection(str(db_path))
-    try:
-        cur = conn.cursor()
-        for table in ("documents", "summaries", "chunks"):
-            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
-        cur.execute("DROP TABLE ingests")
-        cur.execute("DROP TABLE failed_ingests")
-        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
-        cur.execute("ALTER TABLE sessions DROP COLUMN model")
-        cur.execute("DROP INDEX idx_document_tags_tag")
-        cur.execute("DROP TABLE document_tags")
-        cur.execute("DROP TABLE tags")
-        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
-        cur.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
-    finally:
-        conn.close()
+    _strip_db_to_v4(db_path)
 
     # Kill the chain at the v6→v7 step: v4→v5 and v5→v6 commit first, then this
     # raises. The DB must come to rest at v6 (the last completed step), with the

@@ -17,7 +17,7 @@ invariant and the rest of the project's load-bearing rules.
 # without those structures. That cohort is RE-INGEST-ONLY — it shares a version
 # number with released v8 but not its DDL, so no upgrade step can repair it in
 # place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 EMBEDDING_DIM = 768
 
