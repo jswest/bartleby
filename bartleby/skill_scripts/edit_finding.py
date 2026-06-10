@@ -40,13 +40,14 @@ import argparse
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
+    embed_body_chunks,
     finding_chunk_and_citation_ids,
     load_finding_body,
-    rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
     validated_replacement,
+    write_finding_chunks,
 )
 
 
@@ -96,6 +97,9 @@ def work(*, conn, args, session_id) -> dict:
 
     if args.body_file is not None:
         new_body, new_citations = load_finding_body(conn, args.body_file)
+        # Embed BEFORE the UPDATE (the first write) so the transaction's write
+        # lock doesn't span the lazy model load (issue #340).
+        chunk_inputs = embed_body_chunks(new_body)
     else:
         new_body, new_citations = current_body, None
 
@@ -106,7 +110,7 @@ def work(*, conn, args, session_id) -> dict:
     )
 
     if new_citations is not None:
-        chunk_ids = rebuild_finding_chunks(conn, args.finding_id, new_body)
+        chunk_ids = write_finding_chunks(conn, args.finding_id, chunk_inputs)
         replace_finding_citations(conn, args.finding_id, new_citations)
         citation_ids = new_citations
     else:
@@ -123,7 +127,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="edit_finding", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="edit_finding", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":
