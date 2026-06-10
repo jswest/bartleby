@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -127,10 +128,35 @@ def test_default_judge_comes_from_judges_yaml(root):
     assert root.judgement_path(REF, "doc-a", JUDGE).exists()
 
 
-def test_non_openai_judge_refused(root):
-    with pytest.raises(SystemExit, match="openai judges"):
+def test_unsupported_judge_provider_refused(root):
+    with pytest.raises(SystemExit, match="Unsupported judge provider"):
         judging.run(root, judge=ModelRef("ollama", "qwen3.6:35b"),
                     judge_client=FakeJudge())
+
+
+def test_run_dispatches_to_anthropic_cc(root, monkeypatch):
+    """An anthropic-cc judge tops up via the injected subprocess runner — same
+    idempotent bookkeeping, records tagged with the cc provider."""
+    monkeypatch.setattr("bartleby.benchmark.cc_judge.preflight", lambda: None)
+    _add_run(root, _summary(), 0)
+    seen = []
+
+    def fake_runner(argv, *, env):
+        seen.append((argv, env))
+        payload = {"faithfulness": 5, "coverage": 4, "conciseness": 5,
+                   "constraint_compliance": 5, "rationale": "ok"}
+        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+            {"subtype": "success", "is_error": False, "structured_output": payload}))
+
+    judge = ModelRef("anthropic-cc", "claude-opus-4-8")
+    judging.run(root, judge=judge, passes=2, judge_client=fake_runner)
+
+    records = read_records(root.judgement_path(REF, "doc-a", judge))
+    assert len(records) == 2
+    assert all(r["judge_provider"] == "anthropic-cc" for r in records)
+    assert records[0]["scores"]["mean"] == pytest.approx(4.75)
+    argv = seen[0][0]
+    assert "--model" in argv and "claude-opus-4-8" in argv and "--bare" not in argv
 
 
 def test_judge_is_blind_to_model_name(root):

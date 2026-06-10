@@ -238,17 +238,24 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
             failers.append((ref, valid_pct))
             continue
         tps = [r["tokens_per_second"] for r in ok if r.get("tokens_per_second")]
-        # Inference cost is doc-length-dependent, so a flat median across docs
-        # would just track the corpus mix; report the mean of per-doc medians.
-        per_doc_inf: dict[str, list[float]] = defaultdict(list)
+        # Wall seconds per output token: the load-corrected wall-clock divided
+        # by eval_count, so it's length-normalized (independent of how long the
+        # source docs happen to be) and — unlike Tok/s, which rides on Ollama's
+        # eval-based throughput and is never reported for cloud — measured for
+        # every provider, so cloud rows get a comparable speed number too. A
+        # flat median across docs would track the corpus mix, so take the mean
+        # of per-doc medians.
+        per_doc_spt: dict[str, list[float]] = defaultdict(list)
         for r in ok:
-            per_doc_inf[r["doc"]].append(_inference_seconds(r))
+            if r.get("eval_count"):
+                per_doc_spt[r["doc"]].append(_inference_seconds(r) / r["eval_count"])
         survivors.append({
             "ref": ref,
             "schema_pct": valid_pct,
             "tps": statistics.median(tps) if tps else None,
-            "inference": statistics.mean(
-                [statistics.median(v) for v in per_doc_inf.values()]),
+            "sec_per_tok": statistics.mean(
+                [statistics.median(v) for v in per_doc_spt.values()])
+            if per_doc_spt else None,
             "quality": quality.get(ref),
             "runs": len(ok),
         })
@@ -261,8 +268,8 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
     if since or until:
         window = " · windowed"
     columns = [("Model", "left"), ("Schema-valid %", "right"), ("Tok/s", "right"),
-               ("Inference (s)", "right"), ("Mean quality (/5)", "right"),
-               ("Runs", "right"), ("Frontier", "center")]
+               ("Wall s/tok", "right"), ("Mean quality (/5)", "right"),
+               ("Runs", "right"), ("Pareto optimal", "center")]
     rows = []
     for s in survivors:
         on_front = s["ref"] in front
@@ -271,7 +278,7 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
             (name, "bold" if on_front else None),
             (f"{s['schema_pct']:.0f}%", None),
             (f"{s['tps']:.1f}" if s["tps"] is not None else "—", None),
-            (f"{s['inference']:.1f}", None),
+            (f"{s['sec_per_tok']:.4f}" if s["sec_per_tok"] is not None else "—", None),
             (f"{s['quality']:.2f}" if s["quality"] is not None else "—", None),
             (str(s["runs"]), None),
             ("★", "bold cyan") if on_front else ("", None),
@@ -282,10 +289,14 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
              "Run `bartleby benchmark judge` to populate it.")
     note("Hard gate: a summarizer must return parseable DocumentSummary JSON every "
          "time; schema-failers are dropped below. ★ marks the speed/quality Pareto "
-         "frontier among judged local survivors. † cloud reference row: wall-clock "
-         "isn't comparable, never on the frontier. Inference (s) = mean of per-doc "
-         "medians; quality = mean over docs of run-weighted, pass-averaged judge "
-         "scores (a model missing a doc's judgments averages over fewer docs).")
+         "frontier among judged local survivors — those no other local model beats "
+         "on both axes. † cloud reference row: wall-clock isn't comparable, never on "
+         "the frontier. Wall s/tok = load-corrected wall-clock per output token "
+         "(mean of per-doc medians), length-normalized so it's the one speed number "
+         "measured for cloud rows too — though for † rows it still counts the "
+         "datacenter and network. quality = mean over docs of run-weighted, "
+         "pass-averaged judge scores (a model missing a doc's judgments averages "
+         "over fewer docs).")
     for warning in heterogeneity_warnings(runs):
         note(f"WARNING: {warning}")
 
@@ -328,14 +339,15 @@ def _write_csv(path: Path, survivors: list[dict], front: set[ModelRef],
     with path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["provider", "model", "schema_valid_pct",
-                         "tokens_per_second", "inference_seconds",
-                         "mean_quality", "runs", "frontier",
+                         "tokens_per_second", "wall_seconds_per_token",
+                         "mean_quality", "runs", "pareto_optimal",
                          *[f"quality_{d}" for d in docs]])
         for s in survivors:
             per_doc = [(cells.get((s["ref"], d)) or {}).get("score") for d in docs]
             writer.writerow([
                 s["ref"].provider, s["ref"].model, round(s["schema_pct"], 1),
-                s["tps"], round(s["inference"], 2),
+                s["tps"],
+                round(s["sec_per_tok"], 6) if s["sec_per_tok"] is not None else None,
                 s["quality"], s["runs"], s["ref"] in front,
                 *per_doc,
             ])

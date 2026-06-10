@@ -50,53 +50,84 @@ function getCitations(findingId) {
     ORDER BY fc.chunk_id
   `).all(findingId);
 
-  return rows.map(r => ({
+  const resolved = resolveSources(rows);
+  return rows.map((r, i) => ({
     chunk_id: r.chunk_id,
     source_kind: r.source_kind,
     text: r.text,
-    ...resolveSource(r.source_kind, r.source_id, r.page_number)
+    ...resolved[i]
   }));
 }
 
-function resolveSource(kind, sourceId, pageNumber) {
+// Batch-resolve cited chunks ({source_kind, source_id, page_number}) to
+// {document_id, file_name, page_number} — one IN(...) query per source_kind
+// rather than a row-at-a-time lookup, mirroring titleMeta/tagsByDocument.
+// Returns an array aligned 1:1 with `items`. A 'finding' (or unrecognized)
+// kind resolves to the null source — findings link to their own page; an
+// unknown kind also warns once per occurrence so Python-side drift gets caught.
+function resolveSources(items) {
   const { db } = getDb();
-  if (kind === 'document') {
-    const doc = db.prepare(
-      'SELECT document_id, file_name FROM documents WHERE document_id = ?'
-    ).get(sourceId);
-    return doc
-      ? { document_id: doc.document_id, file_name: doc.file_name, page_number: pageNumber }
-      : { document_id: null, file_name: null, page_number: pageNumber };
-  }
-  if (kind === 'summary') {
-    const row = db.prepare(`
-      SELECT d.document_id, d.file_name FROM summaries s
-      JOIN documents d USING (document_id) WHERE s.summary_id = ?
-    `).get(sourceId);
-    return row
-      ? { document_id: row.document_id, file_name: row.file_name, page_number: null }
-      : { document_id: null, file_name: null, page_number: null };
-  }
-  if (kind === 'image') {
-    const row = db.prepare(`
-      SELECT di.document_id, di.page_number, d.file_name
-      FROM document_images di
-      JOIN documents d ON d.document_id = di.document_id
-      WHERE di.image_id = ?
-      ORDER BY di.document_id, di.page_number
-      LIMIT 1
-    `).get(sourceId);
-    return row
-      ? { document_id: row.document_id, file_name: row.file_name, page_number: row.page_number }
-      : { document_id: null, file_name: null, page_number: null };
-  }
-  if (kind !== 'finding') {
-    // 'finding' citations are expected to resolve to no linkable source;
-    // anything else means the Python side grew a new source_kind we don't
-    // know about yet. Loud at dev time so the drift gets caught.
-    console.warn(`[bartleby/serve] Unknown chunk source_kind '${kind}' — citation will render unlinked.`);
-  }
-  return { document_id: null, file_name: null, page_number: null };
+
+  // Distinct non-null source_ids cited under `kind`, for its IN(...) query.
+  const idsOf = (kind) => [...new Set(
+    items.filter((it) => it.source_kind === kind && it.source_id != null)
+         .map((it) => it.source_id)
+  )];
+
+  // Run `buildSql(placeholders)` over `ids` and key the rows by `row.key`. For
+  // kinds with several rows per id (images), the first row wins — callers order
+  // the query so that's the intended pick.
+  const loadMap = (ids, buildSql) => {
+    const map = new Map();
+    if (ids.length === 0) return map;
+    const ph = ids.map(() => '?').join(',');
+    for (const row of db.prepare(buildSql(ph)).all(...ids)) {
+      if (!map.has(row.key)) map.set(row.key, row);
+    }
+    return map;
+  };
+
+  const docs = loadMap(idsOf('document'), (ph) =>
+    `SELECT document_id AS key, document_id, file_name
+     FROM documents WHERE document_id IN (${ph})`);
+  const summaries = loadMap(idsOf('summary'), (ph) =>
+    `SELECT s.summary_id AS key, d.document_id, d.file_name
+     FROM summaries s JOIN documents d USING (document_id)
+     WHERE s.summary_id IN (${ph})`);
+  // An image can appear on different pages in different documents — order so the
+  // lowest-doc, lowest-page row is first (loadMap keeps the first per image_id),
+  // matching the per-row ORDER BY ... LIMIT 1 this batches.
+  const images = loadMap(idsOf('image'), (ph) =>
+    `SELECT di.image_id AS key, di.document_id, di.page_number, d.file_name
+     FROM document_images di JOIN documents d ON d.document_id = di.document_id
+     WHERE di.image_id IN (${ph})
+     ORDER BY di.image_id, di.document_id, di.page_number`);
+
+  return items.map((it) => {
+    if (it.source_kind === 'document') {
+      const doc = docs.get(it.source_id);
+      return { document_id: doc?.document_id ?? null, file_name: doc?.file_name ?? null, page_number: it.page_number };
+    }
+    if (it.source_kind === 'summary') {
+      const row = summaries.get(it.source_id);
+      return { document_id: row?.document_id ?? null, file_name: row?.file_name ?? null, page_number: null };
+    }
+    if (it.source_kind === 'image') {
+      const row = images.get(it.source_id);
+      return row
+        ? { document_id: row.document_id, file_name: row.file_name, page_number: row.page_number }
+        : { document_id: null, file_name: null, page_number: null };
+    }
+    if (it.source_kind !== 'finding') {
+      console.warn(`[bartleby/serve] Unknown chunk source_kind '${it.source_kind}' — citation will render unlinked.`);
+    }
+    return { document_id: null, file_name: null, page_number: null };
+  });
+}
+
+// Single-item resolveSources, for callers with one source to resolve.
+function resolveSource(kind, sourceId, pageNumber) {
+  return resolveSources([{ source_kind: kind, source_id: sourceId, page_number: pageNumber }])[0];
 }
 
 // Batch-load `title, description` rows from `table`, keyed by `keyCol`. Used to
@@ -125,11 +156,11 @@ function documentHref(documentId, pageNumber) {
 // Enrich ranked `search` hits with a display title, description, and a single
 // destination href: the document detail page at the cited page for
 // document-backed hits, the finding page for findings. Keeps the result
-// component free of source_kind branching. (resolveSource already maps every
+// component free of source_kind branching. (resolveSources already maps every
 // kind → {document_id, file_name, page_number}; we layer title/description on top.)
 export function enrichHits(hits) {
   const { db } = getDb();
-  const resolved = hits.map((h) => resolveSource(h.source_kind, h.source_id, h.page_number));
+  const resolved = resolveSources(hits);
   const summaries = titleMeta(db, 'summaries', 'document_id', resolved.map((r) => r.document_id));
   const findings = titleMeta(db, 'findings', 'finding_id',
     hits.filter((h) => h.source_kind === 'finding').map((h) => h.source_id));

@@ -1,17 +1,18 @@
-<script>
-  import "../app.css";
-  import { page } from "$app/stores";
+<script context="module">
   import { marked } from "marked";
   import DOMPurify from "isomorphic-dompurify";
-  export let data;
 
-  // Every `{@html marked.parse(...)}` site (document summaries, finding bodies)
-  // flows through this singleton, so sanitize here once. Summaries are
-  // model-generated and finding bodies are agent-authored — both untrusted —
-  // and `marked` passes raw HTML through, so an embedded <script> would run.
-  // DOMPurify's defaults strip scripts/handlers/js: URLs while keeping the
-  // cite-chip <button> (data-chunk-id et al). Sanitize first, then add the
-  // link attrs to the clean output so target/rel don't depend on the sanitizer.
+  // Every `{@html marked.parse(...)}` site (summaries, finding bodies, markdown
+  // sources) flows through this one global parser. Summaries are model-generated
+  // and finding bodies agent-authored — both untrusted — and `marked` passes raw
+  // HTML through, so an embedded <script> would run. Sanitize first (DOMPurify
+  // strips scripts/handlers/js: URLs while keeping the cite-chip <button>), then
+  // add link attrs to the clean output so target/rel don't depend on the sanitizer.
+  //
+  // Module scope, not instance: `marked.use` registers globally and *chains*
+  // passthrough hooks rather than replacing them, so per-SSR-request registration
+  // re-ran the hook once per prior request in a long-lived `serve` — duplicating
+  // target/rel and burning CPU. The module body runs once per process.
   marked.use({
     hooks: {
       postprocess: (html) =>
@@ -21,6 +22,12 @@
         ),
     },
   });
+</script>
+
+<script>
+  import "../app.css";
+  import { page } from "$app/stores";
+  export let data;
 
   // A nav link is "active" if the current path matches exactly OR is a child
   // of the link's target (so /findings/15 lights up the Findings nav too).

@@ -142,3 +142,32 @@ def test_is_source_checkout_false_when_no_pyproject(monkeypatch, tmp_path):
     fake_web.mkdir(parents=True)
     monkeypatch.setattr(serve, "WEB_SRC", fake_web)
     assert serve._is_source_checkout() is False
+
+
+def test_override_project_exports_env_when_db_exists(monkeypatch, tmp_path):
+    # A real DB under the projects dir → BARTLEBY_PROJECT is exported and the
+    # persisted active project (config.yaml) is never read or written.
+    db = tmp_path / "projects" / "acme" / "bartleby.db"
+    db.parent.mkdir(parents=True)
+    db.write_text("")
+    monkeypatch.setattr(serve, "project_db_path", lambda name: db)
+    # setenv (not delenv) so monkeypatch tracks the var and teardown removes the
+    # value _override_project writes directly into os.environ — no leak.
+    monkeypatch.setenv("BARTLEBY_PROJECT", "")
+
+    serve._override_project("acme")
+
+    assert os.environ["BARTLEBY_PROJECT"] == "acme"
+
+
+def test_override_project_exits_when_db_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        serve, "project_db_path", lambda name: tmp_path / "nope" / "bartleby.db"
+    )
+    monkeypatch.delenv("BARTLEBY_PROJECT", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        serve._override_project("nope")
+
+    assert exc.value.code == 1
+    assert "BARTLEBY_PROJECT" not in os.environ

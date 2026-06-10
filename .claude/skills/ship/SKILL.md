@@ -32,6 +32,45 @@ a block as a signal you're on the wrong branch, not an error to route around.
 of `main`, for landing several sub-issues of a bundle (e.g. a release) before it
 reaches `main` as one unit. The token is the **omnibus issue number**, not a
 branch name. When present:
+- **The omnibus tracking — two complementary layers.** `/ship` keeps an omnibus
+  tracked two ways, both load-bearing and answering different questions:
+
+  1. **Native GitHub sub-issues** — each tracked issue is linked as a *sub-issue*
+     of the omnibus parent (GitHub's hierarchy / progress panel). `gh` has no
+     sub-issue subcommand, so use the REST API keyed by the child's numeric REST
+     **id** (the `.id` field, **not** its issue number), passed as a typed integer
+     (`-F`, never `-f` — a string `sub_issue_id` returns `Invalid request`):
+     ```
+     # list:   gh api repos/<owner>/<repo>/issues/<omnibus>/sub_issues
+     # add:    gh api --method POST   repos/<owner>/<repo>/issues/<omnibus>/sub_issues \
+     #           -F sub_issue_id=$(gh api repos/<owner>/<repo>/issues/<N> --jq .id)
+     # remove: gh api --method DELETE repos/<owner>/<repo>/issues/<omnibus>/sub_issue \
+     #           -F sub_issue_id=<id>
+     ```
+     **List first and add only what's missing** (idempotent). The link set is
+     **reconciled to the issues the omnibus body actually tracks at two moments**
+     — when the block is *seeded* (first ship) and at *promotion* — so an issue
+     deferred out of the bundle isn't linked and a stale link gets removed; a
+     per-sub-ship just *ensures its own* link (it doesn't prune). This panel tracks
+     issue **closure**; under `onto` a sub-issue stays open until the omnibus →
+     `main` promotion, so the panel reads 0-closed until then.
+  2. **The checklist block** — a comment-delimited block in the omnibus body that
+     tracks the finer-grained **branch-landing** status:
+     ```
+     <!-- omnibus-checklist:start -->
+     - [ ] #<N> — <short label>
+     <!-- omnibus-checklist:end -->
+     ```
+     One line per sub-issue: seeded `- [ ] #<N> — <short label>`, becoming
+     `- [x] #<N> — <short label> (#<sub-PR>)` on landing. The markers let `/ship`
+     find, parse, and edit it by anchor without disturbing the surrounding
+     hand-written prose — it is **not** a replacement for the narrative
+     `### Sub-issues` section, which stays.
+
+  The two are deliberately distinct: the panel answers "is the issue *closed*?",
+  the block answers "has the work *landed on the branch*?". A body that predates
+  the regime has neither; the steps below seed both (proposed, never silent) and
+  otherwise degrade gracefully — they never fabricate tracking.
 - **Resolve the branch.** Read the omnibus issue (`gh issue view <omnibus>`) and
   derive its branch from the title's leading version: a title `vX.Y.Z — …` yields
   `omnibus/vX.Y.Z` (bartleby omnibus issues are titled this way). If the title
@@ -43,7 +82,12 @@ branch name. When present:
   (`git branch <omnibus-branch> origin/main && git push -u origin
   <omnibus-branch>`) so the remote ref exists for the worktree base and later
   sub-ships. Report whichever happened — pushing a new long-lived branch is a
-  remote mutation, never create it silently.
+  remote mutation, never create it silently. On this first ship the omnibus
+  carries neither tracking layer yet: **propose seeding both** — the
+  `omnibus-checklist` markers with a `- [ ] #<N>` line per sub-issue the omnibus
+  body names, and a native sub-issue link for each (the `gh api` adds above) — and
+  show the proposed body diff plus the link set at the step-11 PAUSE with the PR
+  draft; never edit the body or link sub-issues silently.
 - **`base` becomes `<omnibus-branch>`** for every step below: sync, collision
   scan, worktree start-point, the pytest-skip checks (both paths), reconcile, and the PR base,
   diff-stat, and cleanup all retarget from `origin/main` to
@@ -54,17 +98,23 @@ branch name. When present:
   omnibus → main PR (which enumerates `Closes #<N>` for the bundle) merges. Do not
   put `Closes #<N>` on a sub-PR in this mode.
 - **Keep the omnibus issue's tracking current.** Promotion mode draws its `Closes
-  #<N>` manifest from the omnibus issue's hand-curated sub-issue checklist, which
-  drifts unless each sub-ship updates it. So when the sub-PR is opened (step 11),
-  edit the omnibus issue (`#<omnibus>`) to reflect this landing: tick this issue's
-  box `[ ]→[x]`, annotate it with the sub-PR number and target in the existing
-  style (`— … (#NNN)`), and flip any dependency/order marker the omnibus tracks.
-  **Edit only the one checklist line, by anchored match** — never free-form rewrite
-  the hand-curated body — and show the proposed issue diff at the step-11 PAUSE next
-  to the PR draft. If the omnibus issue has no checklist line referencing `#<N>`,
-  **report it and leave the body untouched** rather than invent tracking. (Ticking
-  on sub-PR-open is safe — promotion reconciles `Closes` against actually-merged
-  PRs.)
+  #<N>` manifest from the omnibus checklist block (above), which drifts unless each
+  sub-ship updates it. So when the sub-PR is opened (step 11), edit the omnibus
+  issue (`#<omnibus>`) to reflect this landing: inside the checklist block, match
+  the line for `#<N>`, tick its box `[ ]→[x]`, annotate it with the sub-PR
+  number in the existing style (`— … (#NNN)`), and flip any dependency/order
+  marker that line carries. Also **ensure `#<N>` is linked as a native sub-issue**
+  of the omnibus (list `sub_issues`; add if missing — idempotent) so the hierarchy
+  panel stays complete. **Edit only that one block line, by
+  anchored match** — never free-form rewrite the hand-curated body — and show
+  **both** the proposed block-line diff **and** the pending sub-issue link
+  (the API call is a side effect, not a body diff — surface it explicitly) at the
+  step-11 PAUSE next to the PR draft. If the omnibus body
+  has **no checklist block, or a block with no line referencing `#<N>`**, propose
+  the fix at the PAUSE (add the `#<N>` line, or seed the whole block as on first
+  ship); if the user declines, **report it and leave the body untouched** rather
+  than invent tracking. (Ticking on sub-PR-open is safe — promotion reconciles
+  `Closes` against actually-merged PRs.)
 - The guard hook still protects `main` only; the omnibus branch is not
   hook-protected. Composes with `with-playwright` and `skip-tests`.
 
@@ -79,13 +129,19 @@ stop** — don't guess. The flow is reduced:
   `main`). **No worktree, no code, no per-commit gates, no reconcile** — steps
   3–10 are N/A.
 - **Build the `Closes` enumeration.** Take the bundle's issue numbers from the
-  omnibus issue's sub-issue checklist, then **reconcile against the sub-PRs
-  actually merged into the branch**
+  omnibus checklist block — the `#<N>` set inside the `omnibus-checklist` markers
+  (fall back to the prose sub-issue list only if the body predates the regime and
+  has no block) — then **reconcile against the sub-PRs actually merged into the
+  branch**
   (`gh pr list --base omnibus/vX.Y.Z --state merged --json number,title`, cross-
   checked with `git log origin/main..origin/omnibus/vX.Y.Z`). Emit `Closes #<N>`
   for every sub-issue whose work is on the branch. If the checklist and the
   merged-PR set disagree, **report the discrepancy** and let the user reconcile — a
-  hand-edit slip must not silently add or drop a `Closes`.
+  hand-edit slip must not silently add or drop a `Closes`. This is also the second
+  **sub-issue reconcile moment** (see the tracking layers above): bring the native
+  sub-issue links in line with the final `#<N>` set — add any tracked issue still
+  unlinked, remove a link the body no longer tracks — so the promoted bundle's
+  hierarchy matches what it closes.
 - **PAUSE — PR (step 11).** Same PAUSE contract as step 11, but the body is the
   `Closes #<N>` list + a one-line bundle summary and the diff is `git diff --stat
   origin/main...origin/omnibus/vX.Y.Z`. Then `gh pr create --base main --head

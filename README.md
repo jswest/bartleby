@@ -436,6 +436,7 @@ Launch a local SvelteKit UI for browsing *and searching* the active project — 
 
 ```
 bartleby serve
+bartleby serve --project <name>   # browse a different corpus without switching the active one
 ```
 
 Five top-level views (plus a per-chunk view reached from citations and search hits):
@@ -443,7 +444,7 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 - `/` — a corpus overview for the active project (the same aggregate the agent's `describe_corpus` returns): document / chunk / token totals, the authored-date range shown with its undated count, a documents-by-year histogram, summary coverage, content mix, tag chips, and the largest documents — plus nav cards into findings and documents.
 - `/search` — search the whole corpus using the same engine the agent uses. **Search** mode fuses full-text + semantic ranking (RRF) across documents, summaries, findings, and images; **Scan** mode enumerates *every* chunk matching a literal phrase, paginated. Filter by source kind, tag, and document scope; expand any hit to its full text or open the source file at the cited page. Each hit's `chunk N` carries a small open-in-context icon → its `/chunks/<id>` view. (Semantic queries load the embedding model per request, so the first hit takes a few seconds — the page shows a loading state.)
 - `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page; the small icon beside it opens that chunk's `/chunks/<id>` view.
-- `/documents` — the ingested corpus, filterable by authored-date range (with an include-undated toggle) and tag, sortable by title / date / ingest order, and paginated. Each row shows its assigned tag chips (hover a chip for the tag's description); when a date filter hides undated documents it says how many and offers to show them. Click through to a split view: the one-shot summary on the left, the original document on the right.
+- `/documents` — the ingested corpus, filterable by authored-date range (with an include-undated toggle) and tag, sortable by title / date / ingest order, and paginated. Each row shows its assigned tag chips (hover a chip for the tag's description); when a date filter hides undated documents it says how many and offers to show them. Click through to a split view: the one-shot summary on the left, the original document on the right (PDFs in the browser's native viewer with `#page=` jumps; markdown rendered to formatted HTML; everything else in a sandboxed frame).
 - `/tags` — the controlled tag vocabulary: every tag with its description and document count. Click a tag to see the documents carrying it.
 - `/chunks/<id>` — a single chunk in context: the chunk itself at full contrast, its two neighbors on each side (same source, by chunk index) muted as surrounding context, and a link back to the source document (or finding). Reached from the icon beside any chunk reference in findings and search results.
 
@@ -455,7 +456,27 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 
 ![Documents (`/documents`): the ingested corpus with authored-date and tag filters, sorting, and paging — each row showing its file name, page count, and one-shot summary.](./docs/serve-documents.png)
 
-Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
+Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. To browse a different corpus without disturbing the persisted active project, pass `bartleby serve --project <name>` — the override applies to that server only. It's safe to leave running alongside an ingest or a research session.
+
+### `bartleby benchmark`
+
+Pick the best local Ollama model for the document summarizer — and keep the
+choice honest as your installed models change. A re-runnable selection tool:
+`summarize` appends runs across every model × document, `judge` scores them
+with a blind cloud judge, and `leaderboard` ranks the results; `blind` and
+`errors` support spot-checking. Evidence accumulates in append-only stores, so
+re-run any stage and the picture sharpens.
+
+```
+bartleby benchmark summarize   # append summarize runs (every model × document)
+bartleby benchmark judge       # top up blind cloud-judge scores
+bartleby benchmark leaderboard # the ranked report (--output writes CSV)
+bartleby benchmark blind       # blinded summaries + key for a human spot-check
+bartleby benchmark errors      # failed runs, with raw-output previews
+```
+
+Run from the repo root (or pass `--benchmarks-dir`). The full recipe — configs,
+stores, and provenance — lives in [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

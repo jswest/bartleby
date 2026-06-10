@@ -15,7 +15,10 @@ installed:
 between runs so we don't re-install or re-bundle every time.
 
 The dev server reads the active project out of ``~/.bartleby/config.yaml``
-and opens its SQLite read-only.
+and opens its SQLite read-only. Passing ``--project <name>`` overrides that for
+this server only: we export ``BARTLEBY_PROJECT`` into the execvp'd environment,
+which the node side (``web/src/lib/server/db.js``) prefers over the config's
+``active_project`` — the persisted active project is never touched.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from bartleby.config import BARTLEBY_DIR
+from bartleby.db.connection import project_db_path
 from bartleby.lib import console
 
 
@@ -101,8 +105,24 @@ def _needs_install(dst: Path) -> bool:
     return (dst / "package.json").stat().st_mtime > marker.stat().st_mtime
 
 
-def main() -> None:
+def _override_project(name: str) -> None:
+    """Point the server at ``name`` for this run via ``BARTLEBY_PROJECT``.
+
+    Validate the DB exists here (a clean CLI error) rather than letting the node
+    side throw later, then export the override into the environment os.execvp
+    inherits. The persisted ``active_project`` in config.yaml is left untouched.
+    """
+    db = project_db_path(name)
+    if not db.exists():
+        console.error(f"Project '{name}' has no database at {db}.")
+        sys.exit(1)
+    os.environ["BARTLEBY_PROJECT"] = name
+
+
+def main(project: str | None = None) -> None:
     _require_node()
+    if project is not None:
+        _override_project(project)
     console.splash()
     checkout = _is_source_checkout()
     console.info(f"Syncing UI from {WEB_SRC} → {SERVE_DIR}…")
