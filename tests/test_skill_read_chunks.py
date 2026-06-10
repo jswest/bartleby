@@ -6,9 +6,37 @@ import json
 
 import pytest
 
+from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
+from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.session import start_session
 from bartleby.skill_scripts import read_chunks
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+
+
+def _seed_finding_chunk(conn, *, session_id: int, body: str = "finding body") -> int:
+    """Insert a finding owned by ``session_id`` and return its body chunk_id."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, "secret finding", "hook", body),
+    )
+    finding_id = conn.last_insert_rowid()
+    emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+    [chunk_id] = insert_finding_chunks(
+        conn, finding_id,
+        [ChunkInput(text=body, embedding=emb, chunk_index=0)],
+    )
+    return chunk_id
+
+
+def _other_session(conn, name: str = "author") -> int:
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)", (name, 1),
+    )
+    return conn.last_insert_rowid()
 
 
 def test_read_chunks_happy_path(seeded_project, capsys):
@@ -227,3 +255,110 @@ def test_read_chunks_preview_rejects_invalid(seeded_project, bad):
             "--document", str(seeded_project["doc_a"]),
             "--preview", bad,
         ])
+
+
+# --- memory-off finding wall (#271) --------------------------------------
+
+
+def test_read_chunks_memory_off_drops_foreign_finding_chunk(seeded_project, capsys):
+    """A memory-off session sees a foreign finding chunk only as missing — no leak."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(
+            conn, session_id=author, body="confidential prior conclusion",
+        )
+    finally:
+        conn.close()
+
+    start_session(project, memory_enabled=False)
+
+    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == [foreign]
+    assert out["chunks"] == []
+    # The body text and finding title must not appear anywhere in the response.
+    assert "confidential prior conclusion" not in json.dumps(out)
+    assert "secret finding" not in json.dumps(out)
+
+
+def test_read_chunks_memory_off_keeps_own_and_document_chunks(seeded_project, capsys):
+    """Only foreign finding chunks drop; own findings and document chunks remain."""
+    project = seeded_project["project"]
+    info = start_session(project, memory_enabled=False)
+    own_session = info["session_id"]
+
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(conn, session_id=author, body="foreign body")
+        own = _seed_finding_chunk(conn, session_id=own_session, body="my own body")
+    finally:
+        conn.close()
+    doc_chunk = _doc_chunk_ids(project, seeded_project["doc_a"])[0]
+
+    read_chunks.main([
+        "--project", project,
+        "--chunks", f"{foreign},{own},{doc_chunk}",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == [foreign]
+    assert [c["chunk_id"] for c in out["chunks"]] == [own, doc_chunk]
+    assert "foreign body" not in json.dumps(out)
+
+
+def test_read_chunks_memory_on_returns_foreign_finding_chunk(seeded_project, capsys):
+    """Positive control: a memory-on session reads a foreign finding chunk normally."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(conn, session_id=author, body="visible body")
+    finally:
+        conn.close()
+    # No start_session → the default active session is memory-on.
+
+    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == []
+    assert [c["chunk_id"] for c in out["chunks"]] == [foreign]
+    assert out["chunks"][0]["text"] == "visible body"
+    assert out["chunks"][0]["source_kind"] == "finding"
+
+
+def test_read_chunks_around_memory_off_foreign_finding_walled(seeded_project, capsys):
+    """--around-chunk on a foreign finding chunk raises MEMORY_OFF."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(conn, session_id=author)
+    finally:
+        conn.close()
+
+    start_session(project, memory_enabled=False)
+
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main(["--project", project, "--around-chunk", str(foreign)])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MEMORY_OFF"
+
+
+def test_read_chunks_around_memory_off_own_finding_allowed(seeded_project, capsys):
+    """--around-chunk on the session's own finding chunk still works memory-off."""
+    project = seeded_project["project"]
+    info = start_session(project, memory_enabled=False)
+
+    conn = open_db(project)
+    try:
+        own = _seed_finding_chunk(conn, session_id=info["session_id"])
+    finally:
+        conn.close()
+
+    read_chunks.main(["--project", project, "--around-chunk", str(own)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["mode"] == "around"
+    assert out["target"]["chunk_id"] == own
+    assert [c["chunk_id"] for c in out["chunks"]] == [own]
