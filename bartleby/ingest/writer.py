@@ -357,8 +357,15 @@ class Writer:
                         (img.hash, str(img.archive_path), img.width, img.height),
                     )
                     image_id = self.conn.last_insert_rowid()
-                # OR IGNORE: the same (doc, image, page, index) tuple can replay
-                # across runs; a no-op is fine rather than a constraint crash.
+                # Replay is actually prevented by the document-exists early
+                # return above (a re-run of the same file returns the existing
+                # document_id before reaching here). OR IGNORE is only a
+                # secondary guard, and it covers solely *non-NULL*
+                # (doc, image, page, index) tuples: page_number is nullable in
+                # the composite PK and SQLite treats NULLs as distinct, so
+                # docling/HTML/standalone images (page_number = None) are not
+                # deduped by it. A no-op on the rows it does cover is fine
+                # rather than a constraint crash.
                 cur.execute(
                     "INSERT OR IGNORE INTO document_images "
                     "(document_id, image_id, page_number, image_index_on_page) "
