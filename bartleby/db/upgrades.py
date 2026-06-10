@@ -13,6 +13,15 @@ Note: the DDL here intentionally duplicates `db/schema.py` — fresh DBs run
 the latter, existing DBs walk the former. The regression gate that keeps
 them in sync is `tests/test_project.py::test_upgrade_chain_walks_*`, which
 strips and re-applies the chain end-to-end.
+
+Authoring rule for `_upgrade_v8_to_v9`: it is written against **released
+v0.8.x DBs**, which already carry the full v8 shape — the `ingests` table and
+the `ingest_run_id` columns (`_upgrade_v7_to_v8` creates them; see #212). So a
+v8→v9 step must NOT re-create those, and must be **additive-only** (new tables,
+indexes, or nullable columns with NULL truthful on pre-upgrade rows). The
+#164–#171 window cohort (v8 in `meta` but missing `ingests`/`ingest_run_id`,
+see `db/schema.py`) is out of scope — it is re-ingest-only and never a target
+of this step.
 """
 
 from __future__ import annotations
