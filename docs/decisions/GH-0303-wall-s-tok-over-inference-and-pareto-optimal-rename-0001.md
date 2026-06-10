@@ -1,0 +1,11 @@
+# Leaderboard speed is Wall s/tok (length-normalized), and the frontier column is "Pareto optimal" (issue #303)
+
+> Source: [#303](https://github.com/jswest/bartleby/issues/303)
+
+The summarizer leaderboard (GH-0268) carried two speed columns, both with problems. **Tok/s** comes from Ollama's `eval_count/eval_duration` (`summarize.py:_extract_timings`), which cloud providers don't report — so a `†` reference row like `gpt-5-nano` showed `—` and had *no* comparable speed number. **Inference (s)** (load-corrected wall-clock, mean of per-doc medians) was recorded for everyone but length-confounded: its absolute value blends model speed with how long the corpus docs happen to be, so it transfers to no other corpus.
+
+Resolution: add **Wall s/tok** = `(wall_seconds − load_duration_ns/1e9) / eval_count`, aggregated as the mean of per-doc medians (the methodology Inference (s) used). `eval_count` is recorded for every provider (`usage.completion_tokens` for cloud, set in `call_openai`), so this number is length-normalized *and* defined for cloud and local alike — the apples-to-apples speed figure. Then **drop Inference (s)** as redundant; the `_inference_seconds` helper stays because Wall s/tok is built on it. Caveat kept in the footnote: for `†` rows Wall s/tok still counts the datacenter + network, so it reads as end-to-end latency-per-token from where the benchmark runs, not pure model speed — that is the honest best we can offer, where Tok/s offered nothing.
+
+The **Pareto-frontier axis is unchanged**: `_frontier` still gates on `tps`, so cloud rows remain off the frontier (the star is a *local* shortlist), even though they now carry a comparable `sec_per_tok`. Deliberate — the frontier is "which local model do I run," and a cloud row's wall-clock measures someone else's datacenter.
+
+Naming: the table header **`Frontier` → `Pareto optimal`** (CSV field `frontier` → `pareto_optimal`). "Frontier model" colloquially means a big-lab flagship; the table contains exactly such a model (`gpt-5-nano`) and marks it as *not* on the "Frontier," which actively misreads. The ★ glyph and the precise "Pareto frontier" wording in the footnote and `_frontier` docstring are unchanged — only the user-facing column label moved. Additive, non-schema: `SCHEMA_VERSION` unchanged, no re-ingest.
