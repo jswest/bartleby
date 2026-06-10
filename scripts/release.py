@@ -154,17 +154,15 @@ def build_release_notes(
     """
     parts: list[str] = []
     if schema_from is not None and schema_to is not None and schema_from != schema_to:
-        if upgrade_covers(schema_from, schema_to):
-            parts.append(
-                f"⚠️ **This release changes the database schema "
-                f"({schema_from} → {schema_to}). Existing corpora upgrade in place: "
-                f"run `bartleby project upgrade <name>`.**\n"
-            )
-        else:
-            parts.append(
-                f"⚠️ **This release changes the database schema "
-                f"({schema_from} → {schema_to}). Existing corpora must be re-ingested.**\n"
-            )
+        remedy = (
+            "Existing corpora upgrade in place: run `bartleby project upgrade <name>`."
+            if upgrade_covers(schema_from, schema_to)
+            else "Existing corpora must be re-ingested."
+        )
+        parts.append(
+            f"⚠️ **This release changes the database schema "
+            f"({schema_from} → {schema_to}). {remedy}**\n"
+        )
     parts.append("## Changes\n")
     if log_lines:
         parts.extend(f"- {line}" for line in log_lines)
