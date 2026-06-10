@@ -7,7 +7,7 @@ import pytest
 
 import bartleby.config
 import bartleby.commands.config as config
-from bartleby.config import config_drift, redact_config
+from bartleby.config import config_drift, redact_config, save_config
 
 
 @pytest.fixture
@@ -317,6 +317,24 @@ def test_redact_config_matches_token_secret_password_credential():
         "gcp_credential": "c",
     }
     assert redact_config(cfg) == {"keep": 1}
+
+
+# -------------------- config file permissions --------------------
+
+
+def test_save_config_writes_owner_only_mode(isolated_config):
+    # The config holds provider API keys; it must not be world-readable.
+    save_config({"anthropic_api_key": "sk-secret"})
+    assert isolated_config.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_config_tightens_preexisting_loose_mode(isolated_config):
+    # write_text leaves an existing file's mode untouched, so an already-0644
+    # config must still get clamped back to 0600 on the next save.
+    isolated_config.write_text("anthropic_api_key: old\n", encoding="utf-8")
+    isolated_config.chmod(0o644)
+    save_config({"anthropic_api_key": "sk-new"})
+    assert isolated_config.stat().st_mode & 0o777 == 0o600
 
 
 def test_config_drift_none_prior_is_silent():

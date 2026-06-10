@@ -122,6 +122,36 @@ def test_anthropic_minimal_effort_maps_to_low(monkeypatch):
     assert fake.last_call["output_config"] == {"effort": "low"}
 
 
+def _classify_on(monkeypatch, model):
+    class _Schema(BaseModel):
+        ok: bool
+
+    response = _FakeAnthropicResponse([
+        _block("tool_use", name="save_classification", input_={"ok": True}),
+    ])
+    fake = _install_anthropic(monkeypatch, response)
+    from bartleby.providers.anthropic import AnthropicProvider
+    result = AnthropicProvider().classify(
+        "prompt", model=model, schema=_Schema, temperature=0.3,
+    )
+    return fake, result
+
+
+def test_anthropic_classify_drops_temperature_on_47plus(monkeypatch):
+    # Opus 4.7+ 400s on temperature; classify reuses the summarizer's model, so it
+    # must drop temperature too or every tag-classification call fails.
+    fake, result = _classify_on(monkeypatch, "claude-opus-4-8")
+    assert result.ok is True
+    assert fake.last_call["tool_choice"]["name"] == "save_classification"
+    assert "temperature" not in fake.last_call
+
+
+def test_anthropic_classify_keeps_temperature_on_older_model(monkeypatch):
+    # Models that accept temperature still get it — don't over-drop.
+    fake, _ = _classify_on(monkeypatch, "claude-haiku-4-5")
+    assert fake.last_call["temperature"] == 0.3
+
+
 def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
     response = _FakeAnthropicResponse([
         _block("tool_use", name="save_image_description", input_=_VLM_INPUT),

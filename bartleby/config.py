@@ -88,6 +88,10 @@ def save_config(config: dict) -> None:
         yaml.safe_dump(config, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
+    # The config holds provider API keys; keep it owner-only. ``write_text``
+    # leaves an existing file's mode untouched and a fresh file at the umask
+    # default (typically 0644), so set the bits explicitly on every save.
+    CONFIG_PATH.chmod(0o600)
 
 
 def save_config_field(key: str, value: Any) -> None:

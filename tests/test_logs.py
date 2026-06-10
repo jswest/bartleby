@@ -10,6 +10,7 @@ import bartleby.project
 from bartleby.commands import logs as logs_cmd
 from bartleby.db.audit import log_call
 from bartleby.db.connection import open_db
+from bartleby.session import write_active_session_id
 
 
 @pytest.fixture
@@ -59,6 +60,34 @@ def test_logs_defaults_to_most_recent_session(project, capsys):
     newer = _add_session(project, "newer-sess")
     _add_log(project, session_id=older, tool_name="search_old")
     _add_log(project, session_id=newer, tool_name="search_new")
+
+    logs_cmd.main(session=None, limit=50, project=project)
+    out = capsys.readouterr().out
+    assert "newer-sess" in out
+    assert "search_new" in out
+    assert "search_old" not in out
+
+
+def test_logs_prefers_active_session_over_newest(project, capsys):
+    older = _add_session(project, "older-sess")
+    newer = _add_session(project, "newer-sess")
+    _add_log(project, session_id=older, tool_name="search_old")
+    _add_log(project, session_id=newer, tool_name="search_new")
+    write_active_session_id(project, older)
+
+    logs_cmd.main(session=None, limit=50, project=project)
+    out = capsys.readouterr().out
+    assert "older-sess" in out
+    assert "search_old" in out
+    assert "search_new" not in out
+
+
+def test_logs_falls_back_to_newest_when_active_id_stale(project, capsys):
+    older = _add_session(project, "older-sess")
+    newer = _add_session(project, "newer-sess")
+    _add_log(project, session_id=older, tool_name="search_old")
+    _add_log(project, session_id=newer, tool_name="search_new")
+    write_active_session_id(project, 9999)  # no such session row
 
     logs_cmd.main(session=None, limit=50, project=project)
     out = capsys.readouterr().out

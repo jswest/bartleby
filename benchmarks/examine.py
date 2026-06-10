@@ -54,6 +54,22 @@ def _config(records: list[dict]) -> dict:
     return next((r for r in records if r.get("kind") == "config"), {})
 
 
+def _input_tokens_label(cfg: dict) -> str:
+    """Token count the models actually saw, annotating truncation.
+
+    A truncated run was fed exactly `--max-tokens`, so spell out the elision
+    ("50,000 of 80,000 input tokens") rather than the full source count — which
+    the original title overstated. Derived from the existing record fields, so
+    pre-fix benchmark JSONL renders correctly too.
+    """
+    full = cfg.get("source_token_count")
+    if full is None:
+        return "? input tokens"
+    if cfg.get("source_truncated"):
+        return f"{cfg['max_tokens']:,} of {full:,} input tokens"
+    return f"{full:,} input tokens"
+
+
 def _runs_by_model(records: list[dict]) -> dict[str, list[dict]]:
     by_model: dict[str, list[dict]] = defaultdict(list)
     for r in records:
@@ -158,7 +174,7 @@ def cmd_timings(args) -> int:
         rows.append([(s["model"], None), schema, inf, tps, ev])
 
     title = (f"Timings · {cfg.get('pdf_name', '?')} · "
-             f"{cfg.get('source_token_count', '?')} input tokens · "
+             f"{_input_tokens_label(cfg)} · "
              f"temp {cfg.get('temperature', '?')}")
     emit_table(title, columns, rows)
     note("Inference (s) = wall − load_duration (cold-start excluded); Tok/s from "
@@ -296,7 +312,7 @@ def cmd_leaderboard(args) -> int:
     survivors.sort(key=lambda s: (-(s["quality"] or -1), -s["tps"]))
 
     title = (f"Summarizer leaderboard · {cfg.get('pdf_name', '?')} · "
-             f"{cfg.get('source_token_count', '?')} input tokens · "
+             f"{_input_tokens_label(cfg)} · "
              f"temp {cfg.get('temperature', '?')}")
     columns = [("Model", "left"), ("Schema-valid %", "right"), ("Tok/s", "right"),
                ("Inference (s)", "right"), ("Mean quality (/5)", "right"), ("Frontier", "center")]
