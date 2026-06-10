@@ -16,6 +16,16 @@
 # non-option token, skipping git's global options) is commit or push. So
 # `git log --grep commit` and `echo 'git commit'` are NOT blocked.
 #
+# Push is judged by *where it writes*, not the current branch. A `git push`
+# carrying an explicit positional refspec is gated on that refspec's destination
+# ref — blocked only when it resolves to main/master (`origin main`, `HEAD:main`,
+# `develop:main`, `+main`, `refs/heads/main`, `--delete main` all count). So an
+# explicit non-main push (`push -u origin issue/42-foo`) is allowed even from
+# main — which the ship workflow needs to create an omnibus branch. A push with
+# no positional refspec (bare `git push`, `git push origin`, `--all`, `--mirror`)
+# would resolve through the configured upstream / push.default; we don't parse
+# that, so it falls back to the current-branch check, exactly like commit.
+#
 # Known limitation: a separator (`;` `&` `|`) or a `cd`/git line *inside quotes
 # or a here-doc* is still treated structurally (no real shell parsing), so it can
 # mis-resolve. Rare in practice and overridable by running the command yourself
@@ -61,6 +71,46 @@ git_dir_opt() {
   done
 }
 
+# Destination ref of a `git push` segment's positional refspec, normalized, or
+# empty when the push carries no positional refspec (bare push / remote-only /
+# --all / --mirror — those fall back to the branch check, preserving prior
+# behavior). Only called after git_subcommand matched push, so TOKS[0] is git.
+push_dest_ref() {
+  local -a TOKS; _tokenize "$1"
+  local i=1 n=${#TOKS[@]}
+  # Skip git's global options to reach the `push` subcommand token.
+  while [ "$i" -lt "$n" ]; do
+    case "${TOKS[$i]}" in
+      -C|-c|--git-dir|--work-tree|--namespace|--exec-path) i=$((i + 2)) ;;
+      -*) i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  i=$((i + 1))   # step past `push`
+  # Walk push args, collecting positionals: #1 is the remote, #2 the refspec.
+  # Skip the push options that consume the following token, lest their value be
+  # mistaken for the remote (`push -o ci.skip origin main`).
+  local pos=0 refspec=""
+  while [ "$i" -lt "$n" ]; do
+    case "${TOKS[$i]}" in
+      -o|--push-option|--repo|--receive-pack|--exec) i=$((i + 2)) ;;
+      -*) i=$((i + 1)) ;;
+      *)
+        pos=$((pos + 1))
+        [ "$pos" -eq 2 ] && { refspec="${TOKS[$i]}"; break; }
+        i=$((i + 1))
+        ;;
+    esac
+  done
+  [ -n "$refspec" ] || return 0
+  # Normalize to the destination ref: drop a leading '+' (force), keep the part
+  # after the last ':' (src:dst → dst), drop a refs/heads/ prefix.
+  refspec="${refspec#+}"
+  refspec="${refspec##*:}"
+  refspec="${refspec#refs/heads/}"
+  printf '%s' "$refspec"
+}
+
 # Absolute path of $2 resolved from base $1, or empty if it doesn't exist.
 resolve_dir() { (cd "$1" 2>/dev/null && cd "$2" 2>/dev/null && pwd) || true; }
 
@@ -79,10 +129,22 @@ for seg in $(printf '%s' "$cmd" | tr ';&|' '\n'); do
     continue
   fi
 
-  case "$(git_subcommand "$seg")" in
+  sub=$(git_subcommand "$seg")
+  case "$sub" in
     commit|push) ;;
     *) continue ;;
   esac
+
+  # An explicit push refspec is judged by its destination ref, not the branch:
+  # block only when it writes main/master. A refspec-less push falls through to
+  # the branch check below, like commit.
+  if [ "$sub" = "push" ]; then
+    dest=$(push_dest_ref "$seg")
+    if [ -n "$dest" ]; then
+      case "$dest" in main|master) blocked=1 ;; esac
+      continue
+    fi
+  fi
 
   check_dir="$eff_cwd"
   dopt=$(git_dir_opt "$seg")
