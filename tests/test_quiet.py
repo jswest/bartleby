@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from bartleby.commands.scribe import _required_hf_models
+from bartleby.ingest.resolve import _required_hf_models
 from bartleby.lib import quiet
 from bartleby.lib.consts import DOCLING_HF_REPOS, EMBEDDING_MODEL
 

@@ -14,6 +14,11 @@ import bartleby.config
 import bartleby.db.connection
 import bartleby.project
 from bartleby.commands import scribe
+from bartleby.ingest import parsers
+from bartleby.ingest import classify
+from bartleby.ingest import caption
+from bartleby.ingest import parse
+from bartleby.ingest import summary
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest.chunk import resolve_extension
@@ -72,7 +77,7 @@ def isolated_project(tmp_path, monkeypatch):
     # The pool is exercised separately in test_ingest_pool.py with a picklable,
     # model-free parse_fn.
     monkeypatch.setattr(
-        "bartleby.commands.scribe._resolve_max_workers", lambda *a, **k: 1,
+        "bartleby.ingest.resolve._resolve_max_workers", lambda *a, **k: 1,
     )
 
     bartleby.project.create_project("test_proj")
@@ -85,7 +90,6 @@ def mock_embed(monkeypatch):
     def fake(texts):
         return _emb(0.0, len(texts))
     # Patch every import site (commands.scribe imports it directly).
-    monkeypatch.setattr("bartleby.commands.scribe.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.images.embed_texts", fake)
     return fake
@@ -219,7 +223,7 @@ def test_persist_parse_reuses_existing_file_hash(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="dup", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -247,7 +251,7 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     with pytest.raises(NotAPdfError) as exc:
-        scribe_module._parse_document(
+        parsers._parse_document(
             src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -275,13 +279,13 @@ def test_scribe_writes_summary_when_provider_configured(
 
     stub = _StubProvider(text="## Stub summary\n\nKey points appear here.")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: stub,
     )
     # Bypass docling for the summary chunking too — return one chunk.
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -342,11 +346,11 @@ def test_scribe_summarizes_existing_document_on_later_run(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -381,7 +385,7 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -434,7 +438,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -461,7 +465,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     def _boom(*a, **k):
         raise AssertionError("docling path must not call pdfplumber")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", _boom
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", _boom
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -500,7 +504,7 @@ def test_scribe_dedupes_identical_images_across_documents(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -540,7 +544,7 @@ def test_scribe_captions_many_images_concurrently_in_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdfs = []
@@ -583,7 +587,7 @@ def test_scribe_dedupes_shared_image_within_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
@@ -641,7 +645,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
     config["caption_workers"] = 3
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailVision(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailVision(),
     )
 
     pdfs = []
@@ -675,7 +679,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 
 
 def test_resolve_caption_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
 
     # Default when unset or zero; explicit value respected.
@@ -694,7 +698,7 @@ def test_resolve_caption_workers_defaults_and_timings():
 
 
 def test_resolve_caption_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
@@ -731,11 +735,11 @@ def test_scribe_summarizes_many_documents_concurrently_in_one_run(
     )
     stub = _StubProvider(text="summary body")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -790,11 +794,11 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         lambda: _summary_config(summarize_workers=3),
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailLLM(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailLLM(),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -817,7 +821,7 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 
 
 def test_resolve_summarize_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
 
     # Default when unset or zero; explicit value respected.
@@ -836,7 +840,7 @@ def test_resolve_summarize_workers_defaults_and_timings():
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
@@ -863,7 +867,7 @@ def test_summarize_all_progress_callback_fires_per_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -874,7 +878,7 @@ def test_summarize_all_progress_callback_fires_per_document(
 
         pending = writer.documents_needing_summary()
         seen: list[tuple[int, int]] = []
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -902,7 +906,7 @@ def test_summarize_all_lane_callback_reports_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -913,7 +917,7 @@ def test_summarize_all_lane_callback_reports_document(
 
         pending = writer.documents_needing_summary()
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._summarize_all(
+        summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -941,7 +945,7 @@ def test_summarize_all_skips_capped_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="caphash", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -954,7 +958,7 @@ def test_summarize_all_skips_capped_document(
             writer.record_failure("caphash", "doc.txt", "summary", RuntimeError("x"))
 
         stub = _StubProvider()
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, writer.documents_needing_summary(),
             llm_provider=stub, llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -981,7 +985,7 @@ def test_scribe_ingests_standalone_image_file(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1031,7 +1035,7 @@ def test_scribe_skips_sub_minimum_image_without_calling_vlm(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1128,7 +1132,7 @@ def test_parse_document_stage_callback_fires_extract_then_embed(
     _text_pdf(pdf)
 
     stages: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1149,7 +1153,7 @@ def test_parse_document_reports_page_count(
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
-    parsed = scribe_module._parse_document(
+    parsed = parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1170,7 +1174,7 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
 
     # Force every prepared image below the VLM minimum so the skip branch fires.
     monkeypatch.setattr(
-        scribe_module.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+        parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
     )
     # A worker must never touch the console; fail loudly if it tries.
     monkeypatch.setattr(
@@ -1179,10 +1183,10 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
     )
 
     warnings: list[str] = []
-    route = scribe_module._ImageRoute(
+    route = parsers._ImageRoute(
         bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
     )
-    images = scribe_module._parse_image_routes(
+    images = parsers._parse_image_routes(
         [route], archive_root=tmp_path / "archive", vision_enabled=True,
         vision_max_dimension=1024, vision_min_dimension=128,
         on_warn=warnings.append,
@@ -1206,7 +1210,7 @@ def test_parse_document_threads_on_warn_to_the_leaf(
     img.write_bytes(_png_bytes())
 
     warnings: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         img, ".png", file_hash="h", file_name="pic.png",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1233,7 +1237,7 @@ def test_caption_all_progress_callback_fires_per_image(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1243,9 +1247,9 @@ def test_caption_all_progress_callback_fires_per_image(
         document_id = writer.persist_parse(parsed)
 
         seen: list[tuple[int, int]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=lambda done, total: seen.append((done, total)),
@@ -1274,7 +1278,7 @@ def test_caption_all_lane_callback_reports_owning_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1284,9 +1288,9 @@ def test_caption_all_lane_callback_reports_owning_document(
         document_id = writer.persist_parse(parsed)
 
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=None,
@@ -1329,7 +1333,7 @@ def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
             "SELECT document_id FROM documents"
         ).fetchone()[0]
         writer = scribe.Writer(conn)
-        assert scribe._is_complete(writer, doc_id)
+        assert classify._is_complete(writer, doc_id)
     finally:
         conn.close()
 
@@ -1361,7 +1365,7 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             (doc_id, image_id, None, 0),
         )
         writer = scribe.Writer(conn)
-        assert not scribe._is_complete(writer, doc_id)
+        assert not classify._is_complete(writer, doc_id)
         assert [pi.image_id for pi in writer.uncaptioned_images(doc_id)] == [image_id]
 
         # Caption it → complete, and no longer pending.
@@ -1369,7 +1373,7 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             "UPDATE images SET analysis_json = '{}', analysis_model = 'm' "
             "WHERE image_id = ?", (image_id,),
         )
-        assert scribe._is_complete(writer, doc_id)
+        assert classify._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
     finally:
         conn.close()
@@ -1479,12 +1483,12 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
         description="A green rectangle chart with no axis labels.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1515,14 +1519,14 @@ def test_scribe_persists_authored_date_from_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="2024-09-12",
         ),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1551,14 +1555,14 @@ def test_scribe_drops_malformed_authored_date(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="Q3 2024",
         ),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1589,12 +1593,12 @@ def test_scribe_truncation_note_in_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(text="summary body"),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1739,12 +1743,12 @@ def test_scribe_summarizes_standalone_image_from_image_chunks(
         description="A photo of a red barn in a field.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1890,7 +1894,7 @@ def test_resolve_format_filter_rejects_unknown_name():
 
 def test_collect_files_single_extensionless_pdf(tmp_path):
     pdf = _text_pdf(tmp_path / "docket_no_ext")
-    sources, unidentified = scribe._collect_files([pdf])
+    sources, unidentified = classify._collect_files([pdf])
     assert sources == [(pdf, ".pdf")]
     assert unidentified == []
 
@@ -1899,7 +1903,7 @@ def test_collect_files_single_unsupported_raises(tmp_path):
     p = tmp_path / "mystery"
     p.write_bytes(b"\x00\x01\x02\x03")
     with pytest.raises(ValueError):
-        scribe._collect_files([p])
+        classify._collect_files([p])
 
 
 def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
@@ -1910,7 +1914,7 @@ def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
     junk = d / "notes"                                      # unidentifiable
     junk.write_bytes(b"\x00\x01\x02\x03")
 
-    sources, unidentified = scribe._collect_files([d])
+    sources, unidentified = classify._collect_files([d])
 
     assert (pdf, ".pdf") in sources
     assert (named, ".pdf") in sources
@@ -1925,7 +1929,7 @@ def test_collect_files_unions_multiple_directories(tmp_path):
     pdf_a = _text_pdf(a / "a.pdf")
     pdf_b = _text_pdf(b / "b.pdf")
 
-    sources, unidentified = scribe._collect_files([a, b])
+    sources, unidentified = classify._collect_files([a, b])
 
     files = {p for p, _ in sources}
     assert files == {pdf_a, pdf_b}
@@ -1938,7 +1942,7 @@ def test_collect_files_dedupes_overlapping_roots(tmp_path):
     pdf = _text_pdf(d / "report.pdf")
 
     # The same file reachable both as an explicit file and under its directory.
-    sources, _ = scribe._collect_files([pdf, d])
+    sources, _ = classify._collect_files([pdf, d])
     assert sources.count((pdf, ".pdf")) == 1
     assert len(sources) == 1
 
@@ -1951,7 +1955,7 @@ def test_collect_files_only_filter_restricts_by_resolved_type(tmp_path):
     png = d / "image.png"
     png.write_bytes(_png_bytes())
 
-    sources, unidentified = scribe._collect_files([d], only={".pdf"})
+    sources, unidentified = classify._collect_files([d], only={".pdf"})
 
     assert sources == [(pdf, ".pdf")]
     # txt and png are intentional exclusions — not lumped into unidentified.
@@ -1966,7 +1970,7 @@ def test_collect_files_only_filter_matches_sniffed_type(tmp_path):
     sniffed = _text_pdf(d / "ATTACHMENT 7 - LOADING FORMS")  # extensionless PDF
     _write_txt(d / "notes.txt", "plain text")
 
-    sources, _ = scribe._collect_files([d], only={".pdf"})
+    sources, _ = classify._collect_files([d], only={".pdf"})
 
     # The content-sniffed PDF is kept by `--only pdf` just like a named one.
     assert sources == [(sniffed, ".pdf")]
@@ -2077,7 +2081,7 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     )
     vision = _FlakyVisionProvider(fail_times=1)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     # Count real pdfplumber parses to prove the second run doesn't re-parse.
@@ -2090,7 +2094,7 @@ def test_scribe_resumes_missing_caption_without_reparsing(
         return real_convert(*a, **k)
 
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", counting_convert,
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", counting_convert,
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -2160,7 +2164,7 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     )
     vision = _FlakyVisionProvider(fail_times=10_000)  # always fails
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -2300,11 +2304,11 @@ def test_scribe_timings_includes_decoupled_summarize_stage(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -2334,7 +2338,7 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
 
 def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
     from types import SimpleNamespace
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     monkeypatch.setattr(scribe_module.os, "cpu_count", lambda: cores)
     monkeypatch.setattr(
         "psutil.virtual_memory",
@@ -2343,13 +2347,13 @@ def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
 
 
 def test_resolve_max_workers_timings_forces_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=16, free_gb=128)
     assert scribe_module._resolve_max_workers({"max_workers": 8}, timings=True) == 1
 
 
 def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RAM-bound: 8 cores but only ~48GB free → 48 // 12.0 = 4 workers.
     _fake_machine(monkeypatch, cores=8, free_gb=48)
     assert scribe_module._resolve_max_workers({}, timings=False) == 4
@@ -2359,7 +2363,7 @@ def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
 
 
 def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RESERVED_CORES (2) is held back from the auto-pick, never below 1.
     _fake_machine(monkeypatch, cores=4, free_gb=128)
     assert scribe_module._resolve_max_workers({}, timings=False) == 2   # 4 − 2
@@ -2370,13 +2374,13 @@ def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
 
 
 def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 12.0 = 0 → floored to 1
     assert scribe_module._resolve_max_workers({}, timings=False) == 1
 
 
 def test_resolve_max_workers_honors_explicit_value_over_auto_with_warning(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=4, free_gb=128)   # auto = 4 − 2 = 2
     warned: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", lambda m: warned.append(m))
