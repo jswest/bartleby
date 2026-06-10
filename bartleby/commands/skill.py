@@ -21,6 +21,7 @@ SCRIPTS = (
     "read_chunks",
     "read_document",
     "save_summary",
+    "save_date",
     "save_finding",
     "edit_finding",
     "delete_finding",
