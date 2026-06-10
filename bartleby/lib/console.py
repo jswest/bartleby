@@ -71,6 +71,22 @@ def warn(message: str) -> None:
     _console.print("  ", _aligned(message), style="dim")
 
 
+_warned_once: set[str] = set()
+
+
+def warn_once(key: str, message: str) -> None:
+    """Emit ``warn(message)`` only the first time this ``key`` is seen this process.
+
+    Lets call sites surface a recurring degradation (e.g. a broken Tesseract that
+    routes everything to the VLM) once instead of once per item — and, with a
+    shared key, once across surfaces rather than once per module.
+    """
+    if key in _warned_once:
+        return
+    _warned_once.add(key)
+    warn(message)
+
+
 def error(message: str) -> None:
     _console.print("  ", _aligned(message), style="bold red")
 
