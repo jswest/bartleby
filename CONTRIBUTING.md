@@ -26,6 +26,7 @@ the tooling encodes the conventions so you don't have to keep them all in your h
 | Piece | What it does |
 | --- | --- |
 | `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR (the loop below). |
+| `skills/ultraship/SKILL.md` | The `/ultraship` command — assembles a whole omnibus bundle unattended (see [Assembling a bundle unattended](#assembling-a-bundle-unattended-ultraship)). Backed by `scripts/ultraship.py`. |
 | `skills/release/SKILL.md` | The `/release` command — dry-run → confirm → publish a release (see [Cutting a release](#cutting-a-release)). |
 | `hooks/guard-main-write.sh` | A safety rail that refuses commits/pushes on `main`. |
 | `agents/simplify-refactor.md` | A subagent that does a quality/simplification pass over changed code. |
@@ -147,6 +148,42 @@ the work already landed on the branch — and drafts the PR with a `Closes #<N>`
 line for every sub-issue, cross-checked against the PRs actually merged onto the
 branch. You approve and merge it; that one merge closes the whole bundle. Cutting
 the release is the later, separate `/release` step.
+
+### Assembling a bundle unattended: `/ultraship`
+
+`/ship #<N> onto #<omnibus>` lands **one** sub-issue at a time, with you in the
+loop at every plan and PR PAUSE. `/ultraship` takes a **single omnibus issue** and
+assembles the *whole* bundle while you sleep. It has two verbs and exactly one
+attended moment:
+
+- **`/ultraship plan #<omnibus>`** — a **director** interviews you to sharpen each
+  sub-issue's `objective` and the omnibus `goal`, writes those back into the
+  issue's `### Sub-issues` manifest, validates the manifest is well-formed
+  (`scripts/ultraship.py`), prints the wave DAG, and **stops.** This is the only
+  step that asks you anything.
+- **`/ultraship run #<omnibus>`** — fully unattended. A **stage-manager** fans the
+  sub-issues out (in dependency waves derived from `depends-on` + `touches`-
+  overlap) to headless **player** processes, each in its own sibling worktree
+  running the same `pytest → simplify-refactor → pytest` gates; merges their
+  "Part of #N" sub-PRs through a **serialized merge train** (conflict or red suite
+  → *park*, never resolved unattended); runs a bounded **critic** loop; has the
+  director **grade** the result against the goal; and leaves a finished
+  `omnibus/vX.Y.Z` branch plus a **risk-ranked morning report** as the
+  promotion-PR body.
+
+The manifest, validation, and wave scheduling are deterministic and live in
+`scripts/ultraship.py` (pure, unit-tested) — only the orchestration is agentic.
+The state is reconstructed from GitHub on every restart (merged sub-PR = done,
+open = parked, neither = untouched), so a run that dies at 3 a.m. resumes by
+re-reading GitHub rather than replaying a journal.
+
+Two safety rules bend **deliberately and only here** (see
+[`docs/decisions/GH-0244-…`](./docs/decisions/GH-0244-ultraship-authority-boundary-0001.md)):
+the stage-manager merges sub-issue → omnibus autonomously (recoverable branch,
+serialized, gated, never force-pushed), and players run with pre-granted
+permissions (else they hang on the first prompt at 1 a.m.). The boundary that does
+**not** move: **a human still merges omnibus → `main`** via the `/ship #<omnibus>`
+promotion mode above, and the `guard-main-write.sh` hook is untouched.
 
 ### The helper agents
 
