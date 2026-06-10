@@ -126,9 +126,14 @@ new long-lived branch. From there the whole loop retargets from `main` to the
 omnibus branch: worktree base, collision scan, reconcile, and PR base. The sub-PR
 says *"Part of #169"* rather than `Closes #170`, because GitHub only auto-closes
 from the default branch; the sub-issues all close when the omnibus → main PR (which
-lists every `Closes #<N>`) finally merges. As it opens that sub-PR, Claude ticks
-the issue's box on the omnibus checklist and notes the PR number, so the bundle's
-tracking stays current instead of drifting. The `main`-only guard rail is
+lists every `Closes #<N>`) finally merges. The omnibus body carries a
+machine-anchorable checklist — a comment-delimited block (`<!-- omnibus-checklist:start -->`
+… `:end`) with one `- [ ] #<N>` line per sub-issue, kept alongside the prose
+`### Sub-issues` narrative. As it opens each sub-PR, Claude ticks that issue's box
+in the block (seeding the block on the bundle's first ship if it's missing, after
+showing you the edit), so the bundle's tracking stays current instead of drifting,
+and the omnibus → main PR reads its `Closes` set straight from the block. The
+`main`-only guard rail is
 unchanged, so the omnibus branch itself isn't hook-protected — keeping work on
 sub-PRs is discipline, not enforcement. Composes with the two tokens above.
 
