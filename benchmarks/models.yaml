@@ -1,23 +1,31 @@
 # Models the summarization benchmark runs — in this exact order, no filtering.
 #
-# This list is the source of truth: summarize_local.py runs *only* what's here
-# and skips nothing. Nothing is auto-discovered, and no model is dropped for
-# being a vision/coder/embedding name — that judgement is yours. Add or remove
-# lines freely; if you don't have one installed, `ollama pull <name>` it (or
-# delete the line). Don't have a model and think it belongs here? Open a PR.
+# This list is the source of truth: `bartleby benchmark summarize` runs *only*
+# what's here and skips nothing. Nothing is auto-discovered, and no model is
+# dropped for being a vision/coder/embedding name — that judgement is yours.
+# Add or remove lines freely; if you don't have one installed, `ollama pull
+# <name>` it (or delete the line). Don't have a model and think it belongs
+# here? Open a PR.
 #
-# Override ad hoc without editing this file: `--models a b c`.
+# Entries are <provider>:<model>, parsed on the first colon — the model name
+# keeps its own colons (ollama:gemma4:e2b). On the command line the same
+# reference is written <provider>/<model> (ollama/gemma4:e2b). Non-ollama
+# entries are cloud *reference rows*: judged for quality as a yardstick, never
+# on the speed/quality frontier.
+#
+# Override ad hoc without editing this file: `--models a,b,c`.
 
 models:
-  - gemma4:e2b
-  - gemma4:e4b
-  - gemma4:26b
-  - gemma4:31b
-  - granite4.1:3b
-  - granite4:3b-h
-  - granite4.1:8b
-  - gpt-oss:20b
-  - gpt-oss:120b
-  - phi4-mini
-  - qwen3.6:27b
-  - qwen3.6:35b
+  - ollama:gemma4:e2b
+  - ollama:gemma4:e4b
+  - ollama:gemma4:26b
+  - ollama:gemma4:31b
+  - ollama:granite4.1:3b
+  - ollama:granite4:3b-h
+  - ollama:granite4.1:8b
+  - ollama:gpt-oss:20b
+  - ollama:gpt-oss:120b
+  - ollama:phi4-mini
+  - ollama:qwen3.6:27b
+  - ollama:qwen3.6:35b
+  - openai:gpt-5-nano

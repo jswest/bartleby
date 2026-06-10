@@ -1,0 +1,10 @@
+# The benchmark corpus — <doc-id>: <file under corpus/>.
+#
+# Doc-ids are short [a-z0-9-] slugs; they name the per-cell store files and
+# are what --documents filters take. The PDFs are committed so the benchmark
+# is reproducible by anyone, not dependent on a local project DB. See
+# benchmarks/README.md for why each document was chosen.
+
+psc-order-0109: 0109_Order_Denying_Request_for_Rehearing_and_Reconsideration.pdf
+rci-reply-0116: 0116_Ratepayer_and_Community_Intervenors_Reply_Statement.pdf
+opposition-0098: 0098_Statement_in_Opposition_to_the_Joint_Proposal.pdf
