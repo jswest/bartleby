@@ -428,6 +428,63 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
     assert out["results"] == []
 
 
+def test_search_file_like_single_pattern(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "alpha%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["alpha%"]
+    assert out["results"]
+    for r in out["results"]:
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
+def test_search_file_like_excludes_nonmatching_doc(seeded_project, capsys):
+    # "alpha" lives in doc_a (alpha.pdf), but we slice to beta.txt → no hits.
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["beta%"]
+    assert out["results"] == []
+
+
+def test_search_file_like_repeated_ors(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "alpha%", "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["alpha%", "beta%"]
+    # The OR group admits both docs; "alpha" still only hits doc_a's chunks.
+    assert out["results"]
+    for r in out["results"]:
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
+def test_search_file_like_ands_with_in_documents(seeded_project, capsys):
+    # in-documents=doc_a AND file_like=beta% → empty intersection → no hits.
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--in-documents", str(seeded_project["doc_a"]),
+        "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["file_like"] == ["beta%"]
+    assert out["results"] == []
+
+
 def test_search_semantic_scope_survives_global_nearest_elsewhere(
     seeded_project, capsys, monkeypatch
 ):

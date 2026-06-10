@@ -413,6 +413,26 @@ def add_date_filter_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_file_like_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--file-like`` filename filter (consumed by ``scan``,
+    ``search``, and ``list_documents``).
+
+    Repeatable; the patterns OR together and the group ANDs with the other
+    scope filters (``--tag`` / ``--in-documents`` / date bounds). Resolution
+    (the parameterized ``file_name LIKE`` pushdown) happens in
+    ``_tags.resolve_scope``; this is the canonical help wording.
+    """
+    parser.add_argument(
+        "--file-like",
+        action="append", default=None, dest="file_like", metavar="PATTERN",
+        help=(
+            "Restrict to documents whose file_name matches this SQL LIKE "
+            "pattern (%% = any run, _ = one char), e.g. 'J000304__%%'. Repeat "
+            "for OR; the group ANDs with --tag / --in-documents / date bounds."
+        ),
+    )
+
+
 def apply_preview(text: str, preview: int | None) -> str:
     """Truncate ``text`` to ``preview`` chars (appending ``…``); pass through
     unchanged when ``preview`` is ``None`` or the text already fits."""
