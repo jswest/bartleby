@@ -20,6 +20,7 @@ from bartleby.skill_scripts import (
     tag as tag_script,
     unassign_tag,
 )
+from bartleby.skill_runner import SkillError
 from bartleby.skill_scripts import _tags as tags_helpers
 from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
 
@@ -436,6 +437,18 @@ def test_tag_retries_transient_failure_once(seeded_project, capsys, monkeypatch)
     assert calls["n"] == 2          # one failure, then a successful retry
     assert out["failed"] == []
     assert out["classified"][0]["applies"] is True
+
+
+def test_resolve_classifier_no_provider_names_config_command(monkeypatch):
+    """The NO_PROVIDER error points at `bartleby config`, not the stale
+    `bartleby ready` (issue #329)."""
+    monkeypatch.setattr(tags_helpers, "load_config", lambda: {})
+    with pytest.raises(SkillError) as exc_info:
+        tags_helpers.resolve_classifier()
+    err = exc_info.value
+    assert err.code == "NO_PROVIDER"
+    assert "bartleby config" in err.message
+    assert "bartleby ready" not in err.message
 
 
 def test_tag_rejects_when_no_vocabulary(seeded_project, capsys):
