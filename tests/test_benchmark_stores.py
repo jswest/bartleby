@@ -58,11 +58,11 @@ def test_require_demands_corpus_yaml(tmp_path):
 
 
 def test_load_models_and_judges(tmp_path):
-    (tmp_path / "models.yaml").write_text("models:\n  - ollama:gemma4:e2b\n")
-    (tmp_path / "judges.yaml").write_text("judges:\n  - openai:gpt-5.5\n")
+    (tmp_path / "models.yaml").write_text("models:\n  - ollama/gemma4:e2b\n")
+    (tmp_path / "judges.yaml").write_text("judges:\n  - openai/gpt-5.5\n")
     root = BenchmarkRoot(tmp_path)
-    assert [str(m) for m in root.load_models()] == ["ollama:gemma4:e2b"]
-    assert [str(j) for j in root.load_judges()] == ["openai:gpt-5.5"]
+    assert [str(m) for m in root.load_models()] == ["ollama/gemma4:e2b"]
+    assert [str(j) for j in root.load_judges()] == ["openai/gpt-5.5"]
 
 
 def test_load_models_empty_refused(tmp_path):

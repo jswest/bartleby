@@ -185,8 +185,10 @@ def main():
     )
     bj.add_argument(
         "--passes", type=int, default=3,
-        help="Judgments each distinct summary should have (default 3); "
-             "idempotent — re-running tops up, never duplicates.",
+        help="Judgments each distinct summary should have (default 3). "
+             "Declarative and idempotent: re-running the same value is a "
+             "no-op; want more judgments on what's already judged, raise it "
+             "(--passes 8 adds 5 to a summary that has 3).",
     )
     bl = benchmark_sub.add_parser(
         "leaderboard", help="Ranked report merging runs, schema gate, and judge scores"

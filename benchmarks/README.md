@@ -27,8 +27,10 @@ bartleby benchmark summarize --models ollama/gemma4:e2b,openai/gpt-5-nano \
     --documents rci-reply-0116 --runs 3
 
 # 2. Top up blind judge scores (cloud; needs OPENAI_API_KEY in env or
-#    benchmarks/.env). Idempotent: each distinct summary is brought up to
-#    --passes (default 3) OK judgments; re-running is a no-op.
+#    benchmarks/.env). Declarative and idempotent: each distinct summary is
+#    brought up to --passes (default 3) OK judgments; re-running the same
+#    value is a no-op. Want more judgments later? Raise the number —
+#    --passes 8 adds 5 to everything that has 3.
 bartleby benchmark judge
 bartleby benchmark judge --model openai/gpt-5.5 --passes 5
 
@@ -46,10 +48,9 @@ bartleby benchmark blind --seed 7
 bartleby benchmark errors
 ```
 
-Model references are `<provider>/<model>` on the command line (the slash
-splits, so Ollama names keep their colons: `ollama/gemma4:e2b`) and
-`<provider>:<model>` in the YAML configs (`ollama:gemma4:e2b`, parsed on the
-first colon).
+Model references are always `<provider>/<model>` — YAML configs and command
+line alike. The first slash splits, so Ollama names keep their colons:
+`ollama/gemma4:e2b`.
 
 ## The stores
 
@@ -71,8 +72,8 @@ organization only — readers glob and filter on record contents.
 Nothing is ever rewritten: summarize appends runs with per-cell monotonic
 `run_index`es, judge appends passes. The leaderboard's `--since`/`--until`
 window is how you cut a report from a particular era, and it **warns** when a
-cell's windowed records mix `source_sha` or `prompt_sha` regimes instead of
-silently averaging across them. Deleting `sources/` forces re-extraction —
+cell's windowed records mix `source_sha`, `prompt_sha`, `temperature`, or
+`max_tokens` regimes instead of silently averaging across them. Deleting `sources/` forces re-extraction —
 but old runs then carry a stale `source_sha`, and the judge **refuses** to
 score a summary against text the model never saw.
 

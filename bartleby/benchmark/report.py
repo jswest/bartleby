@@ -127,15 +127,21 @@ def _frontier(rows: list[dict]) -> set[ModelRef]:
     return front
 
 
+# The provenance axes a cell must hold constant for its scores to average
+# cleanly. temperature is None for cloud reference rows (provider default) —
+# constant within a cell, since a cell never mixes providers.
+_REGIME_KEYS = ("source_sha", "prompt_sha", "temperature", "max_tokens")
+
+
 def heterogeneity_warnings(runs: list[dict]) -> list[str]:
-    """Cells whose windowed runs mix source or prompt regimes — averaging
-    across them silently would compare apples to drifted oranges."""
-    mixes: dict[tuple, dict[str, set]] = defaultdict(lambda: {"source_sha": set(),
-                                                              "prompt_sha": set()})
+    """Cells whose windowed runs mix provenance regimes — averaging across
+    them silently would compare apples to drifted oranges."""
+    mixes: dict[tuple, dict[str, set]] = defaultdict(
+        lambda: {key: set() for key in _REGIME_KEYS})
     for r in runs:
         cell = mixes[(_ref(r), r["doc"])]
-        for key in ("source_sha", "prompt_sha"):
-            if r.get(key):
+        for key in _REGIME_KEYS:
+            if r.get(key) is not None:
                 cell[key].add(r[key])
     warnings = []
     for (ref, doc), shas in sorted(mixes.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):

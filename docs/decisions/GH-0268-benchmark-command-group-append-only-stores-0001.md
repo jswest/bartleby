@@ -43,10 +43,10 @@ calibration, not competition. Caveat recorded: the default judge (gpt-5.5)
 shares a family with OpenAI reference rows; `judges.yaml` + per-judge stores
 exist so an off-family judge can be added to control for self-preference.
 
-**Reference syntax.** Models are `<provider>:<model>` in YAML (parse on the
-first colon; Ollama names keep their colons) and `<provider>/<model>` on the
-command line (parse on the first slash) — the user's call: flags read better
-with the slash. Slugs normalize `:`/`/` → `-` with collision refusal.
+**Reference syntax.** Models are `<provider>/<model>` everywhere — YAML and
+command line alike, parsed on the first slash so Ollama names keep their
+colons (`ollama/gemma4:e2b`). One form, no per-surface translation. Slugs
+normalize `:`/`/` → `-` with collision refusal.
 
 Corpus grows to three committed docs (`corpus.yaml`: formulaic PSC order,
 size-matched advocacy reply, ~8.4k-token opposition brief) so coverage is a

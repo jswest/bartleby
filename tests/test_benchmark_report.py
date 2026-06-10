@@ -22,12 +22,13 @@ def _summary(tag):
 
 
 def _run(root, ref, doc, idx, summary=None, ok=True, tps=None, ts=None,
-         prompt_sha="p1", source_sha="s1"):
+         prompt_sha="p1", source_sha="s1", temperature=0.0):
     record = {
         "provider": ref.provider, "model": ref.model, "doc": doc,
         "run_index": idx, "ok": ok, "wall_seconds": 5.0,
         "load_duration_ns": int(1e9),
         "source_sha": source_sha, "prompt_sha": prompt_sha,
+        "temperature": temperature,
     }
     if ok:
         record["summary"] = summary
@@ -93,7 +94,7 @@ def populated(root):
         _run(root, GAMMA, doc, 2, None, ok=False)
 
         n = _summary(f"nano-{doc}")
-        _run(root, NANO, doc, 0, n)  # no tps — cloud
+        _run(root, NANO, doc, 0, n, temperature=None)  # no tps — cloud
         _judgment(root, NANO, doc, n, 4.9)
     return root
 
@@ -126,10 +127,10 @@ def test_leaderboard_renders_markdown_with_frontier_and_disqualified(populated, 
     out = capsys.readouterr().out
     lines = [l for l in out.splitlines() if l.startswith("| ")]
     # Sorted by quality: nano (4.9, reference) above alpha above beta.
-    assert lines[1].startswith("| openai:gpt-5-nano †")
-    assert "★" in lines[2] and "ollama:alpha:1b" in lines[2]   # frontier: local best
+    assert lines[1].startswith("| openai/gpt-5-nano †")
+    assert "★" in lines[2] and "ollama/alpha:1b" in lines[2]   # frontier: local best
     assert "★" not in lines[1]  # cloud row never starred
-    assert "ollama:beta:7b" in lines[3] and "★" not in lines[3]  # dominated
+    assert "ollama/beta:7b" in lines[3] and "★" not in lines[3]  # dominated
     assert "gamma" in out and "67%" in out  # disqualified table
     assert "Mean quality by document" in out
     assert "(3r/3p)" in out  # per-cell evidence counts
@@ -166,6 +167,23 @@ def test_heterogeneity_warning_on_mixed_prompt_sha(populated, capsys):
     assert "mixes prompt_sha" in out and "alpha" in out
 
 
+def test_heterogeneity_warning_on_mixed_temperature(populated, capsys):
+    _run(populated, ALPHA, "d1", 99, _summary("alpha-d1"), tps=100.0,
+         temperature=0.2)
+    report.leaderboard(populated)
+    out = capsys.readouterr().out
+    assert "mixes temperature" in out and "alpha" in out
+
+
+def test_no_temperature_warning_for_cloud_provider_defaults(populated, capsys):
+    # Reference rows record temperature=None (provider default) on every run;
+    # None is "unpinned", not a regime, so an all-None cell must not warn.
+    _run(populated, NANO, "d1", 99, _summary("nano-d1"), temperature=None)
+    report.leaderboard(populated)
+    out = capsys.readouterr().out
+    assert "gpt-5-nano · d1 mixes" not in out
+
+
 def test_judges_filter_selects_judge(populated, capsys):
     other_judge = ModelRef("openai", "other")
     judgments = report.load_judgments(populated, judges=[other_judge])
@@ -192,7 +210,7 @@ def test_blind_writes_per_doc_sections_and_key(populated, tmp_path, capsys):
     # (Summary *content* may echo anything — only the refs must not leak.)
     for ref in (ALPHA, BETA, GAMMA, NANO):
         assert str(ref) not in md
-    assert key["A"]["model"].count(":") >= 1
+    assert "/" in key["A"]["model"]  # provider/model form
 
 
 def test_errors_lists_failures_with_doc(populated, capsys):

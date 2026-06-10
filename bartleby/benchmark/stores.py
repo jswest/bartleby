@@ -77,10 +77,10 @@ class BenchmarkRoot:
         return self.judgements_dir / f"{ref.slug}_{doc_id}_{judge.slug}.jsonl"
 
     def load_models(self) -> list[ModelRef]:
-        return [ModelRef.from_yaml(m) for m in self._yaml_list(self.models_yaml, "models")]
+        return [ModelRef.parse(m) for m in self._yaml_list(self.models_yaml, "models")]
 
     def load_judges(self) -> list[ModelRef]:
-        return [ModelRef.from_yaml(m) for m in self._yaml_list(self.judges_yaml, "judges")]
+        return [ModelRef.parse(m) for m in self._yaml_list(self.judges_yaml, "judges")]
 
     @staticmethod
     def _yaml_list(path: Path, key: str) -> list:

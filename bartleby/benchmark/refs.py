@@ -1,9 +1,8 @@
 """Model references and cell-file naming for the benchmark stores.
 
-A model is identified as ``<provider>:<model>`` in the YAML configs (parse on
-the *first* colon — Ollama model names carry their own colons, e.g.
-``ollama:gemma4:e2b``) and as ``<provider>/<model>`` when passed on the
-command line (parse on the first slash, so the model keeps its colons).
+A model is always written ``<provider>/<model>`` — in the YAML configs and on
+the command line alike. The first slash splits, so the model name keeps its
+own colons (``ollama/gemma4:e2b``).
 """
 
 from __future__ import annotations
@@ -28,37 +27,26 @@ class ModelRef:
         if self.provider not in PROVIDERS:
             raise SystemExit(
                 f"Unknown provider {self.provider!r} in model reference "
-                f"{self.provider}:{self.model} (known: {', '.join(PROVIDERS)})"
+                f"{self.provider}/{self.model} (known: {', '.join(PROVIDERS)})"
             )
         if not self.model:
             raise SystemExit(f"Empty model name in reference {self.provider!r}")
 
     @classmethod
-    def from_yaml(cls, raw) -> "ModelRef":
-        """Parse the YAML form ``provider:model`` (first colon splits)."""
-        # A non-string means YAML parsed the entry itself — `- ollama: gemma4`
-        # (colon-space) yields a dict, the most natural slip to make here.
-        if not isinstance(raw, str) or ":" not in raw:
+    def parse(cls, raw) -> "ModelRef":
+        """Parse ``provider/model`` (first slash splits)."""
+        # A non-string means YAML parsed the entry itself (e.g. a stray
+        # `key: value` line under `models:`).
+        if not isinstance(raw, str) or "/" not in raw:
             raise SystemExit(
-                f"Model reference {raw!r} must be <provider>:<model> in YAML "
-                f"(e.g. ollama:gemma4:e2b — no space after the colon)"
+                f"Model reference {raw!r} must be <provider>/<model> "
+                f"(e.g. ollama/gemma4:e2b)"
             )
-        provider, _, model = raw.partition(":")
-        return cls(provider, model)
-
-    @classmethod
-    def from_flag(cls, raw: str) -> "ModelRef":
-        """Parse the CLI form ``provider/model`` (first slash splits)."""
-        provider, sep, model = raw.partition("/")
-        if not sep:
-            raise SystemExit(
-                f"Model reference {raw!r} must be <provider>/<model> on the "
-                f"command line (e.g. ollama/gemma4:e2b)"
-            )
+        provider, _, model = raw.partition("/")
         return cls(provider, model)
 
     def __str__(self) -> str:
-        return f"{self.provider}:{self.model}"
+        return f"{self.provider}/{self.model}"
 
     @property
     def local(self) -> bool:
@@ -70,11 +58,11 @@ class ModelRef:
         return f"{self.provider}_{re.sub(r'[:/]', '-', self.model)}"
 
 
-def parse_flag_refs(raw: str | None) -> list[ModelRef] | None:
+def parse_refs(raw: str | None) -> list[ModelRef] | None:
     """Comma-separated ``provider/model`` list from a CLI flag (None passes through)."""
     if raw is None:
         return None
-    refs = [ModelRef.from_flag(part.strip()) for part in raw.split(",") if part.strip()]
+    refs = [ModelRef.parse(part.strip()) for part in raw.split(",") if part.strip()]
     if not refs:
         raise SystemExit("Empty model list")
     return refs

@@ -38,7 +38,7 @@ def root(tmp_path):
     (tmp_path / "corpus.yaml").write_text("doc-a: a.pdf\n")  # require() only
     (tmp_path / "sources").mkdir()
     (tmp_path / "sources" / "doc-a.txt").write_text(SOURCE)
-    (tmp_path / "judges.yaml").write_text("judges:\n  - openai:gpt-5.5\n")
+    (tmp_path / "judges.yaml").write_text("judges:\n  - openai/gpt-5.5\n")
     return BenchmarkRoot(tmp_path)
 
 
