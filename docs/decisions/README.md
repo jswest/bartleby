@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0246 — describe_corpus reports chunk-length stats (median/p90/max) so the agent self-sizes `--preview` instead of raising the 240-char default (issue #246)](GH-0246-describe-corpus-chunk-length-stats-0001.md)
 - [GH-0234 — Graduate the local-summarizer benchmark into VC: local-only, temp-0.0 parity, blind OpenAI judge, schema-gate leaderboard; defer the real run (issue #234)](GH-0234-graduate-summarize-benchmark-to-vc-0001.md)
 - [GH-0243 — A local Ollama provider auto-clamps the caption/summarize worker pools to 1 (issue #243)](GH-0243-clamp-ollama-worker-pools-0001.md)
 - [GH-0232 — Reasoning effort is a unified enum mapped per-provider, via the modern Anthropic effort API (issue #232)](GH-0232-reasoning-effort-knob-0001.md)
