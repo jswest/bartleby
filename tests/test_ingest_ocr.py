@@ -94,3 +94,19 @@ def test_run_surfaces_legible_error_on_tesseract_error(monkeypatch):
         ocr.run(_blank_image())
     assert "Tesseract OCR failed" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, ocr.pytesseract.TesseractError)
+
+
+def test_run_surfaces_legible_error_when_binary_missing(monkeypatch):
+    """A missing tesseract binary raises TesseractNotFoundError — the most common
+    #43 breakage. `run` must wrap it into the legible RuntimeError too, so callers
+    (e.g. pdfplumber's sparse-page classifier) see the actionable cause (#309)."""
+    def _boom(*a, **k):
+        raise ocr.pytesseract.TesseractNotFoundError()
+    monkeypatch.setattr(ocr.pytesseract, "image_to_data", _boom)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ocr.run(_blank_image())
+    assert "Tesseract OCR failed" in str(excinfo.value)
+    assert isinstance(
+        excinfo.value.__cause__, ocr.pytesseract.TesseractNotFoundError
+    )

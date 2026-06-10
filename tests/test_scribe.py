@@ -14,6 +14,11 @@ import bartleby.config
 import bartleby.db.connection
 import bartleby.project
 from bartleby.commands import scribe
+from bartleby.ingest import parsers
+from bartleby.ingest import classify
+from bartleby.ingest import caption
+from bartleby.ingest import parse
+from bartleby.ingest import summary
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest.chunk import resolve_extension
@@ -72,7 +77,7 @@ def isolated_project(tmp_path, monkeypatch):
     # The pool is exercised separately in test_ingest_pool.py with a picklable,
     # model-free parse_fn.
     monkeypatch.setattr(
-        "bartleby.commands.scribe._resolve_max_workers", lambda *a, **k: 1,
+        "bartleby.ingest.resolve._resolve_max_workers", lambda *a, **k: 1,
     )
 
     bartleby.project.create_project("test_proj")
@@ -85,7 +90,6 @@ def mock_embed(monkeypatch):
     def fake(texts):
         return _emb(0.0, len(texts))
     # Patch every import site (commands.scribe imports it directly).
-    monkeypatch.setattr("bartleby.commands.scribe.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake)
     monkeypatch.setattr("bartleby.ingest.images.embed_texts", fake)
     return fake
@@ -219,7 +223,7 @@ def test_persist_parse_reuses_existing_file_hash(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="dup", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -247,7 +251,7 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     with pytest.raises(NotAPdfError) as exc:
-        scribe_module._parse_document(
+        parsers._parse_document(
             src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -256,6 +260,29 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
         )
     assert "HTML page" in str(exc.value)
     assert "No /Root object" not in str(exc.value)
+
+
+def test_scribe_exits_nonzero_when_a_unit_fails(
+    isolated_project, tmp_path, mock_embed
+):
+    """A run that leaves any unit unresolved exits non-zero, so a scripted
+    caller (`bartleby scribe ... && next-step`) halts instead of reading the
+    nothing-ingested run as green (#311). The `.pdf` is really HTML, so parse
+    fails into failed_ingests and no document lands."""
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
+
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(src))
+    assert exc.value.code == 1
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM failed_ingests").fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 def test_scribe_writes_summary_when_provider_configured(
@@ -275,13 +302,13 @@ def test_scribe_writes_summary_when_provider_configured(
 
     stub = _StubProvider(text="## Stub summary\n\nKey points appear here.")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: stub,
     )
     # Bypass docling for the summary chunking too — return one chunk.
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -342,11 +369,11 @@ def test_scribe_summarizes_existing_document_on_later_run(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -381,7 +408,7 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -434,7 +461,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -461,7 +488,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     def _boom(*a, **k):
         raise AssertionError("docling path must not call pdfplumber")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", _boom
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", _boom
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -500,7 +527,7 @@ def test_scribe_dedupes_identical_images_across_documents(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -540,7 +567,7 @@ def test_scribe_captions_many_images_concurrently_in_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdfs = []
@@ -583,7 +610,7 @@ def test_scribe_dedupes_shared_image_within_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
@@ -615,7 +642,8 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 ):
     """A single image whose VLM call raises is recorded as a caption failure;
     the other images in the same concurrent run are still captioned — one bad
-    image never tears down the phase."""
+    image never tears down the phase. The run still exits non-zero, because that
+    one caption is an unresolved unit (#311)."""
     import threading
 
     class _OneFailVision:
@@ -641,7 +669,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
     config["caption_workers"] = 3
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailVision(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailVision(),
     )
 
     pdfs = []
@@ -654,7 +682,9 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
         )
         pdfs.append(str(pdf))
 
-    scribe.main(project="test_proj", files=pdfs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=pdfs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -675,7 +705,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 
 
 def test_resolve_caption_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
 
     # Default when unset or zero; explicit value respected.
@@ -694,7 +724,7 @@ def test_resolve_caption_workers_defaults_and_timings():
 
 
 def test_resolve_caption_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
@@ -731,11 +761,11 @@ def test_scribe_summarizes_many_documents_concurrently_in_one_run(
     )
     stub = _StubProvider(text="summary body")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -760,7 +790,8 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 ):
     """A single document whose summarize call raises is recorded as a summary
     failure; the others in the same concurrent run still summarize — one bad
-    document never tears down the pass."""
+    document never tears down the pass. The run still exits non-zero, because
+    that one summary is an unresolved unit (#311)."""
     import threading
 
     class _OneFailLLM:
@@ -790,11 +821,11 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         lambda: _summary_config(summarize_workers=3),
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailLLM(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailLLM(),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -802,7 +833,9 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
         for i in range(3)
     ]
-    scribe.main(project="test_proj", files=srcs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=srcs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -817,38 +850,52 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 
 
 def test_resolve_summarize_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
 
     # Default when unset or zero; explicit value respected.
     assert scribe_module._resolve_summarize_workers(
-        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {}, effective_provider="openai", timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 0}, effective_provider="openai", timings=False
+    ) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=False) == 9
-    # A cloud LLM provider keeps the configured/default count.
-    assert scribe_module._resolve_summarize_workers(
-        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 9}, effective_provider="openai", timings=False) == 9
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=True) == 1
+        {"summarize_workers": 9}, effective_provider="openai", timings=True) == 1
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama"}, timings=False) == 1
+        {}, effective_provider="ollama", timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+        {"summarize_workers": 8}, effective_provider="ollama", timings=False) == 1
     assert any("summarize_workers > 1 ignored" in w for w in warnings)
+
+
+def test_resolve_summarize_workers_tracks_provider_override():
+    """The clamp keys off the effective provider, not config['provider'] (#314)."""
+    from bartleby.ingest import resolve as scribe_module
+
+    # --provider ollama over a cloud config clamps to 1 (the clamp must not be
+    # bypassed just because config['provider'] is a cloud backend).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai", "summarize_workers": 4},
+        effective_provider="ollama", timings=False) == 1
+    # --provider anthropic over an ollama config keeps the configured count
+    # (no spurious clamp when the run isn't actually against Ollama).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 4},
+        effective_provider="anthropic", timings=False) == 4
 
 
 def test_summarize_all_progress_callback_fires_per_document(
@@ -863,7 +910,7 @@ def test_summarize_all_progress_callback_fires_per_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -874,7 +921,7 @@ def test_summarize_all_progress_callback_fires_per_document(
 
         pending = writer.documents_needing_summary()
         seen: list[tuple[int, int]] = []
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -902,7 +949,7 @@ def test_summarize_all_lane_callback_reports_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="h", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -913,7 +960,7 @@ def test_summarize_all_lane_callback_reports_document(
 
         pending = writer.documents_needing_summary()
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._summarize_all(
+        summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -941,7 +988,7 @@ def test_summarize_all_skips_capped_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             txt, ".txt", file_hash="caphash", file_name="doc.txt",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -954,7 +1001,7 @@ def test_summarize_all_skips_capped_document(
             writer.record_failure("caphash", "doc.txt", "summary", RuntimeError("x"))
 
         stub = _StubProvider()
-        owed, _times = scribe_module._summarize_all(
+        owed, _times = summary._summarize_all(
             writer, writer.documents_needing_summary(),
             llm_provider=stub, llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
@@ -981,7 +1028,7 @@ def test_scribe_ingests_standalone_image_file(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1031,7 +1078,7 @@ def test_scribe_skips_sub_minimum_image_without_calling_vlm(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1128,7 +1175,7 @@ def test_parse_document_stage_callback_fires_extract_then_embed(
     _text_pdf(pdf)
 
     stages: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1149,7 +1196,7 @@ def test_parse_document_reports_page_count(
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
-    parsed = scribe_module._parse_document(
+    parsed = parsers._parse_document(
         pdf, ".pdf", file_hash="h", file_name="doc.pdf",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1170,7 +1217,7 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
 
     # Force every prepared image below the VLM minimum so the skip branch fires.
     monkeypatch.setattr(
-        scribe_module.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+        parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
     )
     # A worker must never touch the console; fail loudly if it tries.
     monkeypatch.setattr(
@@ -1179,10 +1226,10 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
     )
 
     warnings: list[str] = []
-    route = scribe_module._ImageRoute(
+    route = parsers._ImageRoute(
         bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
     )
-    images = scribe_module._parse_image_routes(
+    images = parsers._parse_image_routes(
         [route], archive_root=tmp_path / "archive", vision_enabled=True,
         vision_max_dimension=1024, vision_min_dimension=128,
         on_warn=warnings.append,
@@ -1206,7 +1253,7 @@ def test_parse_document_threads_on_warn_to_the_leaf(
     img.write_bytes(_png_bytes())
 
     warnings: list[str] = []
-    scribe_module._parse_document(
+    parsers._parse_document(
         img, ".png", file_hash="h", file_name="pic.png",
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1233,7 +1280,7 @@ def test_caption_all_progress_callback_fires_per_image(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1243,9 +1290,9 @@ def test_caption_all_progress_callback_fires_per_image(
         document_id = writer.persist_parse(parsed)
 
         seen: list[tuple[int, int]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=lambda done, total: seen.append((done, total)),
@@ -1274,7 +1321,7 @@ def test_caption_all_lane_callback_reports_owning_document(
     conn = open_db("test_proj")
     try:
         writer = scribe_module.Writer(conn)
-        parsed = scribe_module._parse_document(
+        parsed = parsers._parse_document(
             pdf, ".pdf", file_hash="h", file_name="img.pdf",
             pdf_converter="pdfplumber", html_converter="docling",
             sparse_text_threshold=100, ocr_min_confidence=30,
@@ -1284,9 +1331,9 @@ def test_caption_all_lane_callback_reports_owning_document(
         document_id = writer.persist_parse(parsed)
 
         lanes: list[tuple[object, str, str]] = []
-        scribe_module._caption_all(
+        caption._caption_all(
             writer,
-            [scribe_module._DocUnit(document_id, "img.pdf", "h")],
+            [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
             on_progress=None,
@@ -1329,7 +1376,7 @@ def test_is_complete_text_document(isolated_project, tmp_path, mock_embed):
             "SELECT document_id FROM documents"
         ).fetchone()[0]
         writer = scribe.Writer(conn)
-        assert scribe._is_complete(writer, doc_id)
+        assert classify._is_complete(writer, doc_id)
     finally:
         conn.close()
 
@@ -1361,7 +1408,7 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             (doc_id, image_id, None, 0),
         )
         writer = scribe.Writer(conn)
-        assert not scribe._is_complete(writer, doc_id)
+        assert not classify._is_complete(writer, doc_id)
         assert [pi.image_id for pi in writer.uncaptioned_images(doc_id)] == [image_id]
 
         # Caption it → complete, and no longer pending.
@@ -1369,8 +1416,56 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
             "UPDATE images SET analysis_json = '{}', analysis_model = 'm' "
             "WHERE image_id = ?", (image_id,),
         )
-        assert scribe._is_complete(writer, doc_id)
+        assert classify._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
+    finally:
+        conn.close()
+
+
+def test_classify_dedupes_byte_identical_incomplete_resume(isolated_project, tmp_path):
+    """Two byte-identical copies of an incomplete, already-parsed file resume the
+    one document once: the first lands in to_resume, the twin is diverted to
+    duplicates. Without the dedup both resolve to the same document_id and both
+    land in to_resume, so the incomplete tally double-counts a phantom unit (#313)."""
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    a.write_bytes(b"identical image bytes")
+    b.write_bytes(b"identical image bytes")
+    file_hash = classify._hash_file(a)
+    assert classify._hash_file(b) == file_hash
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_hash, "a.jpg", str(a), None, 0),
+        )
+        doc_id = conn.last_insert_rowid()
+        # analysis_json IS NULL → uncaptioned → the document is incomplete, so the
+        # first copy resumes rather than skips.
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, NULL, NULL)",
+            ("imgblob", str(a), 100, 100),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, None, 0),
+        )
+        writer = scribe.Writer(conn)
+        to_parse, to_resume, skipped, duplicates = classify._classify(
+            writer, [(a, ".jpg"), (b, ".jpg")], vision_enabled=True,
+        )
+        assert to_parse == []
+        assert [r.document_id for r in to_resume] == [doc_id]
+        assert duplicates == ["b.jpg"]
+        assert skipped == []
     finally:
         conn.close()
 
@@ -1479,12 +1574,12 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
         description="A green rectangle chart with no axis labels.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1515,14 +1610,14 @@ def test_scribe_persists_authored_date_from_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="2024-09-12",
         ),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1551,14 +1646,14 @@ def test_scribe_drops_malformed_authored_date(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="Q3 2024",
         ),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1589,12 +1684,12 @@ def test_scribe_truncation_note_in_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(text="summary body"),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1739,12 +1834,12 @@ def test_scribe_summarizes_standalone_image_from_image_chunks(
         description="A photo of a red barn in a field.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -1890,7 +1985,7 @@ def test_resolve_format_filter_rejects_unknown_name():
 
 def test_collect_files_single_extensionless_pdf(tmp_path):
     pdf = _text_pdf(tmp_path / "docket_no_ext")
-    sources, unidentified = scribe._collect_files([pdf])
+    sources, unidentified = classify._collect_files([pdf])
     assert sources == [(pdf, ".pdf")]
     assert unidentified == []
 
@@ -1899,7 +1994,7 @@ def test_collect_files_single_unsupported_raises(tmp_path):
     p = tmp_path / "mystery"
     p.write_bytes(b"\x00\x01\x02\x03")
     with pytest.raises(ValueError):
-        scribe._collect_files([p])
+        classify._collect_files([p])
 
 
 def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
@@ -1910,7 +2005,7 @@ def test_collect_files_directory_sniffs_and_reports_unidentified(tmp_path):
     junk = d / "notes"                                      # unidentifiable
     junk.write_bytes(b"\x00\x01\x02\x03")
 
-    sources, unidentified = scribe._collect_files([d])
+    sources, unidentified = classify._collect_files([d])
 
     assert (pdf, ".pdf") in sources
     assert (named, ".pdf") in sources
@@ -1925,7 +2020,7 @@ def test_collect_files_unions_multiple_directories(tmp_path):
     pdf_a = _text_pdf(a / "a.pdf")
     pdf_b = _text_pdf(b / "b.pdf")
 
-    sources, unidentified = scribe._collect_files([a, b])
+    sources, unidentified = classify._collect_files([a, b])
 
     files = {p for p, _ in sources}
     assert files == {pdf_a, pdf_b}
@@ -1938,7 +2033,7 @@ def test_collect_files_dedupes_overlapping_roots(tmp_path):
     pdf = _text_pdf(d / "report.pdf")
 
     # The same file reachable both as an explicit file and under its directory.
-    sources, _ = scribe._collect_files([pdf, d])
+    sources, _ = classify._collect_files([pdf, d])
     assert sources.count((pdf, ".pdf")) == 1
     assert len(sources) == 1
 
@@ -1951,7 +2046,7 @@ def test_collect_files_only_filter_restricts_by_resolved_type(tmp_path):
     png = d / "image.png"
     png.write_bytes(_png_bytes())
 
-    sources, unidentified = scribe._collect_files([d], only={".pdf"})
+    sources, unidentified = classify._collect_files([d], only={".pdf"})
 
     assert sources == [(pdf, ".pdf")]
     # txt and png are intentional exclusions — not lumped into unidentified.
@@ -1966,7 +2061,7 @@ def test_collect_files_only_filter_matches_sniffed_type(tmp_path):
     sniffed = _text_pdf(d / "ATTACHMENT 7 - LOADING FORMS")  # extensionless PDF
     _write_txt(d / "notes.txt", "plain text")
 
-    sources, _ = scribe._collect_files([d], only={".pdf"})
+    sources, _ = classify._collect_files([d], only={".pdf"})
 
     # The content-sniffed PDF is kept by `--only pdf` just like a named one.
     assert sources == [(sniffed, ".pdf")]
@@ -2077,7 +2172,7 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     )
     vision = _FlakyVisionProvider(fail_times=1)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     # Count real pdfplumber parses to prove the second run doesn't re-parse.
@@ -2090,14 +2185,17 @@ def test_scribe_resumes_missing_caption_without_reparsing(
         return real_convert(*a, **k)
 
     monkeypatch.setattr(
-        "bartleby.commands.scribe.pdfplumber_pipeline.convert", counting_convert,
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", counting_convert,
     )
 
     pdf = tmp_path / "doc.pdf"
     _pdf_with_image(pdf, _png_bytes(), text="Durable body text " * 12)
 
     # Run 1: the VLM fails. Text chunks land; the image is recorded uncaptioned.
-    scribe.main(project="test_proj", files=str(pdf))
+    # The uncaptioned image is an unresolved unit, so the run exits non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == 1
     conn = open_db("test_proj")
     try:
@@ -2160,15 +2258,18 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     )
     vision = _FlakyVisionProvider(fail_times=10_000)  # always fails
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdf = tmp_path / "doc.pdf"
     _pdf_with_image(pdf, _png_bytes(), text="Body text " * 12)
 
-    # Each run makes exactly one more attempt until the cap is reached.
+    # Each run makes exactly one more attempt until the cap is reached. The
+    # image never captions, so every run exits non-zero on the unresolved unit (#311).
     for _ in range(MAX_INGEST_ATTEMPTS):
-        scribe.main(project="test_proj", files=str(pdf))
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
 
     conn = open_db("test_proj")
@@ -2184,8 +2285,11 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     finally:
         conn.close()
 
-    # A further run is a no-op against the VLM — the unit is capped.
-    scribe.main(project="test_proj", files=str(pdf))
+    # A further run is a no-op against the VLM — the unit is capped. It's still
+    # unresolved, so the run keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
     conn = open_db("test_proj")
     try:
@@ -2238,7 +2342,10 @@ def test_writer_persist_parse_dedupes_shared_image(isolated_project, tmp_path):
 
 def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
     """record_failure upserts (bumping attempts), failures() reports them with
-    the capped flag, and clear_failure removes the row."""
+    the capped flag, and _clear_failure removes the row.
+
+    _clear_failure assumes the caller already holds a transaction (it is folded
+    into the persist_* writes, #310), so the test wraps it in ``with conn``."""
     from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
 
     conn = open_db("test_proj")
@@ -2255,11 +2362,67 @@ def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
         assert "boom" in failure.error
         assert failure.capped is True
 
-        writer.clear_failure("h", "parse")
+        with conn:
+            writer._clear_failure("h", "parse")
         assert writer.attempts("h", "parse") == 0
         assert writer.failures() == []
     finally:
         conn.close()
+
+
+def test_report_failures_silent_when_no_failures(isolated_project, monkeypatch):
+    """The end-of-run block emits nothing when every unit completed."""
+    from bartleby.ingest.writer import Writer
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe.console, "warn", lambda m: warnings.append(m))
+
+    conn = open_db("test_proj")
+    try:
+        scribe._report_failures(Writer(conn).failures())
+    finally:
+        conn.close()
+    assert warnings == []
+
+
+def test_report_failures_warns_with_caps_and_display_limit(
+    isolated_project, monkeypatch
+):
+    """The end-of-run warn block headlines the count + capped wording, flags each
+    unit as capped vs will-retry, and truncates the listing at 10 with a pointer."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe.console, "warn", lambda m: warnings.append(m))
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        # Two capped units (driven to the cap) + eleven that will retry → 13 total,
+        # past the 10-line display limit.
+        for _ in range(MAX_INGEST_ATTEMPTS):
+            writer.record_failure("capped0", "capped0.pdf", "parse", "boom")
+            writer.record_failure("capped1", "capped1.pdf", "caption", "boom")
+        for i in range(11):
+            writer.record_failure(f"retry{i}", f"retry{i}.pdf", "summary", "later")
+
+        scribe._report_failures(writer.failures())
+    finally:
+        conn.close()
+
+    blob = "\n".join(warnings)
+    # Header: total count, capped subtotal + attempt wording, retry tail.
+    assert "13 ingest unit(s) did not complete" in blob
+    assert f"2 capped after {MAX_INGEST_ATTEMPTS} attempts" in blob
+    assert "the rest will retry on the next run" in blob
+    # Per-unit flags, both branches.
+    assert "capped — not retried" in blob
+    assert f"will retry (attempt 1/{MAX_INGEST_ATTEMPTS})" in blob
+    # Display cap: only 10 unit lines, then the "… and N more" pointer.
+    unit_lines = [w for w in warnings if w.startswith("  [")]
+    assert len(unit_lines) == 10
+    assert "… and 3 more" in blob
+    assert "bartleby project info" in blob
 
 
 def test_scribe_timings_emits_aggregate_json(
@@ -2300,11 +2463,11 @@ def test_scribe_timings_includes_decoupled_summarize_stage(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.commands.scribe.chunk_markdown_string",
+        "bartleby.ingest.summary.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 
@@ -2334,7 +2497,7 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
 
 def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
     from types import SimpleNamespace
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     monkeypatch.setattr(scribe_module.os, "cpu_count", lambda: cores)
     monkeypatch.setattr(
         "psutil.virtual_memory",
@@ -2343,13 +2506,13 @@ def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
 
 
 def test_resolve_max_workers_timings_forces_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=16, free_gb=128)
     assert scribe_module._resolve_max_workers({"max_workers": 8}, timings=True) == 1
 
 
 def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RAM-bound: 8 cores but only ~48GB free → 48 // 12.0 = 4 workers.
     _fake_machine(monkeypatch, cores=8, free_gb=48)
     assert scribe_module._resolve_max_workers({}, timings=False) == 4
@@ -2359,7 +2522,7 @@ def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
 
 
 def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RESERVED_CORES (2) is held back from the auto-pick, never below 1.
     _fake_machine(monkeypatch, cores=4, free_gb=128)
     assert scribe_module._resolve_max_workers({}, timings=False) == 2   # 4 − 2
@@ -2370,13 +2533,13 @@ def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
 
 
 def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 12.0 = 0 → floored to 1
     assert scribe_module._resolve_max_workers({}, timings=False) == 1
 
 
 def test_resolve_max_workers_honors_explicit_value_over_auto_with_warning(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=4, free_gb=128)   # auto = 4 − 2 = 2
     warned: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", lambda m: warned.append(m))
@@ -2444,5 +2607,132 @@ def test_scribe_warns_on_config_drift(
         assert conn.cursor().execute(
             "SELECT COUNT(*) FROM ingests"
         ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def _text_pdf_config():
+    """Image-free pdfplumber ingest — no vision provider, no summary pass, so the
+    only stage that can fail (or be capped) is parse."""
+    return {
+        "summary_depth": "none",
+        "pdf_converter": "pdfplumber", "html_converter": "docling",
+        "sparse_text_threshold": 100, "ocr_min_confidence": 30,
+    }
+
+
+def test_scribe_records_then_clears_a_parse_failure(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A parse that fails once is recorded in failed_ingests (stage='parse') with
+    nothing persisted; a later clean run lands the document and clears the
+    failure — the record/clear lifecycle caption/summary already have (#307)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _text_pdf_config,
+    )
+
+    import bartleby.ingest.pdfplumber as pp
+    real_convert = pp.convert
+    parses = {"n": 0}
+
+    def flaky_convert(*a, **k):
+        parses["n"] += 1
+        if parses["n"] == 1:
+            raise RuntimeError("transient parse error")
+        return real_convert(*a, **k)
+
+    monkeypatch.setattr(
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", flaky_convert,
+    )
+
+    pdf = _text_pdf(tmp_path / "doc.pdf", text="Durable body text " * 12)
+
+    # Run 1: the parse fails. Recorded as a parse failure; nothing persisted.
+    # The unresolved unit makes the run exit non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
+    assert parses["n"] == 1
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "parse" and attempts == 1
+    finally:
+        conn.close()
+
+    # Run 2: the parse recovers. The document lands; the failure row clears.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == 2
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM failed_ingests"
+        ).fetchone()[0] == 0                                 # failure cleared
+    finally:
+        conn.close()
+
+
+def test_scribe_caps_parse_retries_and_stops_reparsing(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A deterministically-failing parse is retried up to the cap, recorded, then
+    never re-parsed again — the parse stage now honours MAX_INGEST_ATTEMPTS like
+    caption/summary, so a corrupt file can't loop the most expensive stage
+    forever and can't silently read as done (#307)."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _text_pdf_config,
+    )
+
+    parses = {"n": 0}
+
+    def failing_convert(*a, **k):
+        parses["n"] += 1
+        raise RuntimeError("corrupt PDF")
+
+    monkeypatch.setattr(
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", failing_convert,
+    )
+
+    pdf = _text_pdf(tmp_path / "doc.pdf", text="Body text " * 12)
+
+    # Each run makes exactly one more parse attempt until the cap is reached.
+    # The parse never lands, so every run exits non-zero on the unresolved unit (#311).
+    for _ in range(MAX_INGEST_ATTEMPTS):
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
+    assert parses["n"] == MAX_INGEST_ATTEMPTS
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "parse" and attempts == MAX_INGEST_ATTEMPTS
+        # The parse never succeeded — nothing persisted.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # A further run is a no-op against the converter — the unit is capped. Still
+    # unresolved, so it keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
+    assert parses["n"] == MAX_INGEST_ATTEMPTS                # NOT re-parsed
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT attempts FROM failed_ingests"
+        ).fetchone()[0] == MAX_INGEST_ATTEMPTS               # not bumped past cap
     finally:
         conn.close()

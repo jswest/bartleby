@@ -111,6 +111,53 @@ def test_convert_marks_sparse_pages_and_saves_render(tmp_path):
     assert page.page_render_png.startswith(b"\x89PNG")
 
 
+def _mixed_sparse_and_text_pdf(path) -> None:
+    # Page 1 is sparse ("abc"); page 2 has plenty of text to clear the threshold.
+    c = canvas.Canvas(str(path), pagesize=letter)
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 720, "abc")
+    c.showPage()
+    c.setFont("Helvetica", 12)
+    text = c.beginText(72, 720)
+    for _ in range(6):
+        text.textLine("This page has plenty of text to clear the sparse threshold.")
+    c.drawText(text)
+    c.showPage()
+    c.save()
+
+
+def test_convert_degrades_to_vlm_when_ocr_raises(tmp_path, monkeypatch):
+    # #309: a Tesseract failure during sparse-page classification (broken
+    # install, locked TMPDIR) must NOT fail the whole PDF parse. The sparse page
+    # degrades to the VLM route and every non-sparse page still chunks normally.
+    src = tmp_path / "mixed.pdf"
+    _mixed_sparse_and_text_pdf(src)
+
+    def _boom(_image_bytes):
+        raise RuntimeError("Tesseract OCR failed (TesseractNotFoundError).")
+
+    monkeypatch.setattr(pp.ocr_module, "run", _boom)
+
+    # The parse succeeds rather than propagating the OCR failure.
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    assert result.page_count == 2
+    sparse_page, text_page = result.pages
+
+    # Sparse page: OCR raised → routed to the VLM (content_type None, no text),
+    # with its render preserved so the caller can hand it to the VLM.
+    assert sparse_page.is_sparse
+    assert sparse_page.content_type is None
+    assert sparse_page.text == ""
+    assert sparse_page.page_render_png is not None
+    assert sparse_page.page_render_png.startswith(b"\x89PNG")
+
+    # Non-sparse page is untouched by the OCR failure — still chunks as text.
+    assert not text_page.is_sparse
+    assert text_page.content_type == "text"
+    assert "plenty of text" in text_page.text.lower()
+
+
 def test_convert_does_not_render_text_pages_without_images(tmp_path):
     # Regression: rendering every text-only page is wasteful. Pages that have
     # neither sparse text nor embedded images should skip rendering entirely.

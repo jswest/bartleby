@@ -63,6 +63,22 @@ def _parsed(file_hash: str = "h1", chunks=None) -> ParsedDocument:
     )
 
 
+def _persist_image_doc(writer, conn, file_hash: str, image_hash: str) -> int:
+    """Persist a one-image document and return the image's id."""
+    writer.persist_parse(ParsedDocument(
+        file_hash=file_hash, file_name="img.pdf",
+        archive_path=Path("/a/img.pdf"),
+        page_count=1, token_count=5, document_chunks=[],
+        images=[ParsedImage(
+            hash=image_hash, archive_path=Path("/a/img.jpg"),
+            width=100, height=80, page_number=1, image_index_on_page=0,
+        )],
+    ))
+    return conn.cursor().execute(
+        "SELECT image_id FROM images WHERE file_hash = ?", (image_hash,)
+    ).fetchone()[0]
+
+
 def test_begin_run_records_redacted_snapshot(project_conn):
     writer = Writer(project_conn)
     run_id = writer.begin_run({"provider": "anthropic", "model": "x"})
@@ -119,18 +135,8 @@ def test_persist_summary_and_caption_stamp_run(project_conn):
     writer = Writer(project_conn)
     run_id = writer.begin_run({})
     document_id = writer.persist_parse(_parsed(chunks=[_chunk("body")]))
-    # Re-extend the parsed doc with an image so we can caption it.
-    writer.persist_parse(ParsedDocument(
-        file_hash="h2", file_name="img.pdf", archive_path=Path("/a/img.pdf"),
-        page_count=1, token_count=5, document_chunks=[],
-        images=[ParsedImage(
-            hash="imghash", archive_path=Path("/a/img.jpg"),
-            width=100, height=80, page_number=1, image_index_on_page=0,
-        )],
-    ))
-    image_id = project_conn.cursor().execute(
-        "SELECT image_id FROM images WHERE file_hash = 'imghash'"
-    ).fetchone()[0]
+    # A second, image-bearing document so we have something to caption.
+    image_id = _persist_image_doc(writer, project_conn, "h2", "imghash")
 
     writer.persist_caption(ImageCaption(
         image_id=image_id, analysis_json="{}", analysis_model="vlm-x",
@@ -156,6 +162,103 @@ def test_persist_summary_and_caption_stamp_run(project_conn):
         )
     }
     assert other_runs == {run_id}
+
+
+def test_persist_caption_replay_is_noop(project_conn):
+    # Replaying a caption (e.g. two concurrent scribe runs) must be a true
+    # no-op: no second chunk insert, no UNIQUE-constraint crash, and the
+    # original analysis left untouched (#308).
+    writer = Writer(project_conn)
+    writer.begin_run({})
+    image_id = _persist_image_doc(writer, project_conn, "h3", "replayhash")
+
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"first": true}',
+        analysis_model="vlm-x", chunks=[_chunk("a captioned figure")],
+    ))
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"second": true}',
+        analysis_model="vlm-y", chunks=[_chunk("a replayed caption")],
+    ))  # must not raise
+
+    cur = project_conn.cursor()
+    analysis_json, analysis_model = cur.execute(
+        "SELECT analysis_json, analysis_model FROM images WHERE image_id = ?",
+        (image_id,),
+    ).fetchone()
+    assert analysis_json == '{"first": true}'
+    assert analysis_model == "vlm-x"
+    texts = [r[0] for r in cur.execute(
+        "SELECT text FROM chunks WHERE source_kind = 'image' AND source_id = ?",
+        (image_id,),
+    )]
+    assert texts == ["a captioned figure"]
+
+
+def test_persist_parse_clears_failed_ingest(project_conn):
+    # A unit that failed once then parses successfully must shed its
+    # failed_ingests row in the same transaction as the parse — no separate
+    # clear that a crash could skip (#310).
+    writer = Writer(project_conn)
+    writer.record_failure("h1", "doc.txt", "parse", RuntimeError("boom"))
+    assert writer.attempts("h1", "parse") == 1
+
+    writer.persist_parse(_parsed("h1"))
+
+    assert writer.attempts("h1", "parse") == 0
+    assert writer.failures() == []
+
+
+def test_persist_caption_clears_failed_ingest(project_conn):
+    writer = Writer(project_conn)
+    image_id = _persist_image_doc(writer, project_conn, "h2", "imghash")
+    writer.record_failure("imghash", "img.pdf", "caption", RuntimeError("boom"))
+
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json="{}", analysis_model="vlm-x",
+        chunks=[_chunk("a captioned figure")],
+    ))
+
+    assert writer.attempts("imghash", "caption") == 0
+    assert writer.failures() == []
+
+
+def test_persist_caption_clears_failed_ingest_on_replay(project_conn):
+    # Even when the caption UPDATE matches nothing (the image was already
+    # captioned via a sibling document), a lingering caption failure for that
+    # image is still cleared — the clear runs before the no-op guard (#310).
+    writer = Writer(project_conn)
+    image_id = _persist_image_doc(writer, project_conn, "h2", "imghash")
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"first": true}',
+        analysis_model="vlm-x", chunks=[_chunk("a captioned figure")],
+    ))
+    writer.record_failure("imghash", "img.pdf", "caption", RuntimeError("ghost"))
+
+    # Replay: analysis_json is already set, so the UPDATE changes no row.
+    writer.persist_caption(ImageCaption(
+        image_id=image_id, analysis_json='{"second": true}',
+        analysis_model="vlm-y", chunks=[_chunk("ignored on replay")],
+    ))
+
+    assert writer.attempts("imghash", "caption") == 0
+    assert writer.failures() == []
+
+
+def test_persist_summary_clears_failed_ingest(project_conn):
+    writer = Writer(project_conn)
+    document_id = writer.persist_parse(_parsed("h1", chunks=[_chunk("body")]))
+    writer.record_failure("h1", "doc.txt", "summary", RuntimeError("boom"))
+
+    writer.persist_summary(
+        document_id,
+        SummaryResult(title="T", description="D", text="S", model="m",
+                      truncated_from_tokens=None, authored_date=None),
+        [_chunk("summary chunk")],
+    )
+
+    assert writer.attempts("h1", "summary") == 0
+    assert writer.failures() == []
 
 
 def test_no_run_leaves_provenance_null(project_conn):

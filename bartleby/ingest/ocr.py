@@ -32,11 +32,17 @@ def run(image_bytes: bytes) -> OcrResult:
         data = pytesseract.image_to_data(
             img, output_type=pytesseract.Output.DICT,
         )
-    except (pytesseract.TesseractError, UnicodeDecodeError) as e:
+    except (
+        pytesseract.TesseractError,
+        pytesseract.TesseractNotFoundError,
+        UnicodeDecodeError,
+    ) as e:
         # pytesseract writes the image to a temp file under $TMPDIR and shells
         # out to `tesseract`. When that subprocess can't read the temp file,
         # tesseract emits a non-UTF-8 diagnostic and pytesseract crashes
         # decoding it with a UnicodeDecodeError that buries the real cause.
+        # A missing binary raises TesseractNotFoundError — the most common #43
+        # breakage — which we likewise re-wrap so callers see the legible cause.
         # Re-raise something legible and point at the usual culprit. See #43.
         raise RuntimeError(
             f"Tesseract OCR failed ({type(e).__name__}: {e}). The tesseract "

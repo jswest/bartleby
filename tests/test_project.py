@@ -99,6 +99,71 @@ def test_project_info_reports_v1_stats(projects_root):
     }
 
 
+def _seed_failed_ingests(name: str, rows: list[tuple[str, str, str, str, int]]) -> None:
+    """Insert (file_hash, file_name, stage, error, attempts) rows into failed_ingests."""
+    conn = open_db(name)
+    try:
+        conn.cursor().executemany(
+            "INSERT INTO failed_ingests "
+            "(file_hash, file_name, stage, error, attempts, last_attempt) "
+            "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            rows,
+        )
+    finally:
+        conn.close()
+
+
+def test_project_info_reports_failed_ingests(projects_root):
+    """get_project_info counts every failed unit and, separately, the capped ones."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    bartleby.project.create_project("alpha")
+    # No failures yet → both counters sit at zero.
+    assert bartleby.project.get_project_info("alpha")["failed_ingests"] == {
+        "total": 0, "capped": 0,
+    }
+
+    _seed_failed_ingests("alpha", [
+        ("h1", "capped.pdf", "parse", "boom", MAX_INGEST_ATTEMPTS),
+        ("h2", "over.pdf", "caption", "boom", MAX_INGEST_ATTEMPTS + 2),
+        ("h3", "retry.pdf", "summary", "boom", 1),
+    ])
+
+    failed = bartleby.project.get_project_info("alpha")["failed_ingests"]
+    assert failed == {"total": 3, "capped": 2}
+
+
+def test_project_info_command_renders_failed_units_row(projects_root, monkeypatch):
+    """`bartleby project info` renders the Failed units row only when units failed."""
+    import io
+
+    from rich.console import Console
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    bartleby.project.create_project("alpha")
+
+    def _render() -> str:
+        buf = io.StringIO()
+        monkeypatch.setattr(project_cmd, "_console", Console(file=buf, width=200))
+        project_cmd.info(name="alpha")
+        return buf.getvalue()
+
+    # No failures → no row.
+    assert "Failed units" not in _render()
+
+    _seed_failed_ingests("alpha", [
+        ("h1", "capped.pdf", "parse", "boom", MAX_INGEST_ATTEMPTS),
+        ("h2", "retry.pdf", "summary", "boom", 1),
+    ])
+
+    out = _render()
+    assert "Failed units" in out
+    assert "2 incomplete" in out
+    assert "1 capped, not retried" in out
+
+
 def test_delete_project_removes_dir_and_clears_active(projects_root):
     bartleby.project.create_project("alpha")
     bartleby.project.delete_project("alpha")

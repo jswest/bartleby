@@ -323,6 +323,7 @@ class Writer:
         duplicates up front; this is the belt-and-braces guard at the write itself.
         """
         with self.conn:
+            self._clear_failure(parsed.file_hash, "parse")
             existing = self.document_id_for(parsed.file_hash)
             if existing is not None:
                 return existing
@@ -369,17 +370,32 @@ class Writer:
     def persist_caption(self, caption: ImageCaption) -> None:
         """Fill an image row's caption (analysis + chunks) atomically.
 
-        The ``analysis_json IS NULL`` guard makes this idempotent: a caption
-        already applied (a shared image captioned via a sibling document) is a
-        no-op rather than a double-write.
+        The ``analysis_json IS NULL`` guard makes this idempotent: if the
+        UPDATE matches no row (shared image already captioned via a sibling
+        document, or a replayed unit), the chunk insert is skipped too — a
+        replay can't trip the chunks UNIQUE constraint and read as a caption
+        failure.
+
+        The failure clear runs before that guard so a unit captioned via a
+        sibling document (UPDATE matches nothing) still drops any lingering
+        ``failed_ingests`` row — and it shares this transaction, so no crash
+        window leaves a captioned image reading as failed (#310).
         """
         with self.conn:
             cur = self.conn.cursor()
+            row = cur.execute(
+                "SELECT file_hash FROM images WHERE image_id = ?",
+                (caption.image_id,),
+            ).fetchone()
+            if row is not None:
+                self._clear_failure(row[0], "caption")
             cur.execute(
                 "UPDATE images SET analysis_json = ?, analysis_model = ? "
                 "WHERE image_id = ? AND analysis_json IS NULL",
                 (caption.analysis_json, caption.analysis_model, caption.image_id),
             )
+            if self.conn.changes() == 0:
+                return
             if caption.chunks:
                 insert_image_chunks(
                     self.conn, caption.image_id, caption.chunks,
@@ -392,9 +408,18 @@ class Writer:
         summary: SummaryResult,
         summary_chunks: list[ChunkInput],
     ) -> int:
-        """Replace a document's summary (row + chunks) atomically."""
+        """Replace a document's summary (row + chunks) atomically.
+
+        Drops any ``failed_ingests`` summary row in the same transaction (#310).
+        """
         with self.conn:
             cur = self.conn.cursor()
+            row = cur.execute(
+                "SELECT file_hash FROM documents WHERE document_id = ?",
+                (document_id,),
+            ).fetchone()
+            if row is not None:
+                self._clear_failure(row[0], "summary")
             prior = cur.execute(
                 "SELECT summary_id FROM summaries WHERE document_id = ?",
                 (document_id,),
@@ -453,13 +478,19 @@ class Writer:
                 (file_hash, file_name, stage, str(error)),
             )
 
-    def clear_failure(self, file_hash: str, stage: str) -> None:
-        """Drop a unit's failure record — called when the unit finally succeeds."""
-        with self.conn:
-            self.conn.cursor().execute(
-                "DELETE FROM failed_ingests WHERE file_hash = ? AND stage = ?",
-                (file_hash, stage),
-            )
+    def _clear_failure(self, file_hash: str, stage: str) -> None:
+        """Drop a unit's failure record once it succeeds.
+
+        Folded into each ``persist_*`` and so runs inside their transaction —
+        the payload write and the failure clear commit together, closing the
+        crash window that once left a durably-complete unit reading as failed
+        (#310). The leading underscore is the contract: the caller must already
+        hold the connection's transaction (it opens none of its own).
+        """
+        self.conn.cursor().execute(
+            "DELETE FROM failed_ingests WHERE file_hash = ? AND stage = ?",
+            (file_hash, stage),
+        )
 
     def failures(self) -> list[FailedUnit]:
         """Every still-unresolved failed unit, oldest attempt first."""
