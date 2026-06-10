@@ -45,7 +45,7 @@ Validation failures raise. Don't insert malformed summaries silently.
 
 ### Memory-off enforcement
 
-A session with `memory_enabled = 0` must not see *other sessions'* findings — enforced at the **script level**, not the prompt level. Two enforcement shapes: `skill_scripts/search.py` silently excludes **all** findings from results regardless of flags (ranked retrieval is the contamination vector — don't soften this); the direct-read commands `read_finding` / `list_findings` instead narrow to the session's **own** findings (a run can read back what it wrote, never another session's). `save_finding` stays open so a memory-off run can still produce findings for later comparison.
+A session with `memory_enabled = 0` must not see *other sessions'* findings — enforced at the **script level**, not the prompt level. Two enforcement shapes: `skill_scripts/search.py` silently excludes **all** findings from results regardless of flags (ranked retrieval is the contamination vector — don't soften this); the direct-read commands `read_finding` / `list_findings` instead narrow to the session's **own** findings (a run can read back what it wrote, never another session's), and `read_chunks` applies the same wall to finding-kind chunks reached by id — foreign ones fall into its `missing` list (`--chunks`) or raise `MEMORY_OFF` (`--around-chunk`), since chunk ids would otherwise be a back door to other sessions' finding bodies. `save_finding` stays open so a memory-off run can still produce findings for later comparison.
 
 ### Truncation note
 

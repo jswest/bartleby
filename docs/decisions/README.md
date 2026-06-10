@@ -14,6 +14,7 @@ Current-state architecture (invariants, conventions) lives in
 [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md); this folder is the *why* behind
 past calls, read on demand.
 
+- [GH-0271 — read_chunks honors the memory wall: a memory-off session can't read other sessions' finding chunks (foreign `--chunks` ids fall to `missing`, foreign `--around-chunk` raises `MEMORY_OFF`) (issue #271)](GH-0271-read-chunks-honors-the-memory-wall-0001.md)
 - [GH-0248 — `scan --count-by` groups by a regex capture (per-match counts); a fold primitive with a stated not-a-query-engine boundary, `--extract` deferred, agent-proportionate runaway guard (issue #248)](GH-0248-count-by-regex-capture-0001.md)
 - [GH-0246 — describe_corpus reports chunk-length stats (median/p90/max) so the agent self-sizes `--preview` instead of raising the 240-char default (issue #246)](GH-0246-describe-corpus-chunk-length-stats-0001.md)
 - [GH-0234 — Graduate the local-summarizer benchmark into VC: local-only, temp-0.0 parity, blind OpenAI judge, schema-gate leaderboard; defer the real run (issue #234)](GH-0234-graduate-summarize-benchmark-to-vc-0001.md)
