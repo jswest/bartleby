@@ -855,17 +855,15 @@ def test_resolve_summarize_workers_defaults_and_timings():
 
     # Default when unset or zero; explicit value respected.
     assert scribe_module._resolve_summarize_workers(
-        {}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {}, effective_provider="openai", timings=False) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 0}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 0}, effective_provider="openai", timings=False
+    ) == DEFAULT_SUMMARIZE_WORKERS
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=False) == 9
-    # A cloud LLM provider keeps the configured/default count.
-    assert scribe_module._resolve_summarize_workers(
-        {"provider": "openai"}, timings=False) == DEFAULT_SUMMARIZE_WORKERS
+        {"summarize_workers": 9}, effective_provider="openai", timings=False) == 9
     # --timings forces a sequential baseline regardless of config.
     assert scribe_module._resolve_summarize_workers(
-        {"summarize_workers": 9}, timings=True) == 1
+        {"summarize_workers": 9}, effective_provider="openai", timings=True) == 1
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
@@ -876,12 +874,28 @@ def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama"}, timings=False) == 1
+        {}, effective_provider="ollama", timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
     assert scribe_module._resolve_summarize_workers(
-        {"provider": "ollama", "summarize_workers": 8}, timings=False) == 1
+        {"summarize_workers": 8}, effective_provider="ollama", timings=False) == 1
     assert any("summarize_workers > 1 ignored" in w for w in warnings)
+
+
+def test_resolve_summarize_workers_tracks_provider_override():
+    """The clamp keys off the effective provider, not config['provider'] (#314)."""
+    from bartleby.ingest import resolve as scribe_module
+
+    # --provider ollama over a cloud config clamps to 1 (the clamp must not be
+    # bypassed just because config['provider'] is a cloud backend).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "openai", "summarize_workers": 4},
+        effective_provider="ollama", timings=False) == 1
+    # --provider anthropic over an ollama config keeps the configured count
+    # (no spurious clamp when the run isn't actually against Ollama).
+    assert scribe_module._resolve_summarize_workers(
+        {"provider": "ollama", "summarize_workers": 4},
+        effective_provider="anthropic", timings=False) == 4
 
 
 def test_summarize_all_progress_callback_fires_per_document(
@@ -1404,6 +1418,54 @@ def test_is_complete_false_when_image_uncaptioned(isolated_project):
         )
         assert classify._is_complete(writer, doc_id)
         assert writer.uncaptioned_images(doc_id) == []
+    finally:
+        conn.close()
+
+
+def test_classify_dedupes_byte_identical_incomplete_resume(isolated_project, tmp_path):
+    """Two byte-identical copies of an incomplete, already-parsed file resume the
+    one document once: the first lands in to_resume, the twin is diverted to
+    duplicates. Without the dedup both resolve to the same document_id and both
+    land in to_resume, so the incomplete tally double-counts a phantom unit (#313)."""
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    a.write_bytes(b"identical image bytes")
+    b.write_bytes(b"identical image bytes")
+    file_hash = classify._hash_file(a)
+    assert classify._hash_file(b) == file_hash
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (file_hash, "a.jpg", str(a), None, 0),
+        )
+        doc_id = conn.last_insert_rowid()
+        # analysis_json IS NULL → uncaptioned → the document is incomplete, so the
+        # first copy resumes rather than skips.
+        cur.execute(
+            "INSERT INTO images (file_hash, file_path, width, height, "
+            "analysis_json, analysis_model) VALUES (?, ?, ?, ?, NULL, NULL)",
+            ("imgblob", str(a), 100, 100),
+        )
+        image_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_images "
+            "(document_id, image_id, page_number, image_index_on_page) "
+            "VALUES (?, ?, ?, ?)",
+            (doc_id, image_id, None, 0),
+        )
+        writer = scribe.Writer(conn)
+        to_parse, to_resume, skipped, duplicates = classify._classify(
+            writer, [(a, ".jpg"), (b, ".jpg")], vision_enabled=True,
+        )
+        assert to_parse == []
+        assert [r.document_id for r in to_resume] == [doc_id]
+        assert duplicates == ["b.jpg"]
+        assert skipped == []
     finally:
         conn.close()
 
