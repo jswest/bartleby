@@ -2736,3 +2736,49 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
         ).fetchone()[0] == MAX_INGEST_ATTEMPTS               # not bumped past cap
     finally:
         conn.close()
+
+
+def test_persist_parse_rolls_back_on_mid_unit_failure(isolated_project, tmp_path):
+    """persist_parse is one transaction: a failure *after* the documents INSERT
+    leaves no trace in documents/chunks/images.
+
+    The "atomic parse" invariant — a documents row implies a finished parse, so
+    resume only re-runs missing units — rides entirely on persist_parse's single
+    ``with self.conn`` (writer.py). This test forces a failure mid-unit (a
+    wrong-sized embedding on the second document chunk, which _validate rejects
+    after the documents row is already inserted) and asserts the whole unit
+    rolled back. A refactor that split that transaction would pass the rest of
+    the suite while silently committing a partial parse that reads as complete
+    (load-bearing under #254, which writes N+1 documents rows per file).
+    """
+    from bartleby.db.chunks import ChunkInput
+    from bartleby.ingest.writer import ParsedDocument, ParsedImage, Writer
+
+    good, bad = _emb(0.0, 1)[0], [0.1] * (EMBEDDING_DIM + 1)
+    parsed = ParsedDocument(
+        file_hash="atomic", file_name="atomic.pdf",
+        archive_path=tmp_path / "atomic.pdf", page_count=1, token_count=2,
+        document_chunks=[
+            ChunkInput(text="First chunk lands fine.", embedding=good, chunk_index=0),
+            # Second chunk's embedding is one dim too long: insert_document_chunks
+            # validates the batch and raises *after* the documents INSERT.
+            ChunkInput(text="Second chunk is poison.", embedding=bad, chunk_index=1),
+        ],
+        images=[ParsedImage(
+            hash="atomic-img", archive_path=tmp_path / "i.jpg",
+            width=10, height=10, page_number=1, image_index_on_page=1,
+        )],
+    )
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        with pytest.raises(ValueError, match="dims"):
+            writer.persist_parse(parsed)
+
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
+    finally:
+        conn.close()
