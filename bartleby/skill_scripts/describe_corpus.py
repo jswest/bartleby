@@ -10,9 +10,14 @@ After reading it once ("689 docs, 2023–2026, all carry ch/nyseg tags, 12
 missing summaries, mass clustered in 2024"), issue *targeted* ``list_documents``
 calls (scoped by ``--tag`` / date) or jump straight to ``search``.
 
-"Corpus" counts (``chunk_count`` / ``content_mix``) cover ingested material only
-— ``source_kind IN ('document','image')``. Summary and finding chunks are
-derived agent artifacts and are deliberately excluded.
+"Corpus" counts (``chunk_count`` / ``content_mix`` / ``chunk_length``) cover
+ingested material only — ``source_kind IN ('document','image')``. Summary and
+finding chunks are derived agent artifacts and are deliberately excluded.
+
+``chunk_length`` (median / p90 / max chars, nearest-rank percentiles over those
+same chunks) is the one aggregate that gathers per-row lengths rather than
+folding in SQL — still cheap, and it lets an agent right-size ``--preview`` up
+front: chunks running ~800 chars mean the 240-char default clips most of them.
 
 Honesty note: ``authored_date`` is summarizer-inferred and silently stored NULL
 on anything that isn't a clean ``YYYY-MM-DD``, so it's frequently absent. The
@@ -42,6 +47,9 @@ Output:
       "tags": [{"name": str, "document_count": int}, ...],
       "summary_coverage": {"summarized": int, "unsummarized": int},
       "content_mix": [{"content_type": str|null, "chunk_count": int}, ...],
+      "chunk_length": {            # chars, over ingested chunks; null when none
+        "median": int|null, "p90": int|null, "max": int|null
+      },
       "largest_documents": [
         {"id": int, "file_name": str, "title": str|null, "token_count": int}, ...
       ]
@@ -52,6 +60,7 @@ Output:
 from __future__ import annotations
 
 import argparse
+import math
 
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
@@ -81,6 +90,24 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _percentile(sorted_values: list[int], pct: float) -> int:
+    """Nearest-rank percentile over a non-empty ascending list (no interpolation)."""
+    rank = math.ceil(pct / 100 * len(sorted_values))
+    return sorted_values[max(rank - 1, 0)]
+
+
+def _chunk_length_stats(lengths: list[int]) -> dict:
+    """median / p90 / max char length over an unsorted list; nulls when empty."""
+    if not lengths:
+        return {"median": None, "p90": None, "max": None}
+    ordered = sorted(lengths)
+    return {
+        "median": _percentile(ordered, 50),
+        "p90": _percentile(ordered, 90),
+        "max": ordered[-1],
+    }
+
+
 def _empty_overview() -> dict:
     """The all-zero overview for a scope that matched no documents."""
     return {
@@ -95,6 +122,7 @@ def _empty_overview() -> dict:
         "tags": [],
         "summary_coverage": {"summarized": 0, "unsummarized": 0},
         "content_mix": [],
+        "chunk_length": _chunk_length_stats([]),
         "largest_documents": [],
     }
 
@@ -154,6 +182,15 @@ def work(*, conn, args, session_id) -> dict:
         )
     ]
     chunk_count = sum(row["chunk_count"] for row in content_mix)
+
+    # Chunk-length shape over that same ingested set, so an agent can size
+    # --preview without learning by repeated mid-chunk truncation. length() is
+    # chars; the gather is the one non-folded aggregate here (see docstring).
+    chunk_length = _chunk_length_stats([
+        n for (n,) in cur.execute(
+            f"SELECT length(text) FROM chunks {cm_where}", cm_params
+        )
+    ])
 
     # Dates live on summaries; COUNT(authored_date) excludes NULLs. Undated
     # rolls in both NULL-date summaries and documents with no summary at all.
@@ -232,6 +269,7 @@ def work(*, conn, args, session_id) -> dict:
             "unsummarized": document_count - summarized,
         },
         "content_mix": content_mix,
+        "chunk_length": chunk_length,
         "largest_documents": largest_documents,
     })
 
