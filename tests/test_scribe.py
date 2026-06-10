@@ -2505,3 +2505,121 @@ def test_scribe_warns_on_config_drift(
         ).fetchone()[0] == 2
     finally:
         conn.close()
+
+
+def _text_pdf_config():
+    """Image-free pdfplumber ingest — no vision provider, no summary pass, so the
+    only stage that can fail (or be capped) is parse."""
+    return {
+        "summary_depth": "none",
+        "pdf_converter": "pdfplumber", "html_converter": "docling",
+        "sparse_text_threshold": 100, "ocr_min_confidence": 30,
+    }
+
+
+def test_scribe_records_then_clears_a_parse_failure(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A parse that fails once is recorded in failed_ingests (stage='parse') with
+    nothing persisted; a later clean run lands the document and clears the
+    failure — the record/clear lifecycle caption/summary already have (#307)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _text_pdf_config,
+    )
+
+    import bartleby.ingest.pdfplumber as pp
+    real_convert = pp.convert
+    parses = {"n": 0}
+
+    def flaky_convert(*a, **k):
+        parses["n"] += 1
+        if parses["n"] == 1:
+            raise RuntimeError("transient parse error")
+        return real_convert(*a, **k)
+
+    monkeypatch.setattr(
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", flaky_convert,
+    )
+
+    pdf = _text_pdf(tmp_path / "doc.pdf", text="Durable body text " * 12)
+
+    # Run 1: the parse fails. Recorded as a parse failure; nothing persisted.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == 1
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "parse" and attempts == 1
+    finally:
+        conn.close()
+
+    # Run 2: the parse recovers. The document lands; the failure row clears.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == 2
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM failed_ingests"
+        ).fetchone()[0] == 0                                 # failure cleared
+    finally:
+        conn.close()
+
+
+def test_scribe_caps_parse_retries_and_stops_reparsing(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A deterministically-failing parse is retried up to the cap, recorded, then
+    never re-parsed again — the parse stage now honours MAX_INGEST_ATTEMPTS like
+    caption/summary, so a corrupt file can't loop the most expensive stage
+    forever and can't silently read as done (#307)."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
+
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config", _text_pdf_config,
+    )
+
+    parses = {"n": 0}
+
+    def failing_convert(*a, **k):
+        parses["n"] += 1
+        raise RuntimeError("corrupt PDF")
+
+    monkeypatch.setattr(
+        "bartleby.ingest.parsers.pdfplumber_pipeline.convert", failing_convert,
+    )
+
+    pdf = _text_pdf(tmp_path / "doc.pdf", text="Body text " * 12)
+
+    # Each run makes exactly one more parse attempt until the cap is reached.
+    for _ in range(MAX_INGEST_ATTEMPTS):
+        scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == MAX_INGEST_ATTEMPTS
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        stage, attempts = cur.execute(
+            "SELECT stage, attempts FROM failed_ingests"
+        ).fetchone()
+        assert stage == "parse" and attempts == MAX_INGEST_ATTEMPTS
+        # The parse never succeeded — nothing persisted.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # A further run is a no-op against the converter — the unit is capped.
+    scribe.main(project="test_proj", files=str(pdf))
+    assert parses["n"] == MAX_INGEST_ATTEMPTS                # NOT re-parsed
+    conn = open_db("test_proj")
+    try:
+        assert conn.cursor().execute(
+            "SELECT attempts FROM failed_ingests"
+        ).fetchone()[0] == MAX_INGEST_ATTEMPTS               # not bumped past cap
+    finally:
+        conn.close()

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from bartleby.ingest import parsers
 from bartleby.ingest import pool
 from bartleby.ingest.progress import ScribeProgress
-from bartleby.ingest.writer import Writer
+from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
 from bartleby.lib import console
 
 if TYPE_CHECKING:
@@ -64,8 +64,23 @@ def parse_all(
     ]
     parse_phase = progress.phase("parse")
     parse_phase.start(len(to_parse))
+
+    # Capped files (failed MAX_INGEST_ATTEMPTS× already) are skipped, not retried
+    # — parse is the most expensive stage, so the gate precedes the pool, mirroring
+    # the identical gates in caption.py/summary.py.
+    to_parse_live: list[parsers.ParseRequest] = []
+    for req in to_parse:
+        if writer.is_capped(req.file_hash, "parse"):
+            console.warn(
+                f"{req.file_name}: skipping parse — failed "
+                f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
+            )
+            parse_phase.advance()
+        else:
+            to_parse_live.append(req)
+
     for outcome in pool.parse_stream(
-        to_parse,
+        to_parse_live,
         parse_fn=parsers._parse_request,
         config=parse_config,
         max_workers=max_workers,
