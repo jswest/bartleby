@@ -267,6 +267,142 @@ def test_scan_count_by_rejects_preview_and_brief(scan_corpus):
         assert exc.value.code == 2
 
 
+# ---------- --count-by '/regex/' (capture-group aggregate mode) ----------
+
+
+BILL_MARKER = "Bill reference"
+INCOME_MARKER = "Income reported"
+BILL_RE = r"/H\.R\.\s*(\d+)/"
+INCOME_RE = r"/reported:\s*\$([\d,]+)/"
+
+
+@pytest.fixture
+def templated_corpus(project_env):  # noqa: F811
+    """Three filings with a templated bill-number field (one chunk repeats its
+    bill, to prove per-match counting) and an income field on two of them."""
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+
+        def _doc(file_hash, file_name):
+            cur.execute(
+                "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (file_hash, file_name, f"/tmp/{file_name}", 1, 50),
+            )
+            return conn.last_insert_rowid()
+
+        d1, d2, d3 = _doc("ta", "f1.txt"), _doc("tb", "f2.txt"), _doc("tc", "f3.txt")
+        insert_document_chunks(conn, d1, [
+            ChunkInput(text="Bill reference: H.R. 4346 see also H.R. 4346",
+                       embedding=_emb(0.0), chunk_index=0, page_number=1),
+            ChunkInput(text="Income reported: $120,000 this period",
+                       embedding=_emb(0.1), chunk_index=1, page_number=1),
+        ])
+        insert_document_chunks(conn, d2, [
+            ChunkInput(text="Bill reference: H.R. 815", embedding=_emb(1.0),
+                       chunk_index=0, page_number=1),
+            ChunkInput(text="Income reported: $85,500 this period",
+                       embedding=_emb(1.1), chunk_index=1, page_number=1),
+        ])
+        insert_document_chunks(conn, d3, [
+            ChunkInput(text="Bill reference: H.R. 4346", embedding=_emb(2.0),
+                       chunk_index=0, page_number=1),
+            ChunkInput(text="Closing remarks only.", embedding=_emb(2.1),
+                       chunk_index=1, page_number=1),
+        ])
+    finally:
+        conn.close()
+    return {"project": project_env, "d1": d1, "d2": d2, "d3": d3}
+
+
+def test_scan_count_by_regex_buckets_per_match(templated_corpus, capsys):
+    # 4346 hits twice in d1's chunk + once in d3 = 3; 815 once in d2.
+    _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["count_by"] == BILL_RE          # the pattern is echoed verbatim
+    assert out["distinct_value_count"] == 2    # the headline
+    assert out["total_match_count"] == 4       # per-match, not per-chunk
+    assert out["truncated"] is False
+    assert out["groups"] == [
+        {"value": "4346", "count": 3},
+        {"value": "815", "count": 1},
+    ]
+    # Per-chunk and per-document projections are absent in this mode.
+    for absent in ("matches", "documents", "total", "preview"):
+        assert absent not in out
+
+
+def test_scan_count_by_regex_sorts_count_desc_then_value(templated_corpus, capsys):
+    # Income buckets tie at 1 each, so value-asc breaks the tie.
+    _run(templated_corpus, [INCOME_MARKER, "--count-by", INCOME_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["groups"] == [
+        {"value": "120,000", "count": 1},
+        {"value": "85,500", "count": 1},
+    ]
+
+
+def test_scan_count_by_regex_paginates_with_full_rollups(templated_corpus, capsys):
+    _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE, "--limit", "1"])
+    p1 = json.loads(capsys.readouterr().out)
+    assert p1["groups"] == [{"value": "4346", "count": 3}]
+    assert p1["distinct_value_count"] == 2     # rollups stay full under pagination
+    assert p1["total_match_count"] == 4
+
+    _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE,
+                            "--limit", "1", "--offset", "1"])
+    p2 = json.loads(capsys.readouterr().out)
+    assert p2["groups"] == [{"value": "815", "count": 1}]
+    assert p2["distinct_value_count"] == 2
+
+
+def test_scan_count_by_regex_respects_scope(templated_corpus, capsys):
+    _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE,
+                            "--in-documents", str(templated_corpus["d3"])])
+    out = json.loads(capsys.readouterr().out)
+    assert out["groups"] == [{"value": "4346", "count": 1}]
+    assert out["total_match_count"] == 1
+    assert out["filters"]["in_documents"] == [templated_corpus["d3"]]
+
+
+def test_scan_count_by_regex_no_match_is_zeros(templated_corpus, capsys):
+    _run(templated_corpus, ["phrase that appears nowhere", "--count-by", BILL_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_value_count"] == 0
+    assert out["total_match_count"] == 0
+    assert out["truncated"] is False
+    assert out["groups"] == []
+
+
+def test_scan_count_by_regex_no_capture_group_errors(templated_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(templated_corpus, [BILL_MARKER, "--count-by", r"/H\.R\.\s*\d+/"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "COUNT_BY_NO_CAPTURE"
+
+
+def test_scan_count_by_regex_uncompilable_errors(templated_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(templated_corpus, [BILL_MARKER, "--count-by", "/(/"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "INVALID_COUNT_BY_REGEX"
+
+
+def test_scan_count_by_rejects_bare_non_document_value(templated_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(templated_corpus, [BILL_MARKER, "--count-by", "banana"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "INVALID_COUNT_BY"
+
+
+def test_scan_count_by_regex_rejects_preview_and_brief(templated_corpus):
+    for bad in (["--preview", "100"], ["--brief"]):
+        with pytest.raises(SystemExit) as exc:
+            _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE, *bad])
+        assert exc.value.code == 2
+
+
 # ---------- date scope (shared with list_documents / describe_corpus) ----------
 
 
