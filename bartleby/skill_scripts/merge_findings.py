@@ -121,20 +121,19 @@ def work(*, conn, args, session_id) -> dict:
         code="EMPTY_DESCRIPTION", label="description",
     )
 
-    with conn:
-        cur.execute(
-            "UPDATE findings SET title = ?, description = ?, body = ? "
-            "WHERE finding_id = ?",
-            (new_title, new_description, body, target),
-        )
-        chunk_ids = rebuild_finding_chunks(conn, target, body)
-        replace_finding_citations(conn, target, citations)
-        for src in sources:
-            delete_chunks_for(conn, "finding", src)
-        src_ph = ",".join("?" * len(sources))
-        cur.execute(
-            f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
-        )
+    cur.execute(
+        "UPDATE findings SET title = ?, description = ?, body = ? "
+        "WHERE finding_id = ?",
+        (new_title, new_description, body, target),
+    )
+    chunk_ids = rebuild_finding_chunks(conn, target, body)
+    replace_finding_citations(conn, target, citations)
+    for src in sources:
+        delete_chunks_for(conn, "finding", src)
+    src_ph = ",".join("?" * len(sources))
+    cur.execute(
+        f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
+    )
 
     return {
         "finding_id": target,
