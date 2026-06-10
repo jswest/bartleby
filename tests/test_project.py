@@ -448,7 +448,10 @@ def test_upgrade_refuses_below_chain_first_step_without_mutation(
     `sqlite_master` DDL and the `schema_version` stamp are byte-identical
     before and after.
     """
+    import io
+
     import apsw
+    from rich.console import Console
 
     from bartleby.commands import project as project_cmd
     from bartleby.db import upgrades as upgrades_mod
@@ -489,10 +492,6 @@ def test_upgrade_refuses_below_chain_first_step_without_mutation(
     assert before[1] == str(below_first)
 
     # CLI: refuses with exit 1 and the re-ingest guidance.
-    import io
-
-    from rich.console import Console
-
     buf = io.StringIO()
     monkeypatch.setattr(project_cmd, "_console", Console(file=buf, width=200))
     with pytest.raises(SystemExit) as exc:
