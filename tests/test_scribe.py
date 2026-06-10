@@ -2266,6 +2266,61 @@ def test_writer_failure_helpers_record_bump_and_clear(isolated_project):
         conn.close()
 
 
+def test_report_failures_silent_when_no_failures(isolated_project, monkeypatch):
+    """The end-of-run block emits nothing when every unit completed."""
+    from bartleby.ingest.writer import Writer
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe.console, "warn", lambda m: warnings.append(m))
+
+    conn = open_db("test_proj")
+    try:
+        scribe._report_failures(Writer(conn))
+    finally:
+        conn.close()
+    assert warnings == []
+
+
+def test_report_failures_warns_with_caps_and_display_limit(
+    isolated_project, monkeypatch
+):
+    """The end-of-run warn block headlines the count + capped wording, flags each
+    unit as capped vs will-retry, and truncates the listing at 10 with a pointer."""
+    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, Writer
+
+    warnings: list[str] = []
+    monkeypatch.setattr(scribe.console, "warn", lambda m: warnings.append(m))
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        # Two capped units (driven to the cap) + eleven that will retry → 13 total,
+        # past the 10-line display limit.
+        for _ in range(MAX_INGEST_ATTEMPTS):
+            writer.record_failure("capped0", "capped0.pdf", "parse", "boom")
+            writer.record_failure("capped1", "capped1.pdf", "caption", "boom")
+        for i in range(11):
+            writer.record_failure(f"retry{i}", f"retry{i}.pdf", "summary", "later")
+
+        scribe._report_failures(writer)
+    finally:
+        conn.close()
+
+    blob = "\n".join(warnings)
+    # Header: total count, capped subtotal + attempt wording, retry tail.
+    assert "13 ingest unit(s) did not complete" in blob
+    assert f"2 capped after {MAX_INGEST_ATTEMPTS} attempts" in blob
+    assert "the rest will retry on the next run" in blob
+    # Per-unit flags, both branches.
+    assert "capped — not retried" in blob
+    assert f"will retry (attempt 1/{MAX_INGEST_ATTEMPTS})" in blob
+    # Display cap: only 10 unit lines, then the "… and N more" pointer.
+    unit_lines = [w for w in warnings if w.startswith("  [")]
+    assert len(unit_lines) == 10
+    assert "… and 3 more" in blob
+    assert "bartleby project info" in blob
+
+
 def test_scribe_timings_emits_aggregate_json(
     isolated_project, tmp_path, mock_embed, capsys
 ):
