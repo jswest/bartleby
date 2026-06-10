@@ -103,7 +103,7 @@ class AnthropicProvider:
         schema: type[BaseModel],
         temperature: float = 0.0,
     ) -> BaseModel:
-        response = self._client.messages.create(
+        kwargs: dict = dict(
             model=model,
             max_tokens=2048,
             temperature=temperature,
@@ -115,6 +115,13 @@ class AnthropicProvider:
             }],
             tool_choice={"type": "tool", "name": _CLASSIFY_TOOL},
         )
+        # Opus 4.7+ rejects temperature outright (see summarize) — drop it wherever
+        # it would 400. Tag classification reuses the summarizer's model, so a
+        # 4.7+ config would otherwise 400 on every classify call.
+        if _drops_temperature(model):
+            _warn_dropped_temperature(temperature, model)
+            del kwargs["temperature"]
+        response = self._client.messages.create(**kwargs)
         return _extract_tool_input(response, _CLASSIFY_TOOL, schema)
 
     def analyze_image(
