@@ -158,6 +158,48 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
         )
 
 
+def reject_citations_to_involved_findings(
+    conn, citations: list[int], finding_ids, *, code: str, action: str,
+) -> None:
+    """Reject ``[^N]`` markers citing finding-kind chunks the op will destroy.
+
+    Findings may legitimately cite *finding-kind* chunks, but the merge/edit
+    write paths delete-and-rebuild the body chunks of every finding *involved*
+    in the operation. If the new body cites one of those soon-to-die chunk ids,
+    two silent failures follow (both via ``finding_citations`` →
+    ``chunks(chunk_id) ON DELETE CASCADE``): a citation row inserted while the
+    chunk still exists gets cascade-deleted, leaving a dangling ``[^N]``; or the
+    chunk is deleted *before* the citation is replaced, surfacing as an opaque
+    ``INTERNAL_ERROR`` from the FK violation. One upfront ownership check on the
+    cited *chunk rows* (their ``source_kind='finding'`` + owning ``source_id``)
+    covers both — never by matching body text. Raises ``code`` (e.g.
+    ``CITES_MERGED_CHUNKS`` / ``CITES_OWN_CHUNKS``) naming the offending chunk
+    ids in ``offending_chunk_ids`` so the agent knows which markers to fix.
+    """
+    ids = list(finding_ids)
+    if not citations or not ids:
+        return
+    cite_ph = ",".join("?" * len(citations))
+    find_ph = ",".join("?" * len(ids))
+    offending = sorted(
+        row[0] for row in conn.cursor().execute(
+            f"SELECT chunk_id FROM chunks "
+            f"WHERE source_kind = 'finding' "
+            f"AND chunk_id IN ({cite_ph}) AND source_id IN ({find_ph})",
+            (*citations, *ids),
+        )
+    )
+    if not offending:
+        return
+    raise SkillError(
+        code,
+        f"Inline citations reference chunk_ids {offending}, which belong to "
+        f"finding(s) {sorted(ids)} this {action} is about to rewrite — those "
+        "chunks will not survive. Remove or repoint those [^N] markers.",
+        offending_chunk_ids=offending,
+    )
+
+
 def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
     """Read a finding body file and return ``(body, validated_citations)``.
 
