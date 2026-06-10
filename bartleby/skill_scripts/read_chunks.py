@@ -55,6 +55,7 @@ Direct-lookup output:
       "mode": "chunks",
       "requested": [int, ...],
       "missing": [int, ...],
+      "hints": {"<id>": str, ...},   # present only when a missing id is a live document_id
       "preview": int|null,
       "chunks": [{
         "chunk_id": int,
@@ -204,12 +205,53 @@ def _read_by_chunk_ids(
             "text_length": len(text),
         })
 
-    return {
+    # Cross-namespace hint: a missing chunk_id that exists as a document_id is
+    # very likely a --document id passed to --chunks. Surface a per-id hint so a
+    # silently-wrong-namespace lookup gets caught before it becomes a citation.
+    # (Memory-walled foreign finding chunks also land in ``missing`` but aren't
+    # document_ids, so they never trigger a hint.)
+    doc_ids = _live_document_ids(conn, missing)
+    hints = {
+        str(cid): f"{cid} is a document_id — did you mean --document {cid}?"
+        for cid in missing
+        if cid in doc_ids
+    }
+
+    out = {
         "mode": "chunks",
         "requested": ordered,
         "missing": missing,
         "preview": preview,
         "chunks": chunks,
+    }
+    if hints:
+        out["hints"] = hints
+    return out
+
+
+def _live_chunk_ids(conn, ids: list[int]) -> set[int]:
+    """Subset of ``ids`` that exist as ``chunk_id``s (any source kind)."""
+    if not ids:
+        return set()
+    ph = ",".join("?" * len(ids))
+    return {
+        row[0]
+        for row in conn.cursor().execute(
+            f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({ph})", ids,
+        )
+    }
+
+
+def _live_document_ids(conn, ids: list[int]) -> set[int]:
+    """Subset of ``ids`` that exist as ``document_id``s."""
+    if not ids:
+        return set()
+    ph = ",".join("?" * len(ids))
+    return {
+        row[0]
+        for row in conn.cursor().execute(
+            f"SELECT document_id FROM documents WHERE document_id IN ({ph})", ids,
+        )
     }
 
 
@@ -220,9 +262,21 @@ def _read_by_document(conn, args) -> dict:
         (args.document_id,),
     ).fetchone()
     if doc_row is None:
+        # Chunk and document ids share an integer namespace; a common slip is
+        # passing a chunk_id to --document. Hint toward --chunks only when the
+        # unknown id is in fact a live chunk_id (silent otherwise — an id that's
+        # genuinely unknown everywhere, or valid in both namespaces, carries no
+        # detectable intent).
+        extra = {}
+        if _live_chunk_ids(conn, [args.document_id]):
+            extra["hint"] = (
+                f"{args.document_id} is a chunk_id — "
+                f"did you mean --chunks {args.document_id}?"
+            )
         raise SkillError(
-            "DOCUMENT_NOT_FOUND",
+            "UNKNOWN_DOCUMENT",
             f"No document with id {args.document_id}.",
+            **extra,
         )
 
     total = cur.execute(
