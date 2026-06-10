@@ -91,7 +91,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="delete_finding", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="delete_finding", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":
