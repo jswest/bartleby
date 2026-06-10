@@ -10,6 +10,17 @@ finding, and ``model`` / ``harness`` the backend behind it (null when
 unrecorded). ``chunk_ids`` are the finding's own body chunks (``source_kind =
 'finding'``); ``citations`` resolve the chunks the finding cites.
 
+``dangling_citations`` are chunk ids appearing in ``[^N]`` markers in the body
+whose citation no longer resolves — the cited source has since been removed
+(deleted, or rebuilt under new chunk ids by an edit/merge), and the
+``ON DELETE CASCADE`` on ``finding_citations`` stripped the row. The body is
+left verbatim, so the marker survives as a provenance fact: the claim *was*
+supported by a source that is now gone. When compiling a report, flag or
+annotate such a marker as a removed citation — don't silently drop it; that a
+claim was once cited is itself signal. The cited source can't be recovered
+here (only the id survives), so phrase it as "cited source no longer
+available," never "deleted."
+
 Output:
     {
       "finding_id": int,
@@ -24,7 +35,8 @@ Output:
         "source_kind": str, "source_name": str,
         "file_name": str|null,
         "page_number": int|null,
-      }, ...]
+      }, ...],
+      "dangling_citations": [int, ...]   # [^N] markers with no resolved citation
     }
 
 ``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
@@ -40,6 +52,7 @@ import argparse
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
+    extract_citations,
     finding_chunk_and_citation_ids,
     resolve_citations,
     session_provenance,
@@ -73,6 +86,14 @@ def work(*, conn, args, session_id) -> dict:
 
     chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 
+    citations = resolve_citations(conn, citation_ids)
+    # A [^N] marker dangles when its chunk id is absent from the *resolved*
+    # citations — resolve_citations drops chunks that vanished, so the resolved
+    # set is the right thing to diff against. Derived at read time; covers
+    # markers orphaned by any cause (delete, edit/merge rebuild, legacy data).
+    resolved_ids = {c["chunk_id"] for c in citations}
+    dangling = [cid for cid in extract_citations(body) if cid not in resolved_ids]
+
     return {
         "finding_id": args.finding_id,
         "session_id": owning_session_id,
@@ -82,7 +103,8 @@ def work(*, conn, args, session_id) -> dict:
         "body": body,
         "created_at": created_at,
         "chunk_ids": chunk_ids,
-        "citations": resolve_citations(conn, citation_ids),
+        "citations": citations,
+        "dangling_citations": dangling,
     }
 
 

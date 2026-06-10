@@ -91,6 +91,45 @@ def test_read_finding_happy_path(seeded_project, capsys):
         assert c["source_name"] == "alpha.pdf"
         assert c["file_name"] == "alpha.pdf"
 
+    # Every [^N] resolves, so nothing dangles.
+    assert out["dangling_citations"] == []
+
+
+def test_read_finding_dangling_citation(seeded_project, capsys):
+    """A [^N] whose cited chunk was deleted surfaces in dangling_citations."""
+    from bartleby.db.chunks import delete_chunks_for
+
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+
+    conn = open_db(project)
+    try:
+        cited = [
+            r[0] for r in conn.cursor().execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+                "AND source_id=? ORDER BY chunk_index LIMIT 2",
+                (seeded_project["doc_a"],),
+            )
+        ]
+        body = f"Live claim[^{cited[0]}] and orphaned claim[^{cited[1]}]."
+        finding_id, _ = _seed_finding(
+            conn, session_id=session_id, body=body, cited_chunk_ids=cited,
+        )
+        # Drop the cited document's chunks; ON DELETE CASCADE strips the
+        # finding_citations rows pointing at them, leaving both [^N] markers
+        # in the verbatim body pointing at nothing.
+        delete_chunks_for(conn, "document", seeded_project["doc_a"])
+    finally:
+        conn.close()
+
+    read_finding.main(["--project", project, "--finding", str(finding_id)])
+    out = json.loads(capsys.readouterr().out)
+
+    # Both cited chunks belonged to the deleted document, so both [^N] markers
+    # dangle and neither resolves.
+    assert out["citations"] == []
+    assert out["dangling_citations"] == cited
+
 
 def test_read_finding_no_citations(seeded_project, capsys):
     project = seeded_project["project"]
