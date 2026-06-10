@@ -191,6 +191,67 @@ _UNANCHORED_FILING = b"""<?xml version="1.0"?>
 </html>
 """
 
+# A filing whose cover page (registrant name, CIK, period) precedes the TOC —
+# the pre-TOC body content that the #254 rework must capture as a preamble
+# section rather than silently drop (BUG 1).
+_PREAMBLE_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<p>Registrant name STARLIGHT AEROSPACE INCORPORATED, Central Index Key 0001999888.</p>
+<p>Annual report for the fiscal period ended December 31, 2025, ticker STAR outstanding.</p>
+<div>
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+</body>
+</html>
+"""
+
+# A TOC whose links are listed in the WRONG document order: the link to the
+# later section comes first. Slicing by link order would run the first slice to
+# end-of-body and duplicate the later section's content (BUG 2a).
+_OUT_OF_ORDER_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div>
+<a href="#sec_risk">Risk Factors</a>
+<a href="#sec_business">Business</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+</body>
+</html>
+"""
+
+# A real TOC plus in-text cross-reference links ("see Item 1A") and a "back to
+# top" link sprinkled through the body. Only the TOC cluster may create sections
+# (BUG 2b) — the stray links must not spawn spurious / out-of-order sections.
+_CROSSREF_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div id="top">
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+<a href="#sec_glossary">Glossary of Terms</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<p>For competitive pressures, <a href="#sec_risk">see Risk Factors</a> below please.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+<p>As noted in <a href="#sec_business">Business</a>, <a href="#top">back to top</a>.</p>
+<h2 id="sec_glossary">Glossary of Terms</h2>
+<p>Apogee is the highest point in an orbit reached by a spacecraft during flight.</p>
+</body>
+</html>
+"""
+
 
 @pytest.fixture
 def edgar_project(tmp_path, monkeypatch):
@@ -248,6 +309,91 @@ def test_convert_sections_ignores_dangling_anchors():
 <p>This is the only anchor that actually resolves to a target in the body here.</p>
 </body></html>"""
     assert sec2md._convert_sections_bytes(html) == []
+
+
+def test_convert_sections_emits_preamble_for_pre_toc_content():
+    """Body content before the first TOC target (the EDGAR cover page) lands in a
+    synthetic order-0 preamble section rather than being silently dropped (BUG 1).
+    The TOC nav block itself is not re-indexed as preamble."""
+    sections = sec2md._convert_sections_bytes(_PREAMBLE_FILING)
+    assert sections[0].anchor_id == sec2md._PREAMBLE_ANCHOR_ID
+    assert sections[0].order == 0
+    # The cover-page facts are searchable in the preamble section's chunks.
+    preamble_text = " ".join(c.text for c in sections[0].result.chunks)
+    assert "STARLIGHT AEROSPACE" in preamble_text
+    assert "0001999888" in preamble_text
+    # The real sections follow, renumbered after the preamble.
+    assert [s.anchor_id for s in sections[1:]] == ["sec_business", "sec_risk"]
+    assert [s.order for s in sections[1:]] == [1, 2]
+    # The TOC link list is navigation, not content — it is not re-emitted.
+    assert "Risk Factors\nBusiness" not in preamble_text
+
+
+def test_convert_sections_does_not_duplicate_out_of_document_order_anchors():
+    """A TOC that lists anchors out of document order is sliced in DOCUMENT order,
+    so no section's slice runs to end-of-body and duplicates a later section's
+    content (BUG 2a)."""
+    sections = sec2md._convert_sections_bytes(_OUT_OF_ORDER_FILING)
+    # Sliced in document order regardless of TOC link order.
+    assert [s.anchor_id for s in sections] == ["sec_business", "sec_risk"]
+    # The risk paragraph ("explode") appears in exactly one section, once.
+    occurrences = sum(
+        c.text.lower().count("explode")
+        for s in sections for c in s.result.chunks
+    )
+    assert occurrences == 1
+    # And it belongs to the risk section, not bled into business.
+    business_text = " ".join(c.text.lower() for c in sections[0].result.chunks)
+    assert "explode" not in business_text
+
+
+def test_convert_sections_ignores_in_text_cross_reference_links():
+    """In-text cross-references ("see Risk Factors") and "back to top" links do
+    not create spurious sections — only the contiguous TOC link cluster does
+    (BUG 2b)."""
+    sections = sec2md._convert_sections_bytes(_CROSSREF_FILING)
+    assert [s.anchor_id for s in sections] == [
+        "sec_business", "sec_risk", "sec_glossary",
+    ]
+    # No content duplicated by the stray forward/backward cross-reference links.
+    occurrences = sum(
+        c.text.lower().count("apogee")
+        for s in sections for c in s.result.chunks
+    )
+    assert occurrences == 1
+
+
+def test_persist_parse_preamble_section_is_searchable(edgar_project, tmp_path):
+    """The preamble section persists as a real, FTS-indexed section row, so the
+    cover-page content is searchable rather than lost with the zero-chunk
+    container (BUG 1, end to end)."""
+    src = _write(tmp_path, "filing.htm", _PREAMBLE_FILING)
+    parsed = parsers._parse_html_sec2md(
+        src, file_hash="preamble-container", file_name="filing.htm",
+    )
+    # The container carries a preamble section child with the synthetic anchor.
+    assert parsed.sections[0].anchor_id == sec2md._PREAMBLE_ANCHOR_ID
+    conn = open_db(edgar_project)
+    try:
+        writer = Writer(conn)
+        container_id = writer.persist_parse(parsed)
+        cur = conn.cursor()
+        preamble = cur.execute(
+            "SELECT document_id FROM documents "
+            "WHERE anchor_id = ? AND parent_document_id = ?",
+            (sec2md._PREAMBLE_ANCHOR_ID, container_id),
+        ).fetchone()
+        assert preamble is not None
+        # Its chunks are indexed in FTS — the cover-page facts are findable.
+        hit = cur.execute(
+            "SELECT COUNT(*) FROM chunks c JOIN chunks_fts f ON f.rowid = c.chunk_id "
+            "WHERE c.source_kind = 'document' AND c.source_id = ? "
+            "AND chunks_fts MATCH 'STARLIGHT'",
+            (preamble[0],),
+        ).fetchone()[0]
+        assert hit >= 1
+    finally:
+        conn.close()
 
 
 def test_parse_html_sec2md_builds_container_and_sections(tmp_path, monkeypatch):

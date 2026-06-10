@@ -11,6 +11,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 
 SEC2MD_MAX_TOKENS = 400  # headroom under embedder's 512-token cap (matches docling)
@@ -38,6 +39,15 @@ class Sec2mdResult:
     full_text: str
     page_count: int | None
     chunks: list[Sec2mdChunk]
+
+
+# A synthetic anchor id for the front-matter section that precedes the first TOC
+# target (#254 rework). EDGAR cover pages carry the registrant name, CIK, period,
+# ticker and shares-outstanding — real content that must land in a section rather
+# than be dropped. The leading/trailing underscores keep it from colliding with a
+# genuine HTML id a filing might use as a TOC target.
+_PREAMBLE_ANCHOR_ID = "__preamble__"
+_PREAMBLE_TITLE = "Preamble"
 
 
 @dataclass
@@ -153,18 +163,38 @@ def _convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
         soup = BeautifulSoup(html, "html.parser")
 
     body = soup.body or soup
-    targets = _resolve_toc_targets(soup, body)
+    targets, toc_link_els = _resolve_toc_targets(soup, body)
     if len(targets) < _MIN_SECTIONS_TO_SPLIT:
         return []
 
+    # Slice boundaries are the top-level ancestors of each target, IN DOCUMENT
+    # ORDER (targets are already so ordered). Each slice ends at the next
+    # target's boundary; only the genuine last target runs to end-of-body. A
+    # synthetic "preamble" section captures any body content before the first
+    # target (an EDGAR cover page: registrant name, CIK, period, ticker), which
+    # would otherwise land in no section and vanish from FTS/embeddings.
+    boundaries = [
+        (anchor_id, title, _top_level_ancestor(target_el, body))
+        for anchor_id, title, target_el in targets
+    ]
+    first_start = boundaries[0][2]
+    # The TOC nav block(s) sit before the first target but are navigation, not
+    # content — exclude their top-level ancestors so the preamble is the cover
+    # page, not a re-render of the link list.
+    toc_blocks = {id(_top_level_ancestor(el, body)) for el in toc_link_els}
+    preamble_fragment = _slice_between(
+        _first_body_child(body), first_start, skip=toc_blocks,
+    )
+    slices: list[tuple[str, str | None, str]] = []
+    if preamble_fragment.strip():
+        slices.append((_PREAMBLE_ANCHOR_ID, _PREAMBLE_TITLE, preamble_fragment))
+    for i, (anchor_id, title, start) in enumerate(boundaries):
+        next_start = boundaries[i + 1][2] if i + 1 < len(boundaries) else None
+        slices.append((anchor_id, title or None, _slice_between(start, next_start)))
+
     sections: list[Sec2mdSection] = []
-    for order, (anchor_id, title, target_el) in enumerate(targets):
-        start = _top_level_ancestor(target_el, body)
-        next_start = (
-            _top_level_ancestor(targets[order + 1][2], body)
-            if order + 1 < len(targets) else None
-        )
-        fragment = _slice_between(start, next_start)
+    order = 0
+    for anchor_id, title, fragment in slices:
         if not fragment.strip():
             continue
         section_html = f"<html><body>{fragment}</body></html>".encode("utf-8")
@@ -174,8 +204,9 @@ def _convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
             # index — skip it rather than persist a content-free section row.
             continue
         sections.append(Sec2mdSection(
-            anchor_id=anchor_id, title=title or None, order=order, result=result,
+            anchor_id=anchor_id, title=title, order=order, result=result,
         ))
+        order += 1
 
     # If the slices collapsed to a single (or no) real section, splitting buys
     # nothing — let the caller ingest the file whole.
@@ -184,17 +215,46 @@ def _convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
     return sections
 
 
-def _resolve_toc_targets(soup, body) -> list[tuple[str, str, object]]:
-    """The TOC's internal anchors that resolve to in-document targets, in order.
+def _first_body_child(body):
+    """The first top-level node in ``body`` (the start of the preamble slice)."""
+    for node in body.children:
+        if getattr(node, "name", None) is not None:
+            return node
+    return None
 
-    Each entry is ``(anchor_id, link_text, target_element)``. Only the first
-    link to a given id is kept (a TOC that lists a section twice still yields one
-    section), and only ids that actually exist as a target within the body
-    count — a dangling ``#ref`` is no section boundary.
+
+def _resolve_toc_targets(soup, body):
+    """The filing's real TOC anchors, resolved to in-document targets, in
+    DOCUMENT order.
+
+    Returns ``(targets, toc_link_els)`` where each ``targets`` entry is
+    ``(anchor_id, link_text, target_element)`` and ``toc_link_els`` are the TOC's
+    own ``<a>`` elements (so the caller can excise the nav block from the
+    preamble). The hard part is telling a genuine table of contents from the many
+    other ``<a href="#id">`` links a filing carries — in-text cross-references
+    ("see Item 1A"), footnote markers, and "back to top" links would each
+    otherwise spawn a spurious (and out-of-order) section.
+
+    The rule: a real TOC is a contiguous cluster of *forward* links — each link
+    sits earlier in the document than the section it points at, and the cluster
+    is uninterrupted in link order. We walk every internal link in link order,
+    resolve it to a body target, and keep only forward links to ids not already
+    listed (first link to an id wins). A "back to top" / footnote-return link
+    points backward and is dropped; an in-text cross-reference to an
+    already-listed section is a duplicate and is dropped; a cross-reference to an
+    *un*-listed section is forward, but it sits in the body interrupted from the
+    TOC by other (now-dropped) links, so it falls outside the longest contiguous
+    run. We take that longest run — the TOC — then **sort it by document
+    position** before returning. Sorting is what makes link order irrelevant: a
+    TOC that lists sections out of document order no longer produces a slice
+    whose next boundary lies earlier in the document (which would run to
+    end-of-body and duplicate content).
     """
+    pos = {id(el): i for i, el in enumerate(body.descendants)}
+
     seen: set[str] = set()
-    targets: list[tuple[str, str, object]] = []
-    for a in soup.find_all("a"):
+    links: list[_TocLink] = []
+    for link_idx, a in enumerate(soup.find_all("a")):
         href = a.get("href") or ""
         if not href.startswith("#") or len(href) < 2:
             continue
@@ -202,11 +262,64 @@ def _resolve_toc_targets(soup, body) -> list[tuple[str, str, object]]:
         if anchor_id in seen:
             continue
         target = body.find(id=anchor_id)
-        if target is None:
+        if target is None or id(target) not in pos:
+            continue
+        link_pos = pos.get(id(a))
+        target_pos = pos[id(target)]
+        # Forward links only: a TOC entry sits before the content it indexes; a
+        # "back to top" or footnote-return link points the other way.
+        if link_pos is None or link_pos >= target_pos:
             continue
         seen.add(anchor_id)
-        targets.append((anchor_id, a.get_text(strip=True), target))
-    return targets
+        links.append(_TocLink(
+            target_pos, anchor_id, a.get_text(strip=True), target, a, link_idx,
+        ))
+
+    run = _longest_contiguous_run(links)
+    run.sort(key=lambda link: link.target_pos)
+    targets = [(link.anchor_id, link.text, link.target) for link in run]
+    toc_link_els = [link.el for link in run]
+    return targets, toc_link_els
+
+
+class _TocLink(NamedTuple):
+    """One resolved, forward internal link, used while isolating the TOC cluster.
+
+    ``target_pos`` is the link target's document position (the sort key);
+    ``link_idx`` is the link's index among all ``<a>`` in the document, which
+    tells the run finder where a dropped link breaks contiguity.
+    """
+    target_pos: int
+    anchor_id: str
+    text: str
+    target: object
+    el: object
+    link_idx: int
+
+
+def _longest_contiguous_run(links: list[_TocLink]) -> list[_TocLink]:
+    """The longest cluster of links that is uninterrupted in link order — the TOC.
+
+    ``links`` is the forward, deduped internal links in link order. A gap in
+    their ``link_idx`` means a non-TOC link (a dropped back-to-top, or a forward
+    cross-reference whose target *was* already in the TOC) sat between two kept
+    links, so the run breaks there. The longest run wins; ties keep the earliest
+    (the TOC sits at the top, ahead of any in-body link cluster).
+    """
+    if not links:
+        return []
+    best: list[_TocLink] = []
+    current = [links[0]]
+    for prev, cur in zip(links, links[1:]):
+        if cur.link_idx == prev.link_idx + 1:
+            current.append(cur)
+        else:
+            if len(current) > len(best):
+                best = current
+            current = [cur]
+    if len(current) > len(best):
+        best = current
+    return best
 
 
 def _top_level_ancestor(el, body):
@@ -216,12 +329,18 @@ def _top_level_ancestor(el, body):
     return el
 
 
-def _slice_between(start, end) -> str:
-    """Serialize every top-level sibling from ``start`` up to (not incl) ``end``."""
+def _slice_between(start, end, *, skip: set[int] | None = None) -> str:
+    """Serialize every top-level sibling from ``start`` up to (not incl) ``end``.
+
+    Top-level blocks whose ``id()`` is in ``skip`` are omitted — used to drop the
+    TOC nav block(s) from the preamble slice so navigation isn't re-indexed as
+    front-matter content.
+    """
     parts: list[str] = []
     node = start
     while node is not None and node is not end:
         if getattr(node, "name", None) is not None:
-            parts.append(str(node))
+            if skip is None or id(node) not in skip:
+                parts.append(str(node))
         node = node.find_next_sibling()
     return "".join(parts)

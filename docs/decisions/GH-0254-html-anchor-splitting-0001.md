@@ -82,3 +82,10 @@ that API does not cover, and the design is explicitly *anchor/TOC*-driven. Slici
 the raw HTML at TOC-anchor targets is filing-type-agnostic, uses the link text for
 free section titles, and reuses `convert_bytes` unchanged per slice — so every
 byte of content lands in exactly one section with nothing duplicated or dropped.
+
+> **Superseded in part.** The "nothing duplicated or dropped" invariant did not
+> hold as first shipped: pre-TOC content was dropped, out-of-order anchors
+> duplicated content, and harvesting over-collected non-TOC links. The boundary
+> and harvesting rule (document-order slicing, TOC-cluster-only targets) and the
+> synthetic preamble section that restore it are recorded in
+> [`GH-0254-anchor-splitting-rework-0001.md`](./GH-0254-anchor-splitting-rework-0001.md).
