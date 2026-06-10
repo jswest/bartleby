@@ -310,3 +310,52 @@ def test_describe_corpus_excludes_anchor_container_from_unsummarized(
     assert out["document_count"] == 4
     # Container is excluded; only alpha is summarized; beta + section owe one.
     assert out["summary_coverage"] == {"summarized": 1, "unsummarized": 2}
+
+
+def test_describe_corpus_summarized_container_not_double_subtracted(
+    seeded_project, capsys
+):
+    """If a container ever acquires a summary row (an agent runs save_summary on
+    it), it is already counted in ``summarized`` — it must not ALSO be subtracted
+    as a container, or the unsummarized tally undercounts (possibly negative).
+    The container is subtracted only when it has no summary row."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, token_count) "
+            "VALUES (?, ?, ?, ?)",
+            ("filing", "filing.htm", "/tmp/filing.htm", 0),
+        )
+        container_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, token_count, "
+            " parent_document_id, anchor_id, section_title, section_order) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("filing#sec1", "filing.htm", "/tmp/filing.htm", 50,
+             container_id, "sec1", "Business", 0),
+        )
+        section_id = conn.last_insert_rowid()
+        insert_document_chunks(conn, section_id, [
+            ChunkInput(text="section body about the business operations here",
+                       embedding=[0.2] * EMBEDDING_DIM, chunk_index=0),
+        ])
+        # An agent summarized BOTH the section and the container.
+        for doc_id, title in ((section_id, "Sec"), (container_id, "Filing")):
+            cur.execute(
+                "INSERT INTO summaries (document_id, title, description, text, model) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (doc_id, title, "d", "t", "test"),
+            )
+    finally:
+        conn.close()
+
+    out = _run(project, capsys)
+    # 4 docs; summarized = alpha + section + container = 3; only beta owes one.
+    assert out["document_count"] == 4
+    assert out["summary_coverage"] == {"summarized": 3, "unsummarized": 1}

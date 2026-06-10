@@ -243,13 +243,17 @@ def work(*, conn, args, session_id) -> dict:
     # are the provenance anchor for their section children, not a summarizable
     # unit. Excluding them from the unsummarized tally keeps a fully-summarized
     # split filing from reading as forever-incomplete. A container is any row
-    # another row points at via parent_document_id.
+    # another row points at via parent_document_id. Only count containers that
+    # have NO summary row, though: ``summarized`` already counts any container an
+    # agent happened to summarize, and double-subtracting it here would undercount
+    # the unsummarized tally (possibly negative).
     w, wp = doc_where("document_id")
     container_count = cur.execute(
         f"SELECT COUNT(*) FROM documents{w}"
         f"{' AND' if w else ' WHERE'} document_id IN "
         f"(SELECT parent_document_id FROM documents "
-        f"WHERE parent_document_id IS NOT NULL)",
+        f"WHERE parent_document_id IS NOT NULL) "
+        f"AND document_id NOT IN (SELECT document_id FROM summaries)",
         wp,
     ).fetchone()[0]
 
