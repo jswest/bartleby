@@ -47,9 +47,9 @@ import argparse
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    assert_findings_accessible,
     comma_int_list,
     load_finding_body,
-    memory_enabled,
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
@@ -104,17 +104,7 @@ def work(*, conn, args, session_id) -> dict:
     # Merging deletes the sources and folds them into the target. A memory-off
     # session may only touch findings it authored — mirroring read_finding's
     # wall, across every finding involved. Gate before any write.
-    if not memory_enabled(conn, session_id):
-        foreign = [fid for fid in ids if owners[fid] != session_id]
-        if foreign:
-            raise SkillError(
-                "MEMORY_OFF",
-                "This session has memory disabled and finding(s) "
-                f"{foreign} were authored by another session, so they are not "
-                "accessible. Start a memory-enabled session (omit --no-memory) "
-                "to merge other sessions' findings.",
-                foreign_finding_ids=foreign,
-            )
+    assert_findings_accessible(conn, session_id, ids, action="merge")
 
     body, citations = load_finding_body(conn, args.body_file)
 

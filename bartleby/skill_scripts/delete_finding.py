@@ -34,7 +34,7 @@ import argparse
 
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import memory_enabled
+from bartleby.skill_scripts._common import assert_findings_accessible
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -47,27 +47,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def work(*, conn, args, session_id) -> dict:
     cur = conn.cursor()
     row = cur.execute(
-        "SELECT session_id, title FROM findings WHERE finding_id = ?",
+        "SELECT title FROM findings WHERE finding_id = ?",
         (args.finding_id,),
     ).fetchone()
     if row is None:
         raise SkillError(
             "FINDING_NOT_FOUND", f"No finding with id {args.finding_id}.",
         )
-    owning_session_id, title = row
+    (title,) = row
 
     # The response echoes the deleted title, and the deletion mutates the
     # finding outright. A memory-off session may only delete findings it
     # authored — mirroring read_finding's wall. Gate before any read-back or
     # write.
-    if not memory_enabled(conn, session_id) and owning_session_id != session_id:
-        raise SkillError(
-            "MEMORY_OFF",
-            f"This session has memory disabled and finding {args.finding_id} "
-            "was authored by another session, so it is not accessible. Start a "
-            "memory-enabled session (omit --no-memory) to delete other "
-            "sessions' findings.",
-        )
+    assert_findings_accessible(conn, session_id, [args.finding_id], action="delete")
 
     n_citations = cur.execute(
         "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
