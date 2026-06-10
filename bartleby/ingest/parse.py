@@ -107,7 +107,6 @@ def parse_all(
             parse_phase.advance()
             continue
 
-        writer.clear_failure(req.file_hash, "parse")
         persist_t = time.perf_counter()
         document_id = writer.persist_parse(outcome.parsed)
         stages = None

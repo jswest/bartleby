@@ -130,7 +130,6 @@ def _caption_all(
     def _persist(image_id: int, analysis: image_pipeline.ImageAnalysis) -> None:
         pi = to_caption[image_id]
         writer.persist_caption(_caption_from_analysis(pi, analysis, vision_model))
-        writer.clear_failure(pi.file_hash, "caption")
 
     def _fail(image_id: int, exc: Exception) -> None:
         unit = owner[image_id]

@@ -90,7 +90,6 @@ def _summarize_all(
         writer.persist_summary(
             ps.document_id, result, _summary_chunks(result.text)
         )
-        writer.clear_failure(ps.file_hash, "summary")
 
     def _fail(ps: PendingSummary, exc: Exception) -> None:
         nonlocal incomplete
