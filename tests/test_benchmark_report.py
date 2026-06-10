@@ -21,8 +21,8 @@ def _summary(tag):
             "authored_date": None}
 
 
-def _run(root, ref, doc, idx, summary=None, ok=True, tps=None, ts=None,
-         prompt_sha="p1", source_sha="s1", temperature=0.0, eval_count=None):
+def _run(root, ref, doc, idx, summary=None, ok=True, ts=None,
+         prompt_sha="p1", source_sha="s1", temperature=0.0, prompt_tokens=None):
     record = {
         "provider": ref.provider, "model": ref.model, "doc": doc,
         "run_index": idx, "ok": ok, "wall_seconds": 5.0,
@@ -30,12 +30,10 @@ def _run(root, ref, doc, idx, summary=None, ok=True, tps=None, ts=None,
         "source_sha": source_sha, "prompt_sha": prompt_sha,
         "temperature": temperature,
     }
-    if eval_count is not None:
-        record["eval_count"] = eval_count
+    if prompt_tokens is not None:
+        record["prompt_eval_count"] = prompt_tokens
     if ok:
         record["summary"] = summary
-        if tps is not None:
-            record["tokens_per_second"] = tps
     else:
         record["error"] = "schema validation failed: boom"
         record["raw_output"] = "not json"
@@ -71,32 +69,36 @@ def populated(root):
     - beta: per doc, 2 runs of summary X (pass-mean 4.0833) + 1 run of
       summary Y (pass-mean 3.0833) → run-weighted (2·4.0833 + 3.0833)/3 = 3.75.
     - gamma: 2 OK + 1 schema-fail per doc → 67% → disqualified.
-    - nano: cloud reference row, 1 run/doc, quality 4.9, no local throughput.
+    - nano: cloud reference row, 1 run/doc, quality 4.9, input tokens/s
+      measured (prompt_eval_count comes from usage) but never on the frontier.
+
+    All runs share wall 5.0 − load 1.0 = 4.0 inference s, so input tokens/s
+    is prompt_tokens / 4: alpha 100, beta 50, nano 100.
     """
     for di, doc in enumerate(DOCS):
         base = 4.5 - 0.5 * di
         a = _summary(f"alpha-{doc}")
         for i in range(3):
-            _run(root, ALPHA, doc, i, a, tps=100.0)
+            _run(root, ALPHA, doc, i, a, prompt_tokens=400)
         for mean in (base, base + 0.25, base):
             _judgment(root, ALPHA, doc, a, mean)
 
         x, y = _summary(f"beta-x-{doc}"), _summary(f"beta-y-{doc}")
-        _run(root, BETA, doc, 0, x, tps=50.0)
-        _run(root, BETA, doc, 1, x, tps=50.0)
-        _run(root, BETA, doc, 2, y, tps=50.0)
+        _run(root, BETA, doc, 0, x, prompt_tokens=200)
+        _run(root, BETA, doc, 1, x, prompt_tokens=200)
+        _run(root, BETA, doc, 2, y, prompt_tokens=200)
         for mean in (4.0, 4.25, 4.0):
             _judgment(root, BETA, doc, x, mean)
         for mean in (3.0, 3.25, 3.0):
             _judgment(root, BETA, doc, y, mean)
 
         g = _summary(f"gamma-{doc}")
-        _run(root, GAMMA, doc, 0, g, tps=80.0)
-        _run(root, GAMMA, doc, 1, g, tps=80.0)
+        _run(root, GAMMA, doc, 0, g, prompt_tokens=320)
+        _run(root, GAMMA, doc, 1, g, prompt_tokens=320)
         _run(root, GAMMA, doc, 2, None, ok=False)
 
         n = _summary(f"nano-{doc}")
-        _run(root, NANO, doc, 0, n, temperature=None)  # no tps — cloud
+        _run(root, NANO, doc, 0, n, temperature=None, prompt_tokens=400)
         _judgment(root, NANO, doc, n, 4.9)
     return root
 
@@ -117,7 +119,7 @@ def test_weights_recomputed_from_runs_not_judgments(populated):
     new judgments — stale judgment-side counts must not pin the old 2:1."""
     x = _summary("beta-x-d1")
     for i in range(3, 6):
-        _run(populated, BETA, "d1", i, x, tps=50.0)
+        _run(populated, BETA, "d1", i, x, prompt_tokens=200)
     cells = report.quality_cells(report.load_runs(populated),
                                  report.load_judgments(populated))
     expected = (5 * (4.0833333) + 1 * (3.0833333)) / 6
@@ -140,7 +142,7 @@ def test_leaderboard_renders_markdown_with_frontier_and_disqualified(populated, 
 
 def test_leaderboard_window_filter_excludes_old_records(populated, capsys):
     old = 1.0  # epoch dawn
-    _run(populated, ALPHA, "d1", 99, _summary("ancient"), tps=1.0, ts=old)
+    _run(populated, ALPHA, "d1", 99, _summary("ancient"), prompt_tokens=4, ts=old)
     report.leaderboard(populated, since=100.0)
     out = capsys.readouterr().out
     # the ancient run is outside the window: alpha still shows 9 OK runs
@@ -158,40 +160,38 @@ def test_leaderboard_csv_output(populated, tmp_path, capsys):
     assert alpha["pareto_optimal"] == "True"
     assert float(alpha["mean_quality"]) == pytest.approx(4.0 + 1 / 12)
     assert float(alpha["quality_d3"]) == pytest.approx(3.5 + 1 / 12)
-    assert rows[0]["tokens_per_second"] == ""  # cloud: no local throughput
+    assert float(rows[0]["input_tokens_per_second"]) == pytest.approx(100.0)  # cloud too
 
 
-def test_wall_seconds_per_token_measured_for_cloud_too(root, tmp_path, capsys):
-    # wall 5.0 − load 1.0 = 4.0 inference s. Local has tps; cloud doesn't, but
-    # both carry eval_count, so both get a Wall s/tok number (the apples-to-
-    # apples speed comparison): 4.0/200 = 0.02 local, 4.0/100 = 0.04 cloud.
-    _run(root, ALPHA, "d1", 0, _summary("a"), tps=100.0, eval_count=200)
-    _run(root, NANO, "d1", 0, _summary("n"), temperature=None, eval_count=100)
+def test_input_tokens_per_second_measured_for_cloud_too(root, tmp_path, capsys):
+    # wall 5.0 − load 1.0 = 4.0 inference s; prompt_eval_count is recorded for
+    # both providers: 400/4.0 = 100 local, 200/4.0 = 50 cloud.
+    _run(root, ALPHA, "d1", 0, _summary("a"), prompt_tokens=400)
+    _run(root, NANO, "d1", 0, _summary("n"), temperature=None, prompt_tokens=200)
     out_csv = tmp_path / "lb.csv"
     assert report.leaderboard(root, output=out_csv) == 0
     out = capsys.readouterr().out
-    assert "Wall s/tok" in out and "Pareto optimal" in out
-    assert "Inference (s)" not in out and "Frontier" not in out
+    assert "Input tokens/s" in out and "Pareto optimal" in out
+    assert "Tok/s" not in out and "Wall s/tok" not in out
     alpha_row = next(l for l in out.splitlines() if "alpha" in l)
     nano_row = next(l for l in out.splitlines() if "gpt-5-nano" in l)
-    assert "0.0200" in alpha_row
-    assert nano_row.split("|")[3].strip() == "—"  # no Tok/s for cloud
-    assert "0.0400" in nano_row                    # but it does get Wall s/tok
+    assert alpha_row.split("|")[3].strip() == "100.0"
+    assert nano_row.split("|")[3].strip() == "50.0"
     rows = {r["model"]: r for r in csv.DictReader(out_csv.open())}
-    assert float(rows["alpha:1b"]["wall_seconds_per_token"]) == pytest.approx(0.02)
-    assert float(rows["gpt-5-nano"]["wall_seconds_per_token"]) == pytest.approx(0.04)
+    assert float(rows["alpha:1b"]["input_tokens_per_second"]) == pytest.approx(100.0)
+    assert float(rows["gpt-5-nano"]["input_tokens_per_second"]) == pytest.approx(50.0)
 
 
-def test_wall_seconds_per_token_blank_without_eval_count(root, capsys):
-    _run(root, ALPHA, "d1", 0, _summary("a"), tps=100.0)  # no eval_count
+def test_input_tokens_per_second_blank_without_prompt_eval_count(root, capsys):
+    _run(root, ALPHA, "d1", 0, _summary("a"))  # no prompt_eval_count
     assert report.leaderboard(root) == 0
     out = capsys.readouterr().out
     alpha_row = next(l for l in out.splitlines() if "alpha" in l)
-    assert alpha_row.split("|")[4].strip() == "—"  # Wall s/tok column blank
+    assert alpha_row.split("|")[3].strip() == "—"  # Input tokens/s column blank
 
 
 def test_heterogeneity_warning_on_mixed_prompt_sha(populated, capsys):
-    _run(populated, ALPHA, "d1", 99, _summary("alpha-d1"), tps=100.0,
+    _run(populated, ALPHA, "d1", 99, _summary("alpha-d1"), prompt_tokens=400,
          prompt_sha="p2")
     report.leaderboard(populated)
     out = capsys.readouterr().out
@@ -199,7 +199,7 @@ def test_heterogeneity_warning_on_mixed_prompt_sha(populated, capsys):
 
 
 def test_heterogeneity_warning_on_mixed_temperature(populated, capsys):
-    _run(populated, ALPHA, "d1", 99, _summary("alpha-d1"), tps=100.0,
+    _run(populated, ALPHA, "d1", 99, _summary("alpha-d1"), prompt_tokens=400,
          temperature=0.2)
     report.leaderboard(populated)
     out = capsys.readouterr().out
@@ -252,7 +252,7 @@ def test_errors_lists_failures_with_doc(populated, capsys):
 
 
 def test_errors_clean_when_none(root, capsys):
-    _run(root, ALPHA, "d1", 0, _summary("a"), tps=1.0)
+    _run(root, ALPHA, "d1", 0, _summary("a"))
     assert report.errors(root) == 0
     assert "No errors" in capsys.readouterr().out
 

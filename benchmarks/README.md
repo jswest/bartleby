@@ -188,18 +188,19 @@ gpt-5.x rejects pinned temperatures).
 - **Schema-valid %** is the gate; failers sit under *Disqualified*. (A model
   that never produced an OK run — e.g. a corrupt blob that won't load — lands
   there too; `bartleby benchmark errors` tells those apart.)
-- Two speed columns. **Tok/s** is Ollama's eval-based throughput — local only,
-  blank (`—`) for `†` cloud rows, which don't report it. **Wall s/tok** is
-  load-corrected wall-clock per output token (mean of per-doc medians):
-  length-normalized, so it doesn't drift when the corpus does, and recorded for
-  every provider — the one speed number that compares cloud against local. For
-  `†` rows it still counts the datacenter and network, so read it as
-  latency-per-token from where you run the benchmark, not pure model speed.
+- One speed column. **Input tokens/s** is the source document's prompt tokens
+  divided by load-corrected wall-clock (mean of per-doc medians) — the planning
+  number: divide a document's token count by it to estimate how long that
+  document takes to summarize. It deliberately charges generation time against
+  input length, because input length is what you know up front. Recorded for
+  every provider, so it compares cloud against local; for `†` rows it still
+  counts the datacenter and network, so read it as end-to-end throughput from
+  where you run the benchmark, not pure model speed.
 - Among judged **local** survivors, the **Pareto optimal** column (**★**) marks
   the speed/quality frontier: no other local survivor is both faster *and*
   higher-quality. That shortlist is the real one. `†` rows are cloud reference
   anchors — quality context, never candidates, so never starred even though
-  Wall s/tok now gives them a comparable speed number.
+  Input tokens/s gives them a comparable speed number.
 - The **per-doc quality table** shows each cell's score with its evidence
   (`4.58 (3r/9p)` = 3 OK runs, 9 judge passes) so a thin cell can't
   masquerade as a solid one, and a long-doc coverage gap can't hide inside
