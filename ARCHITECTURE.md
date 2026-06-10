@@ -17,6 +17,8 @@ For the on-disk shape, read the code: `bartleby/db/schema.py` for the schema, `b
 
 The discipline: every new bump is either additive-with-an-upgrade-function or non-additive-with-re-ingest. The codebase never branches on schema version; it always pins to `SCHEMA_VERSION` exactly. The upgrade path is one-shot at the gate, not an ongoing tax.
 
+**The versioning policy in one line:** any schema change bumps the minor (the minor *is* `SCHEMA_VERSION`; releases are `v0.<SCHEMA_VERSION>.<patch>`), `check_drift` in `scripts/release.py` refuses to tag a DDL change that forgot the bump, the additive-vs-breaking disposition is binary (chain entry + `bartleby project upgrade` vs no entry + re-ingest), and the `breaking-schema` label is reserved for re-ingest-required changes. Written down in full in [the schema-change versioning-policy decision](./docs/decisions/GH-0362-schema-change-versioning-policy-0001.md).
+
 ## Load-bearing invariants
 
 Things that look local but aren't. Code review should catch violations.
