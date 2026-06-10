@@ -5,12 +5,18 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-# Held at 8 across the #169 concurrent-ingestion omnibus. The `ingests` table
-# and the `ingest_run_id` columns below are additive work landing under that
-# omnibus (issue #171); the single v8→v9 bump + a consolidated
-# `_upgrade_v8_to_v9` ships once when #169 releases, rather than each sub-issue
-# bumping in turn. Until then fresh DBs carry these structures at v8 and an
-# existing v8 corpus must re-ingest to gain them.
+# v8 == the with-`ingests` shape: the `ingests` table and the `ingest_run_id`
+# columns below are part of v8, not deferred to a later bump. The #169
+# concurrent-ingestion omnibus shipped (released as v0.8.x) *staying at* v8 —
+# the once-promised consolidated `_upgrade_v8_to_v9` never materialized; instead
+# `_upgrade_v7_to_v8` was completed to create `ingests`/`ingest_run_id`
+# additively (issue #212), so a v7 corpus reaches the full v8 shape via
+# `project upgrade`, no re-ingest. Caveat — the #164–#171 window cohort: a DB
+# created from `main` between #164 (stamped v8 with only `failed_ingests`) and
+# #171 (folded `ingests`/`ingest_run_id` into v8, still v8) carries v8 in `meta`
+# without those structures. That cohort is RE-INGEST-ONLY — it shares a version
+# number with released v8 but not its DDL, so no upgrade step can repair it in
+# place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
 SCHEMA_VERSION = 8
 
 EMBEDDING_DIM = 768
