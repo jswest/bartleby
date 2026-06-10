@@ -23,6 +23,7 @@ import pdfplumber
 from PIL import Image
 
 from bartleby.ingest import ocr as ocr_module
+from bartleby.lib import console
 
 
 PAGE_RENDER_DPI = 150
@@ -150,8 +151,24 @@ def convert(
                 # Run OCR on the page render and decide whether it clears the
                 # same length + confidence bar we apply to native PDF text.
                 # If not, the caller routes the page render through the VLM.
+                #
+                # OCR is only the classifier here, not the captioner — so if
+                # Tesseract raises (missing binary, locked TMPDIR), we degrade
+                # to "couldn't classify → route to VLM" rather than failing the
+                # whole PDF parse and discarding every non-sparse page. Mirrors
+                # images.analyze's deliberate call for the identical situation.
                 if page_render_png is not None:
-                    ocr_result = ocr_module.run(page_render_png)
+                    try:
+                        ocr_result = ocr_module.run(page_render_png)
+                    except Exception as exc:
+                        console.warn_once(
+                            "ocr_degraded",
+                            f"OCR classification unavailable ({exc}); routing "
+                            "sparse PDF pages straight to the VLM instead. Pages "
+                            "are still captured — only the cheap Tesseract "
+                            "shortcut is lost.",
+                        )
+                        ocr_result = None
                 if (ocr_result
                         and len(ocr_result.text) >= sparse_text_threshold
                         and ocr_result.avg_confidence >= ocr_min_confidence):
