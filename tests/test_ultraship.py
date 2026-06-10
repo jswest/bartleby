@@ -83,6 +83,27 @@ def test_parse_depends_on_multiple():
     assert ultraship.parse_manifest(body).sub_issues[0].depends_on == [10, 20]
 
 
+def test_depends_on_space_separated_keeps_every_edge():
+    # A separator typo must not silently drop an ordering edge (review #2).
+    body = _body(
+        "- #30 — third.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `c.py`\n"
+        "  - **depends-on:** #10 and #20\n"
+    )
+    assert ultraship.parse_manifest(body).sub_issues[0].depends_on == [10, 20]
+
+
+def test_depends_on_dedupes():
+    body = _body(
+        "- #30 — third.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `c.py`\n"
+        "  - **depends-on:** #10, #10\n"
+    )
+    assert ultraship.parse_manifest(body).sub_issues[0].depends_on == [10]
+
+
 def test_parse_tolerates_plain_and_bold_field_forms():
     body = _body(
         "- #5 — plain fields.\n"
@@ -198,6 +219,92 @@ def test_dependency_cycle_is_a_problem():
     )
     problems = ultraship.validate_manifest(ultraship.parse_manifest(body))
     assert any("cycle" in p for p in problems)
+
+
+# --- strictness: unrecognized content fails loud, never silently drops ------
+
+def test_nested_header_is_flagged_and_does_not_corrupt_previous_issue():
+    # An indented sub-issue header (a nesting typo) must not vanish silently nor
+    # have its fields overwrite the previous issue (review #1).
+    body = _body(
+        "- #10 — first.\n"
+        "  - **objective:** o1\n"
+        "  - **touches:** `a.py`\n"
+        "  - **depends-on:** —\n"
+        "  - #20 — nested by mistake.\n"
+        "    - **objective:** o2\n"
+        "    - **touches:** `b.py`\n"
+        "    - **depends-on:** —\n"
+    )
+    m = ultraship.parse_manifest(body)
+    # #10 keeps its own objective; #20's fields did not bleed into it.
+    assert m.sub_issues[0].objective == "o1"
+    assert m.sub_issues[0].touches == ["a.py"]
+    problems = ultraship.validate_manifest(m)
+    assert any("#20" in p or "unrecognized" in p for p in problems)
+
+
+def test_star_bullet_header_is_flagged():
+    # A `*`/`+`-bulleted header isn't the canonical `- #N` form (review #3).
+    body = _body(
+        "- #10 — ok.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `a.py`\n"
+        "  - **depends-on:** —\n"
+        "* #20 — star bullet.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `b.py`\n"
+        "  - **depends-on:** —\n"
+    )
+    problems = ultraship.validate_manifest(ultraship.parse_manifest(body))
+    assert any("unrecognized" in p for p in problems)
+
+
+def test_duplicate_field_within_issue_is_flagged():
+    # Review #7: a repeated field line must not silently last-write-win.
+    body = _body(
+        "- #10 — dup field.\n"
+        "  - **objective:** first\n"
+        "  - **objective:** second\n"
+        "  - **touches:** `a.py`\n"
+        "  - **depends-on:** —\n"
+    )
+    problems = ultraship.validate_manifest(ultraship.parse_manifest(body))
+    assert any("more than once" in p for p in problems)
+
+
+def test_code_fence_in_section_does_not_drop_following_issue():
+    # A `#` line inside a code fence must not truncate the section (review #4).
+    body = _body(
+        "- #10 — before fence.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `a.py`\n"
+        "  - **depends-on:** —\n"
+        "```\n"
+        "# this is code, not a heading\n"
+        "```\n"
+        "- #20 — after fence.\n"
+        "  - **objective:** o\n"
+        "  - **touches:** `b.py`\n"
+        "  - **depends-on:** —\n"
+    )
+    m = ultraship.parse_manifest(body)
+    assert [i.number for i in m.sub_issues] == [10, 20]
+    assert ultraship.validate_manifest(m) == []
+
+
+def test_goal_in_director_notes_does_not_shadow_real_header():
+    # Review #5: a `goal:` mention inside the notes prose must not win over the
+    # real `**goal:**` header, even when it appears first.
+    body = (
+        "## Summary\n\n"
+        "<!-- director-notes:start -->\n"
+        "goal: BOGUS from notes prose\n"
+        "<!-- director-notes:end -->\n\n"
+        "**goal:** REAL GOAL\n\n"
+        "### Sub-issues\n" + _TWO_INDEPENDENT
+    )
+    assert ultraship.parse_manifest(body).goal == "REAL GOAL"
 
 
 # --- wave derivation -------------------------------------------------------

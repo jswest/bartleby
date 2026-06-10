@@ -53,7 +53,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Iterator
 
 # A "no value" marker an author writes for an empty depends-on, etc.
 _EMPTY_TOKENS = {"", "-", "—", "–", "none", "n/a", "na"}
@@ -94,6 +94,10 @@ class Manifest:
     goal: str | None = None
     director_notes: str = ""
     sub_issues: list[SubIssue] = field(default_factory=list)
+    # Non-blank lines inside the `### Sub-issues` section the parser could not
+    # place — surfaced by the validator as fail-loud problems (see
+    # ``parse_sub_issues``), never silently dropped.
+    anomalies: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +121,35 @@ def _match_field(line: str, name: str) -> str | None:
     return right.strip().strip("*").strip()
 
 
+def _is_fence(line: str) -> bool:
+    """True for a Markdown code-fence delimiter (``` or ~~~)."""
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
+def _outside_fences(lines: Iterable[str]) -> Iterator[tuple[int, str]]:
+    """Yield ``(index, line)`` for every line that is *not* inside a ``` / ~~~
+    code fence, so a ``#`` heading or a ``- #N`` bullet embedded in a code block
+    is never mistaken for real structure."""
+    in_fence = False
+    for i, line in enumerate(lines):
+        if _is_fence(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            yield i, line
+
+
+def _identify_field(line: str) -> tuple[str | None, str | None]:
+    """Return ``(field_name, value)`` for the first required field the line
+    declares, or ``(None, None)``."""
+    for name in REQUIRED_FIELDS:
+        value = _match_field(line, name)
+        if value is not None:
+            return name, value
+    return None, None
+
+
 def _split_list(value: str) -> list[str]:
     """Split a comma-separated field value into trimmed, de-backticked items.
 
@@ -134,24 +167,32 @@ def _split_list(value: str) -> list[str]:
 
 def _parse_deps(value: str) -> list[int]:
     """Parse a ``depends-on`` value (``#236, #240`` or ``—``) into issue numbers,
-    de-duplicated and order-preserving."""
+    de-duplicated and order-preserving.
+
+    Every ``#N`` in the value is taken, so comma- *or* space-separated refs
+    (``#10 #20``, ``#10 and #20``) all resolve — a separator typo can't silently
+    drop an ordering edge. An empty marker (``—``, ``none``) yields ``[]``.
+    """
+    if value.strip().lower() in _EMPTY_TOKENS:
+        return []
     numbers: list[int] = []
-    for token in _split_list(value):
-        m = re.search(r"#?(\d+)", token)
-        if m:
-            n = int(m.group(1))
-            if n not in numbers:
-                numbers.append(n)
+    for digits in re.findall(r"#?(\d+)", value):
+        n = int(digits)
+        if n not in numbers:
+            numbers.append(n)
     return numbers
 
 
 def parse_goal(body: str) -> str | None:
     """Return the omnibus ``goal:`` header line value, or ``None`` if absent.
 
-    Scanned outside the ``### Sub-issues`` section so a sub-issue line can never
-    be mistaken for the bundle goal.
+    Scanned outside the ``### Sub-issues`` section (so a sub-issue line can't be
+    mistaken for the bundle goal) and outside the director-notes block (so free
+    prose the director writes there — which may mention "goal:" — can't shadow
+    the real header line).
     """
-    for line in _body_outside_sub_issues(body):
+    scrubbed = _DIRECTOR_NOTES_RE.sub("", body)
+    for line in _body_outside_sub_issues(scrubbed):
         value = _match_field(line, "goal")
         if value is not None and value.lower() not in _EMPTY_TOKENS:
             return value
@@ -169,7 +210,7 @@ def _sub_issues_section_bounds(lines: list[str]) -> tuple[int, int] | None:
     section (the lines *after* its heading up to the next heading / EOF), or
     ``None`` if there is no such section."""
     start = None
-    for i, line in enumerate(lines):
+    for i, line in _outside_fences(lines):
         m = _HEADING_RE.match(line)
         if m and m.group(1).strip().lower().rstrip(":") == "sub-issues":
             start = i + 1
@@ -177,8 +218,8 @@ def _sub_issues_section_bounds(lines: list[str]) -> tuple[int, int] | None:
     if start is None:
         return None
     end = len(lines)
-    for j in range(start, len(lines)):
-        if _HEADING_RE.match(lines[j]):
+    for j, line in _outside_fences(lines):
+        if j >= start and _HEADING_RE.match(line):
             end = j
             break
     return start, end
@@ -197,54 +238,72 @@ def _body_outside_sub_issues(body: str) -> Iterable[str]:
         yield line
 
 
-def parse_sub_issues(body: str) -> list[SubIssue]:
-    """Parse the ``### Sub-issues`` section into ``SubIssue`` records.
+def parse_sub_issues(body: str) -> tuple[list[SubIssue], list[str]]:
+    """Parse the ``### Sub-issues`` section into ``(issues, anomalies)``.
 
-    Returns ``[]`` when the section is absent or empty; the validator turns that
-    into a readable error rather than a crash.
+    Only a top-level ``- #N — …`` header and an indented ``- **field:** …`` line
+    are recognized. Every *other* non-blank line in the section — a nested or
+    ``*``/``+``-bulleted header, a stray bullet, a duplicate field — is recorded
+    as an **anomaly** rather than skipped, because a silently-dropped sub-issue
+    that still validates clean is the failure this parser exists to prevent. An
+    unrecognized line also closes the current issue, so an orphaned field line
+    can't attach itself to (and corrupt) the previous issue.
+
+    Returns ``([], [])`` when the section is absent. Content inside a ``` code
+    fence is ignored (issue bodies routinely embed code).
     """
     lines = body.splitlines()
     bounds = _sub_issues_section_bounds(lines)
     if bounds is None:
-        return []
+        return [], []
     start, end = bounds
 
     issues: list[SubIssue] = []
+    anomalies: list[str] = []
     current: SubIssue | None = None
-    for line in lines[start:end]:
+    seen_fields: set[str] = set()
+    for i, line in _outside_fences(lines):
+        if i < start or i >= end or not line.strip():
+            continue
         header = _SUBISSUE_HEADER_RE.match(line)
         if header:
             current = SubIssue(number=int(header.group(1)), label=header.group(2).strip())
             issues.append(current)
+            seen_fields = set()
             continue
-        if current is None:
+        name, value = (None, None)
+        if current is not None and line[:1].isspace():
+            name, value = _identify_field(line)
+        if name is None:
+            anomalies.append(
+                "unrecognized line in `### Sub-issues` (expected `- #N — …` or an "
+                "indented `- **objective/touches/depends-on:** …`): "
+                f"{line.strip()!r}"
+            )
+            current = None
             continue
-        if not line[:1].isspace():
-            # A non-indented, non-header line ends the current issue's block.
-            if line.strip():
-                current = None
+        if name in seen_fields:
+            anomalies.append(f"#{current.number} declares `{name}` more than once.")
             continue
-        objective = _match_field(line, "objective")
-        if objective is not None:
-            current.objective = objective
-            continue
-        touches = _match_field(line, "touches")
-        if touches is not None:
-            current.touches = _split_list(touches)
-            continue
-        depends = _match_field(line, "depends-on")
-        if depends is not None:
-            current.depends_on = _parse_deps(depends)
-    return issues
+        seen_fields.add(name)
+        if name == "objective":
+            current.objective = value
+        elif name == "touches":
+            current.touches = _split_list(value)
+        else:  # depends-on
+            current.depends_on = _parse_deps(value)
+    return issues, anomalies
 
 
 def parse_manifest(body: str) -> Manifest:
     """Parse an omnibus issue body into a :class:`Manifest` (best-effort; call
     :func:`validate_manifest` to check it is well-formed)."""
+    issues, anomalies = parse_sub_issues(body)
     return Manifest(
         goal=parse_goal(body),
         director_notes=parse_director_notes(body),
-        sub_issues=parse_sub_issues(body),
+        sub_issues=issues,
+        anomalies=anomalies,
     )
 
 
@@ -256,7 +315,8 @@ def validate_manifest(manifest: Manifest) -> list[str]:
     """Return a list of human-readable problems; empty means well-formed.
 
     Strict and fail-loud — ``run`` aborts before dispatching any player if this
-    is non-empty. Checks: a ``goal`` is present; at least one sub-issue; no
+    is non-empty. Checks: a ``goal`` is present; no unrecognized lines in the
+    ``### Sub-issues`` section (parser anomalies); at least one sub-issue; no
     duplicate numbers; every required field present and non-empty (an empty
     ``depends-on`` is allowed); every ``depends-on`` resolves to a declared
     sub-issue; and the dependency graph is acyclic.
@@ -265,6 +325,9 @@ def validate_manifest(manifest: Manifest) -> list[str]:
 
     if not manifest.goal:
         problems.append("missing omnibus `goal:` header line.")
+
+    # Lines the parser couldn't place are fail-loud problems, not silent drops.
+    problems.extend(manifest.anomalies)
 
     if not manifest.sub_issues:
         problems.append("no sub-issues found under a `### Sub-issues` section.")
