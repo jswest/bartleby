@@ -130,6 +130,19 @@ def _upgrade_v8_to_v9(conn: apsw.Connection) -> None:
         "ALTER TABLE document_tags ADD COLUMN "
         "chunk_id INTEGER REFERENCES chunks(chunk_id)"
     )
+    # #254 anchor-splitting columns on `documents`. Additive: an existing corpus
+    # keeps every document's parent_document_id/anchor_id/section_title/
+    # section_order NULL (a truthful "whole, unsplit file"), so it upgrades in
+    # place — sectioning old monoliths is a voluntary re-ingest, not forced.
+    # Nullable with no default, so the self-referential FK ADD COLUMN is legal
+    # on a populated table. Keep this DDL in lockstep with db/schema.py.
+    cur.execute(
+        "ALTER TABLE documents ADD COLUMN "
+        "parent_document_id INTEGER REFERENCES documents(document_id)"
+    )
+    cur.execute("ALTER TABLE documents ADD COLUMN anchor_id TEXT")
+    cur.execute("ALTER TABLE documents ADD COLUMN section_title TEXT")
+    cur.execute("ALTER TABLE documents ADD COLUMN section_order INTEGER")
 
 
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {

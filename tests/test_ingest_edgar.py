@@ -1,13 +1,27 @@
-"""Tests for the EDGAR full-submission envelope parser (bartleby.ingest.edgar).
+"""Tests for the EDGAR full-submission envelope parser (bartleby.ingest.edgar)
+and the anchor-based HTML splitting of EDGAR/iXBRL filings (#254).
 
-Pure-Python: no sec2md, no DB. Covers detection, the SGML split, and the
-per-inner-document routing decision.
+The envelope-parser tests are pure-Python (no sec2md, no DB). The anchor-split
+tests below drive the real sec2md converter and the Writer's container+section
+persistence against an isolated SQLite project.
 """
 
 from __future__ import annotations
 
+import hashlib
+
+import pytest
+
+import bartleby.config
+import bartleby.db.connection
+import bartleby.project
+from bartleby.db.connection import open_db
+from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest import edgar
+from bartleby.ingest import parsers
+from bartleby.ingest import sec2md
 from bartleby.ingest.edgar import InnerDocument
+from bartleby.ingest.writer import ParsedSection, Writer
 
 
 _SUBMISSION = """\
@@ -141,3 +155,240 @@ def test_classify_skips_uuencoded_without_filename_hint():
         text="begin 644 image\nM_]C_X``02D9)\nend",
     )
     assert edgar.classify(doc) == "skip"
+
+
+# -------------------- #254: anchor / TOC splitting of iXBRL filings -----------
+
+# A synthetic iXBRL filing with a clickable TOC and three anchored sections —
+# the shape #254 splits (no live SEC fetch, no network).
+_ANCHORED_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div>
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+<a href="#sec_glossary">Glossary of Terms</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<p>Our revenue comes from launch services and satellite internet broadband.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+<p>Competition in the launch market is intense and is growing larger every year.</p>
+<h2 id="sec_glossary">Glossary of Terms</h2>
+<p>Apogee is the highest point in an orbit reached by a spacecraft during flight.</p>
+</body>
+</html>
+"""
+
+# Same iXBRL marker, no table of contents — must ingest whole.
+_UNANCHORED_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<p>A short filing with no clickable table of contents and no internal anchors.</p>
+<p>It carries the iXBRL marker but nothing for the splitter to fracture along.</p>
+</body>
+</html>
+"""
+
+
+@pytest.fixture
+def edgar_project(tmp_path, monkeypatch):
+    """An isolated SQLite project plus a stub embedder, for the persist tests."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
+    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
+    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
+    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+
+    def fake_embed(texts):
+        return [[0.01 * (i + 1)] * EMBEDDING_DIM for i in range(len(texts))]
+    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake_embed)
+
+    bartleby.project.create_project("edgar_proj")
+    return "edgar_proj"
+
+
+def _write(tmp_path, name, content: bytes):
+    p = tmp_path / name
+    p.write_bytes(content)
+    return p
+
+
+def test_convert_sections_splits_toc_anchored_filing():
+    sections = sec2md._convert_sections_bytes(_ANCHORED_FILING)
+    assert [s.anchor_id for s in sections] == [
+        "sec_business", "sec_risk", "sec_glossary",
+    ]
+    assert [s.title for s in sections] == [
+        "Business", "Risk Factors", "Glossary of Terms",
+    ]
+    assert [s.order for s in sections] == [0, 1, 2]
+    # Each slice converted independently and carries the right content.
+    assert any("rockets" in c.text.lower() for c in sections[0].result.chunks)
+    assert any("explode" in c.text.lower() for c in sections[1].result.chunks)
+    assert any("apogee" in c.text.lower() for c in sections[2].result.chunks)
+
+
+def test_convert_sections_returns_empty_without_toc():
+    assert sec2md._convert_sections_bytes(_UNANCHORED_FILING) == []
+
+
+def test_convert_sections_ignores_dangling_anchors():
+    """A TOC whose links resolve to fewer than two in-document targets is not a
+    split boundary — the file ingests whole."""
+    html = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"><body>
+<a href="#real">Real</a>
+<a href="#ghost">Ghost</a>
+<h2 id="real">Real</h2>
+<p>This is the only anchor that actually resolves to a target in the body here.</p>
+</body></html>"""
+    assert sec2md._convert_sections_bytes(html) == []
+
+
+def test_parse_html_sec2md_builds_container_and_sections(tmp_path, monkeypatch):
+    """The sec2md parse path returns a zero-chunk container ParsedDocument with
+    N section children, each with its own chunks and TOC metadata."""
+    monkeypatch.setattr(
+        "bartleby.ingest.embed.embed_texts",
+        lambda texts: [[0.1] * EMBEDDING_DIM for _ in texts],
+    )
+    src = _write(tmp_path, "filing.htm", _ANCHORED_FILING)
+    parsed = parsers._parse_html_sec2md(
+        src, file_hash="container-hash", file_name="filing.htm",
+    )
+
+    # Container: original hash, zero chunks of its own, N sections.
+    assert parsed.file_hash == "container-hash"
+    assert parsed.document_chunks == []
+    assert len(parsed.sections) == 3
+
+    s0 = parsed.sections[0]
+    assert s0.anchor_id == "sec_business"
+    assert s0.section_title == "Business"
+    assert s0.section_order == 0
+    assert s0.document_chunks  # own chunks
+    # Derived hash = sha256(file_bytes + anchor_id), unique per section.
+    expected = hashlib.sha256(_ANCHORED_FILING + b"sec_business").hexdigest()
+    assert s0.file_hash == expected
+    assert len({s.file_hash for s in parsed.sections}) == 3
+    assert parsed.file_hash not in {s.file_hash for s in parsed.sections}
+
+
+def test_parse_html_sec2md_ingests_unanchored_whole(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "bartleby.ingest.embed.embed_texts",
+        lambda texts: [[0.1] * EMBEDDING_DIM for _ in texts],
+    )
+    src = _write(tmp_path, "plain.htm", _UNANCHORED_FILING)
+    parsed = parsers._parse_html_sec2md(
+        src, file_hash="whole-hash", file_name="plain.htm",
+    )
+    # No split: one document, its own chunks, no section children.
+    assert parsed.sections == []
+    assert parsed.document_chunks
+    assert parsed.file_hash == "whole-hash"
+
+
+def test_persist_parse_writes_container_and_sections(edgar_project, tmp_path):
+    """The Writer persists the container (zero chunks) plus N section rows, each
+    with parent_document_id wired and the anchor/title/order columns set."""
+    src = _write(tmp_path, "filing.htm", _ANCHORED_FILING)
+    parsed = parsers._parse_html_sec2md(
+        src, file_hash="container-hash", file_name="filing.htm",
+    )
+    conn = open_db(edgar_project)
+    try:
+        writer = Writer(conn)
+        container_id = writer.persist_parse(parsed)
+        cur = conn.cursor()
+
+        # Four documents: one container + three sections.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+
+        # The container owns zero document chunks; its file_hash is the original.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document' "
+            "AND source_id = ?", (container_id,),
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT file_hash, parent_document_id, anchor_id FROM documents "
+            "WHERE document_id = ?", (container_id,),
+        ).fetchone() == ("container-hash", None, None)
+
+        # Three section rows, all parented to the container, in TOC order, each
+        # with chunks of its own.
+        rows = cur.execute(
+            "SELECT anchor_id, section_title, section_order, parent_document_id "
+            "FROM documents WHERE parent_document_id = ? "
+            "ORDER BY section_order", (container_id,),
+        ).fetchall()
+        assert [r[0] for r in rows] == ["sec_business", "sec_risk", "sec_glossary"]
+        assert [r[1] for r in rows] == [
+            "Business", "Risk Factors", "Glossary of Terms",
+        ]
+        assert [r[2] for r in rows] == [0, 1, 2]
+        assert all(r[3] == container_id for r in rows)
+
+        # Every section carries its own indexed chunks (FTS + vec in lockstep).
+        section_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks c "
+            "JOIN documents d ON d.document_id = c.source_id "
+            "WHERE c.source_kind='document' AND d.parent_document_id = ?",
+            (container_id,),
+        ).fetchone()[0]
+        assert section_chunks >= 3
+        total_doc_chunks = cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document'"
+        ).fetchone()[0]
+        assert total_doc_chunks == section_chunks  # container added none
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks_fts"
+        ).fetchone()[0] == total_doc_chunks
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks_vec"
+        ).fetchone()[0] == total_doc_chunks
+    finally:
+        conn.close()
+
+
+def test_persist_parse_split_is_atomic(edgar_project, tmp_path):
+    """A failure mid-split rolls back the whole unit — no container, no section
+    rows, no chunks — so resume (keyed on the container's file_hash) re-parses
+    cleanly. The split writes N+1 rows in one transaction (#254/#358)."""
+    from bartleby.db.chunks import ChunkInput
+
+    src = _write(tmp_path, "filing.htm", _ANCHORED_FILING)
+    parsed = parsers._parse_html_sec2md(
+        src, file_hash="container-hash", file_name="filing.htm",
+    )
+    # Poison the last section's chunks with an over-long embedding so the chunk
+    # insert validation raises after earlier section rows already landed.
+    bad = ChunkInput(
+        text="poison", embedding=[0.1] * (EMBEDDING_DIM + 1), chunk_index=99,
+    )
+    parsed.sections[-1].document_chunks.append(bad)
+
+    conn = open_db(edgar_project)
+    try:
+        writer = Writer(conn)
+        with pytest.raises(ValueError, match="dims"):
+            writer.persist_parse(parsed)
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_section_file_hash_is_deterministic_and_distinct():
+    a = parsers._section_file_hash(b"filing-bytes", "anchor_a")
+    b = parsers._section_file_hash(b"filing-bytes", "anchor_b")
+    assert a == parsers._section_file_hash(b"filing-bytes", "anchor_a")  # stable
+    assert a != b                                                        # per-anchor
+    # Never collides with the container's plain byte-hash.
+    assert a != hashlib.sha256(b"filing-bytes").hexdigest()

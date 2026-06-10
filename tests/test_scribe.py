@@ -1929,6 +1929,85 @@ def test_scribe_unwraps_edgar_full_submission(
         conn.close()
 
 
+_ANCHORED_IXBRL = """\
+<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div>
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+<a href="#sec_glossary">Glossary of Terms</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+<h2 id="sec_glossary">Glossary of Terms</h2>
+<p>Apogee is the highest point in an orbit reached by a spacecraft during flight.</p>
+</body>
+</html>
+"""
+
+
+def test_scribe_splits_anchored_edgar_filing_end_to_end(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A TOC-anchored iXBRL filing ingested with html_converter=sec2md splits into
+    a zero-chunk container + N section documents, each with its own summary; the
+    container owes no summary (#254)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "html_converter": "sec2md",
+            "provider": "anthropic", "model": "test-model",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider(text="## Section summary\n\nKey points.")
+    monkeypatch.setattr(
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.ingest.summary.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "filing.htm", _ANCHORED_IXBRL)
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # One container + three sections.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        container = cur.execute(
+            "SELECT document_id FROM documents WHERE parent_document_id IS NULL "
+            "AND anchor_id IS NULL"
+        ).fetchone()[0]
+        # Container owns no chunks and no summary.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document' "
+            "AND source_id = ?", (container,),
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM summaries WHERE document_id = ?", (container,),
+        ).fetchone()[0] == 0
+        # Each section summarized (3 sections → 3 summaries, 3 provider calls).
+        assert stub.calls == 3
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 3
+        # Sections carry the TOC anchor metadata.
+        anchors = {
+            r[0] for r in cur.execute(
+                "SELECT anchor_id FROM documents WHERE parent_document_id = ?",
+                (container,),
+            )
+        }
+        assert anchors == {"sec_business", "sec_risk", "sec_glossary"}
+    finally:
+        conn.close()
+
+
 # -------------------- content-sniffed file-type resolution --------------------
 
 

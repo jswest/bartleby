@@ -12,6 +12,7 @@ the main process.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,7 @@ from bartleby.ingest.chunk import (
 )
 from bartleby.ingest.summarize import count_tokens
 from bartleby.ingest.text import chunk_text
-from bartleby.ingest.writer import ParsedDocument, ParsedImage
+from bartleby.ingest.writer import ParsedDocument, ParsedImage, ParsedSection
 from bartleby.lib import timing
 
 
@@ -160,6 +161,26 @@ def _sec2md_chunk_to_row(chunk, *, fallback_heading: str | None = None) -> Chunk
         page_number=chunk.page_number,
     )
 
+def _section_file_hash(file_bytes: bytes, anchor_id: str) -> str:
+    """The derived hash for a section row: ``sha256(file_bytes + anchor_id)``.
+
+    Keeps ``documents.file_hash`` UNIQUE and re-ingest-stable, and cannot collide
+    with the container's plain ``sha256(file_bytes)`` or a standalone copy of the
+    section file's own byte-hash (#254)."""
+    h = hashlib.sha256()
+    h.update(file_bytes)
+    h.update(anchor_id.encode("utf-8"))
+    return h.hexdigest()
+
+def _build_sec2md_chunks(result, *, fallback_heading: str | None = None) -> list[ChunkInput]:
+    """Embed a ``Sec2mdResult``'s chunks into ChunkInputs (empty when none)."""
+    if not result.chunks:
+        return []
+    rows = [_sec2md_chunk_to_row(c, fallback_heading=fallback_heading)
+            for c in result.chunks]
+    embeddings = embed.embed_texts([r.text for r in rows])
+    return _build_chunk_inputs(rows, embeddings)
+
 def _parse_html_sec2md(
     archived: Path,
     *,
@@ -167,21 +188,65 @@ def _parse_html_sec2md(
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
-    """iXBRL EDGAR filing via sec2md."""
+    """iXBRL EDGAR filing via sec2md.
+
+    When the filing carries a usable table of contents, it is split at its
+    internal anchors into a zero-chunk container document plus N section
+    documents (#254); otherwise it ingests whole, exactly as before. A
+    non-anchored filing returns one ordinary ParsedDocument.
+    """
     if on_stage is not None:
         on_stage("extracting")
+    sections = sec2md_pipeline.convert_sections(archived)
+    if sections:
+        return _parse_html_sec2md_split(
+            archived, sections, file_hash=file_hash, file_name=file_name,
+            on_stage=on_stage,
+        )
     result = sec2md_pipeline.convert(archived)
-    chunks: list[ChunkInput] = []
-    if result.chunks:
-        if on_stage is not None:
-            on_stage("embedding")
-        rows = [_sec2md_chunk_to_row(c) for c in result.chunks]
-        embeddings = embed.embed_texts([r.text for r in rows])
-        chunks = _build_chunk_inputs(rows, embeddings)
+    if on_stage is not None and result.chunks:
+        on_stage("embedding")
+    chunks = _build_sec2md_chunks(result)
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
         page_count=result.page_count, token_count=_token_count(result.full_text),
         document_chunks=chunks, images=[],
+    )
+
+def _parse_html_sec2md_split(
+    archived: Path,
+    sections: list,
+    *,
+    file_hash: str,
+    file_name: str,
+    on_stage: Callable[[str], None] | None = None,
+) -> ParsedDocument:
+    """Build the container + section ParsedDocument for a TOC-anchored filing.
+
+    The container holds the original ``file_hash`` and **no chunks of its own**;
+    each section gets a derived hash and its own embedded chunks. The whole thing
+    is one atomic write unit — the Writer persists the container last."""
+    if on_stage is not None:
+        on_stage("embedding")
+    file_bytes = archived.read_bytes()
+    parsed_sections: list[ParsedSection] = []
+    total_tokens = 0
+    for sec in sections:
+        chunks = _build_sec2md_chunks(sec.result, fallback_heading=sec.title)
+        token_count = _token_count(sec.result.full_text)
+        total_tokens += token_count
+        parsed_sections.append(ParsedSection(
+            file_hash=_section_file_hash(file_bytes, sec.anchor_id),
+            anchor_id=sec.anchor_id,
+            section_title=sec.title,
+            section_order=sec.order,
+            token_count=token_count,
+            document_chunks=chunks,
+        ))
+    return ParsedDocument(
+        file_hash=file_hash, file_name=file_name, archive_path=archived,
+        page_count=None, token_count=total_tokens,
+        document_chunks=[], images=[], sections=parsed_sections,
     )
 
 def _parse_edgar_submission(
