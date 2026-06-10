@@ -16,9 +16,17 @@
   $: bodyHtml = marked.parse(
     data.finding.body.replace(/\[\^(\d+)\]/g, (match, idStr) => {
       const c = byId.get(Number(idStr));
-      return c ? renderChip(c, c === active) : match;
+      return c ? renderChip(c, c === active) : renderTombstone(Number(idStr));
     }),
   );
+
+  // An unresolved [^N] marker: the cited source has been removed (deleted, or
+  // rebuilt under new chunk ids by an edit/merge), so only the id survives. We
+  // can't say what it was or whether it was truly deleted — render a muted
+  // tombstone that keeps the marker present rather than leaking raw [^N] text.
+  function renderTombstone(chunkId) {
+    return `<span class="cite-gone" title="${esc(`chunk ${chunkId} · cited source no longer available`)}">cited source no longer available</span>`;
+  }
 
   function renderChip(c, isActive) {
     const name = stripExt(c.file_name);
@@ -159,6 +167,14 @@
     background: var(--color-off);
     color: var(--color-surface);
     border-color: var(--color-off);
+  }
+  /* Tombstone for a [^N] whose cited source is gone. Raw {@html}, hence :global.
+     Muted + italic so it reads as an absence, not a live citation chip. */
+  :global(.cite-gone) {
+    font-style: italic;
+    font-size: 0.85em;
+    color: var(--color-token-dark);
+    cursor: help;
   }
   /* The chip and its jump button travel together as one inline unit, so a line
      break never splits them. Also raw {@html}, hence :global. */

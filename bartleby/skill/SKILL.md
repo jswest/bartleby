@@ -66,7 +66,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `merge_findings --from <ids> --into <id> --body-file <path>` | **Collapse a cluster of duplicate findings into one.** `--into` survives (keeps its `finding_id` / provenance); you author the consolidated body; the `--from` sources are deleted. Echo the returned `body` verbatim. |
 | `delete_finding --finding <id>` | **Retract a finding outright** — its row, body chunks, and citations. The cited *document* chunks (evidence) are untouched. |
 | `list_findings` | **Browse what findings exist**, newest first — the `list_documents` of memory. `--brief` for a cheap survey. (`search --findings` ranks fragments; this lists what's there.) |
-| `read_finding --finding <id>` | **Read one whole finding by id** — full `body` plus resolved citations. Use it after `list_findings`. Findings are hints — never cite one. |
+| `read_finding --finding <id>` | **Read one whole finding by id** — full `body` plus resolved citations. Use it after `list_findings`. Findings are hints — never cite one. `dangling_citations` lists chunk ids whose `[^N]` marker no longer resolves (the cited source was since removed); when compiling a report, flag such a marker as "cited source no longer available" — don't silently drop it. |
 | `read_tags` | List the controlled vocabulary. **Always run this before any other tag operation.** Empty until someone adds tags. |
 | `add_tag --name <n> --description <d>` | Create a tag (runs a similarity + name-conflict check; returns `status: "conflict"` on a near-match instead of duplicating). **Humans drive tag creation** — only propose one when explicitly asked. |
 | `delete_tag --name <n>` | Drop a tag. Cascades to all its assignments. |
