@@ -31,6 +31,7 @@ def test_describe_corpus_empty(project_env, capsys):
     assert out["tags"] == []
     assert out["summary_coverage"] == {"summarized": 0, "unsummarized": 0}
     assert out["content_mix"] == []
+    assert out["chunk_length"] == {"median": None, "p90": None, "max": None}
     assert out["largest_documents"] == []
 
 
@@ -53,6 +54,9 @@ def test_describe_corpus_happy_path(seeded_project, capsys):
 
     mix = {row["content_type"]: row["chunk_count"] for row in out["content_mix"]}
     assert mix == {"text": 4, None: 2}
+
+    # Chunk-length shape over the 6 ingested chunks (lengths 26,26,27,27,28,28).
+    assert out["chunk_length"] == {"median": 27, "p90": 28, "max": 28}
 
     # Largest first, by token_count.
     assert [d["id"] for d in out["largest_documents"]] == [
@@ -106,6 +110,38 @@ def test_describe_corpus_top_n(seeded_project, capsys):
     out = _run(seeded_project["project"], capsys, extra=["--top-n", "1"])
     assert len(out["largest_documents"]) == 1
     assert out["largest_documents"][0]["id"] == seeded_project["doc_a"]
+
+
+def test_describe_corpus_chunk_length_controlled(project_env, capsys):
+    # Ten chunks of length 10,20,…,100 make the nearest-rank percentiles
+    # unambiguous: median is the 5th value (50), p90 the 9th (90), max 100.
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from tests._skill_fixtures import _emb
+
+    conn = open_db(project_env)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, token_count) "
+            "VALUES ('h', 'doc.txt', '/tmp/doc.txt', 0)"
+        )
+        doc = conn.last_insert_rowid()
+        insert_document_chunks(conn, doc, [
+            ChunkInput(text="x" * (10 * (i + 1)), embedding=_emb(0.01 * i),
+                       chunk_index=i)
+            for i in range(10)
+        ])
+    finally:
+        conn.close()
+
+    out = _run(project_env, capsys)
+    assert out["chunk_length"] == {"median": 50, "p90": 90, "max": 100}
+
+
+def test_describe_corpus_chunk_length_scopes_to_slice(seeded_project, capsys):
+    # Scoped to beta alone (chunk lengths 26, 28): stats narrow to that document.
+    out = _run(seeded_project["project"], capsys,
+               extra=["--in-documents", str(seeded_project["doc_b"])])
+    assert out["chunk_length"] == {"median": 26, "p90": 28, "max": 28}
 
 
 def test_describe_corpus_rejects_nonpositive_top_n(seeded_project):
