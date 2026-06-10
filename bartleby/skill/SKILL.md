@@ -34,6 +34,7 @@ bartleby skill read_chunks --document 4 --limit 20                  # read to ci
 bartleby skill read_chunks --around-chunk 1629 --window 5           # the target chunk plus 5 neighbors each side
 bartleby skill read_document --document 4 --summary
 bartleby skill save_finding --title "..." --description "..." --body-file ~/.bartleby/tmp/finding.md
+bartleby skill save_date --document 12 --date 2024-03-08              # backfill a date you read in the document
 bartleby skill add_tag --name ch --description "Central Hudson rate-case filings"
 bartleby skill assign_tag --documents 9,12,30 --tag bad_ocr        # manual (no-LLM) batch assignment
 ```
@@ -63,6 +64,7 @@ Each script prints JSON to stdout, exits non-zero on error (with a `{"error", "c
 | `read_chunks --document <id>` | Read chunks — by document (paginated), by `--chunks <ids>`, or `--around-chunk <id>` for a neighborhood. **Read this way when you intend to cite**: every chunk comes back with its `chunk_id`. `--preview N` trims text for structural scans. |
 | `read_document --document <id>` | Whole-document read (summary + full text; `--summary` / `--full` narrow). **`--full` is clean prose carrying no `chunk_id`s** — use it for comprehension you won't cite from; to cite, read with `read_chunks` instead. |
 | `save_summary --document <id> ...` | Write or replace a document's agent-authored summary. Use when one is wrong or missing. `--title` / `--description` are how it shows up in `list_documents`, so make them informative. |
+| `save_date --document <id> --date YYYY-MM-DD` (or `--clear`) | Backfill or correct a document's `authored_date` — the same curation posture as `save_summary`: use it **only when you've read the evidence** for the date (a dateline, a "signed on" line, an export header), cite-don't-guess. Writes the document's summary row, so the document immediately participates in `--authored-after`/`--authored-before` and the `authored_date` that `list_documents`/`scan`/`search` report. Returns `{document_id, old_authored_date, new_authored_date}`; rejects a malformed date (`INVALID_DATE`, non-zero exit) rather than silently nulling it. `--clear` marks the document undated. Needs a summary to carry the date — run `save_summary` first if the document has none (`NO_SUMMARY`). |
 | `save_finding --title <t> --description <d> --body-file <path>` | Persist a research finding. Body comes from a `--body-file` staged under `~/.bartleby/tmp/` (see "Where to stage scratch"); citations are the `[^N]` markers in the prose, and at least one is required. |
 | `edit_finding --finding <id> ...` | Update an existing finding in place (title / description / body). Use it to fix malformed citations or revise — don't fork a new finding (`merge_findings` collapses ones that already fragmented). |
 | `merge_findings --from <ids> --into <id> --body-file <path>` | **Collapse a cluster of duplicate findings into one.** `--into` survives (keeps its `finding_id` / provenance); you author the consolidated body; the `--from` sources are deleted. Echo the returned `body` verbatim. |
