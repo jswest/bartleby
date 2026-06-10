@@ -369,9 +369,11 @@ class Writer:
     def persist_caption(self, caption: ImageCaption) -> None:
         """Fill an image row's caption (analysis + chunks) atomically.
 
-        The ``analysis_json IS NULL`` guard makes this idempotent: a caption
-        already applied (a shared image captioned via a sibling document) is a
-        no-op rather than a double-write.
+        The ``analysis_json IS NULL`` guard makes this idempotent: if the
+        UPDATE matches no row (shared image already captioned via a sibling
+        document, or a replayed unit), the chunk insert is skipped too — a
+        replay can't trip the chunks UNIQUE constraint and read as a caption
+        failure.
         """
         with self.conn:
             cur = self.conn.cursor()
@@ -380,6 +382,8 @@ class Writer:
                 "WHERE image_id = ? AND analysis_json IS NULL",
                 (caption.analysis_json, caption.analysis_model, caption.image_id),
             )
+            if self.conn.changes() == 0:
+                return
             if caption.chunks:
                 insert_image_chunks(
                     self.conn, caption.image_id, caption.chunks,
