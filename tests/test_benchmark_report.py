@@ -22,7 +22,7 @@ def _summary(tag):
 
 
 def _run(root, ref, doc, idx, summary=None, ok=True, tps=None, ts=None,
-         prompt_sha="p1", source_sha="s1", temperature=0.0):
+         prompt_sha="p1", source_sha="s1", temperature=0.0, eval_count=None):
     record = {
         "provider": ref.provider, "model": ref.model, "doc": doc,
         "run_index": idx, "ok": ok, "wall_seconds": 5.0,
@@ -30,6 +30,8 @@ def _run(root, ref, doc, idx, summary=None, ok=True, tps=None, ts=None,
         "source_sha": source_sha, "prompt_sha": prompt_sha,
         "temperature": temperature,
     }
+    if eval_count is not None:
+        record["eval_count"] = eval_count
     if ok:
         record["summary"] = summary
         if tps is not None:
@@ -153,10 +155,39 @@ def test_leaderboard_csv_output(populated, tmp_path, capsys):
     rows = list(csv.DictReader(out_csv.open()))
     assert [r["model"] for r in rows] == ["gpt-5-nano", "alpha:1b", "beta:7b"]
     alpha = rows[1]
-    assert alpha["frontier"] == "True"
+    assert alpha["pareto_optimal"] == "True"
     assert float(alpha["mean_quality"]) == pytest.approx(4.0 + 1 / 12)
     assert float(alpha["quality_d3"]) == pytest.approx(3.5 + 1 / 12)
     assert rows[0]["tokens_per_second"] == ""  # cloud: no local throughput
+
+
+def test_wall_seconds_per_token_measured_for_cloud_too(root, tmp_path, capsys):
+    # wall 5.0 − load 1.0 = 4.0 inference s. Local has tps; cloud doesn't, but
+    # both carry eval_count, so both get a Wall s/tok number (the apples-to-
+    # apples speed comparison): 4.0/200 = 0.02 local, 4.0/100 = 0.04 cloud.
+    _run(root, ALPHA, "d1", 0, _summary("a"), tps=100.0, eval_count=200)
+    _run(root, NANO, "d1", 0, _summary("n"), temperature=None, eval_count=100)
+    out_csv = tmp_path / "lb.csv"
+    assert report.leaderboard(root, output=out_csv) == 0
+    out = capsys.readouterr().out
+    assert "Wall s/tok" in out and "Pareto optimal" in out
+    assert "Inference (s)" not in out and "Frontier" not in out
+    alpha_row = next(l for l in out.splitlines() if "alpha" in l)
+    nano_row = next(l for l in out.splitlines() if "gpt-5-nano" in l)
+    assert "0.0200" in alpha_row
+    assert nano_row.split("|")[3].strip() == "—"  # no Tok/s for cloud
+    assert "0.0400" in nano_row                    # but it does get Wall s/tok
+    rows = {r["model"]: r for r in csv.DictReader(out_csv.open())}
+    assert float(rows["alpha:1b"]["wall_seconds_per_token"]) == pytest.approx(0.02)
+    assert float(rows["gpt-5-nano"]["wall_seconds_per_token"]) == pytest.approx(0.04)
+
+
+def test_wall_seconds_per_token_blank_without_eval_count(root, capsys):
+    _run(root, ALPHA, "d1", 0, _summary("a"), tps=100.0)  # no eval_count
+    assert report.leaderboard(root) == 0
+    out = capsys.readouterr().out
+    alpha_row = next(l for l in out.splitlines() if "alpha" in l)
+    assert alpha_row.split("|")[4].strip() == "—"  # Wall s/tok column blank
 
 
 def test_heterogeneity_warning_on_mixed_prompt_sha(populated, capsys):
