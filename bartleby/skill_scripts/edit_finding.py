@@ -43,6 +43,7 @@ from bartleby.skill_scripts._common import (
     embed_body_chunks,
     finding_chunk_and_citation_ids,
     load_finding_body,
+    reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
@@ -97,6 +98,14 @@ def work(*, conn, args, session_id) -> dict:
 
     if args.body_file is not None:
         new_body, new_citations = load_finding_body(conn, args.body_file)
+        # The edit deletes-and-rebuilds this finding's own body chunks. A new
+        # body citing one of those pre-edit chunk ids would hit the FK path
+        # (chunks deleted before citations are replaced) and surface as a bare
+        # INTERNAL_ERROR. Reject upfront, naming the offending chunk ids.
+        reject_citations_to_involved_findings(
+            conn, new_citations, [args.finding_id],
+            code="CITES_OWN_CHUNKS", action="edit",
+        )
         # Embed BEFORE the UPDATE (the first write) so the transaction's write
         # lock doesn't span the lazy model load (issue #340).
         chunk_inputs = embed_body_chunks(new_body)

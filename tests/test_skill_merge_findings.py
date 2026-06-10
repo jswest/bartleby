@@ -291,6 +291,54 @@ def test_merge_rejects_body_without_citations(seeded_project, tmp_path, capsys):
         conn.close()
 
 
+@pytest.mark.parametrize("cite_role", ["source", "target"])
+def test_merge_rejects_citation_to_involved_finding_chunk(
+    seeded_project, tmp_path, capsys, cite_role
+):
+    """A merged body that cites a finding-kind chunk owned by a finding involved
+    in the merge — a source (would cascade-delete into a dangling [^N]) or the
+    target (would FK-violate into a bare INTERNAL_ERROR) — is refused upfront
+    with CITES_MERGED_CHUNKS naming the offending chunk id; nothing is deleted."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    c0, c1 = chunks[0], chunks[1]
+
+    target = _save(project, tmp_path, capsys, name="t", title="Keep", cite=c0)
+    src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
+
+    # Cite a body chunk owned by whichever involved finding we're exercising.
+    involved = target if cite_role == "target" else src
+    bad_chunk = _finding_chunk_ids(project, involved)[0]
+
+    merged_file = tmp_path / "merged.md"
+    merged_file.write_text(
+        f"# C\n\nDoc cite[^{c0}] plus a finding chunk[^{bad_chunk}].",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CITES_MERGED_CHUNKS"
+    assert out["offending_chunk_ids"] == [bad_chunk]
+
+    # The merge aborted before any deletion: both findings still exist.
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
+            (target, src),
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
 def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, capsys):
     """A memory-off session cannot consume a foreign session's finding, and the
     gate fires before any deletion — both findings survive."""

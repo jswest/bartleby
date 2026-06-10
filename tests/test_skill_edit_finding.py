@@ -299,6 +299,57 @@ def test_edit_finding_rejects_unknown_chunk_marker(
     assert out["unknown_chunk_ids"] == [999999]
 
 
+def test_edit_finding_rejects_citation_to_own_chunk(
+    seeded_project, tmp_path, capsys
+):
+    """A replacement body citing the finding's *own* pre-edit body chunk is
+    refused upfront with CITES_OWN_CHUNKS naming the offending id, instead of
+    crashing with a bare INTERNAL_ERROR (the chunk would be deleted before its
+    citation row is replaced). The finding is left untouched."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+    a, _ = saved["_chunks"]
+
+    conn = open_db(seeded_project["project"])
+    try:
+        own_chunk = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (finding_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    new_body_file = tmp_path / "self-cite.md"
+    new_body_file.write_text(
+        f"# Reworked\n\nValid doc cite[^{a}] plus my own chunk[^{own_chunk}].",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding", str(finding_id),
+            "--body-file", str(new_body_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CITES_OWN_CHUNKS"
+    assert out["offending_chunk_ids"] == [own_chunk]
+
+    # The edit aborted before any write: the finding's title and body survive.
+    conn = open_db(seeded_project["project"])
+    try:
+        title, body = conn.cursor().execute(
+            "SELECT title, body FROM findings WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchone()
+        assert title == "Original title"
+        assert body == saved["body"]
+    finally:
+        conn.close()
+
+
 def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys):
     """A memory-off session cannot edit (and thereby read back) a finding
     authored by another session — the response echoes the body, so an ungated

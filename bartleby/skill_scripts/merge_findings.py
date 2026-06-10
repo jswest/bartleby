@@ -51,6 +51,7 @@ from bartleby.skill_scripts._common import (
     comma_int_list,
     load_finding_body,
     rebuild_finding_chunks,
+    reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
@@ -107,6 +108,15 @@ def work(*, conn, args, session_id) -> dict:
     assert_findings_accessible(conn, session_id, ids, action="merge")
 
     body, citations = load_finding_body(conn, args.body_file)
+
+    # The merge deletes-and-rebuilds the body chunks of the target *and* the
+    # sources. A citation pointing at any of those chunks would either be
+    # cascade-deleted into a dangling [^N] (sources) or hit an FK violation
+    # surfacing as a bare INTERNAL_ERROR (target rebuilt before its citations
+    # are replaced). Reject upfront, naming the offending chunk ids.
+    reject_citations_to_involved_findings(
+        conn, citations, ids, code="CITES_MERGED_CHUNKS", action="merge",
+    )
 
     owning_session_id = owners[target]
     current_title, current_description = cur.execute(
