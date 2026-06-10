@@ -178,21 +178,18 @@ def test_search_default_modes_are_semantic_and_fulltext(seeded_project, capsys):
 def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
     # Start a no-memory session and mark it active.
     from bartleby.session import start_session
-    start_session(seeded_project["project"], memory_enabled=False)
+    active = start_session(seeded_project["project"], memory_enabled=False)
 
-    # Add a finding in a separate (memory-on) session so it can be excluded.
+    # Seed a finding owned by the *active* no-memory session itself. search.py
+    # drops the finding kind wholesale, so even the session's own findings are
+    # excluded — a softened "exclude only foreign findings" impl must fail here.
     conn = open_db(seeded_project["project"])
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("other-sess", 1),
-        )
-        other_sess = conn.last_insert_rowid()
-        cur.execute(
             "INSERT INTO findings (session_id, title, description, body) "
             "VALUES (?, ?, ?, ?)",
-            (other_sess, "test", "a one-line description", "body about pm25"),
+            (active["session_id"], "test", "a one-line description", "body about pm25"),
         )
         finding_id = conn.last_insert_rowid()
         emb = [0.01 * i for i in range(EMBEDDING_DIM)]
@@ -210,8 +207,58 @@ def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["memory_excluded"] is True
     assert "finding" not in out["source_kinds"]
-    # No finding-kind result should appear.
+    # No finding-kind result should appear — not even the active session's own.
     assert all(r["source_kind"] != "finding" for r in out["results"])
+
+
+def test_search_findings_appear_under_memory_on(seeded_project, capsys):
+    """Positive control: a finding-kind hit DOES surface for --findings when
+    memory is on, so the exclusion assertions above can't pass vacuously."""
+    from bartleby.session import start_session
+    active = start_session(seeded_project["project"], memory_enabled=True)
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO findings (session_id, title, description, body) "
+            "VALUES (?, ?, ?, ?)",
+            (active["session_id"], "test", "a one-line description", "body about pm25"),
+        )
+        finding_id = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_finding_chunks(conn, finding_id, [
+            ChunkInput(text="finding body about pm25", embedding=emb, chunk_index=0),
+        ])
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "--findings",
+        "pm25",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["memory_excluded"] is False
+    assert "finding" in out["source_kinds"]
+    # The seeded finding is searchable and surfaces as a finding-kind result.
+    assert any(r["source_kind"] == "finding" for r in out["results"])
+
+
+def test_search_memory_excluded_false_without_findings_flag(seeded_project, capsys):
+    """memory_excluded reports only *requested-and-dropped* findings: with no
+    --findings, a memory-off session excludes nothing, so the flag stays False."""
+    from bartleby.session import start_session
+    start_session(seeded_project["project"], memory_enabled=False)
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "pm25",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["memory_excluded"] is False
+    assert "finding" not in out["source_kinds"]
 
 
 def test_search_with_summaries_source_kind(seeded_project, capsys):
