@@ -86,6 +86,41 @@ Count-by aggregate (``--count-by document``):
                      # --sort date: authored_date oldest-first, undated last
     }
 
+Count-by capture (``--count-by '/regex/'``):
+    On templated corpora the interesting value often sits in a predictable
+    labeled field — "the number after ``H.R.``", "the amount after
+    ``Income:``". Pass a ``/regex/`` carrying one capture group instead of the
+    ``document`` keyword to bucket matches by that captured substring,
+    replacing the corpus-wide hand-rolled-regex habit with a primitive:
+
+        scan "bill" --count-by '/H\\.R\\.\\s*(\\d+)/'
+        → groups: [{"value": "4346", "count": 7}, {"value": "815", "count": 3}]
+
+    Counting is **per match**, not per chunk — a chunk with two matches adds
+    two — for an honest frequency. A capture that didn't participate
+    (``group(1)`` is ``None``) is skipped. ``distinct_value_count`` is the
+    headline, ``total_match_count`` the full per-match total; both are the full
+    unpaginated totals. Buckets sort by count desc then value asc, paginated by
+    ``--limit``/``--offset``; ``--sort`` has no effect (a captured value spans
+    documents, so chronological order is meaningless). Like ``--count-by
+    document`` it cannot combine with ``--preview``/``--brief``. This is a
+    regex-capture-plus-fold primitive, deliberately **not** a query engine — no
+    joins, no predicates. The pattern is run with a between-chunk wall-clock
+    deadline (``COUNT_BY_TIMEOUT`` on overrun) and a match cap; hitting the cap
+    sets ``truncated`` to ``true`` with partial counts.
+
+    {
+      "query": str, "match_mode": "phrase" | "terms",
+      "count_by": "/regex/",            # echoes the pattern as passed
+      "offset": int, "limit": int,
+      "distinct_value_count": int,      # the headline
+      "total_match_count": int,         # full per-match total
+      "truncated": bool,                # true if the match cap clipped counts
+      "groups": [
+        {"value": str, "count": int}, ...   # count DESC, then value ASC
+      ]
+    }
+
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
 intersect. ``--authored-after`` / ``--authored-before`` add inclusive
@@ -101,6 +136,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
+from collections import Counter
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
@@ -111,6 +148,17 @@ from bartleby.skill_scripts._tags import resolve_scope
 
 DEFAULT_PREVIEW = 240
 DEFAULT_LIMIT = 100
+
+# Runaway guards for a regex --count-by. The pattern is agent-supplied, not
+# attacker-supplied, so this is a footgun rail, not an adversarial-ReDoS defence:
+# the deadline is checked *between chunks* (a single re.finditer call is C code
+# that can't be interrupted mid-match), which catches the realistic "broad
+# pattern × big corpus" runaway. Chunks are size-bounded by the chunker, so the
+# residual single-chunk-backtracking gap stays improbable. The match cap bounds
+# Counter growth; when hit, the result is flagged truncated rather than dropped
+# silently.
+COUNT_BY_DEADLINE_SECONDS = 5.0
+COUNT_BY_MAX_MATCHES = 100_000
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -135,12 +183,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--count-by",
-        choices=["document"],
         default=None,
         dest="count_by",
-        help="Aggregate mode. Instead of per-chunk matches, return a "
-             "per-document hit histogram plus distinct_document_count and "
-             "total_chunk_count. Cannot be combined with --preview/--brief.",
+        metavar="document|/regex/",
+        help="Aggregate mode. 'document' returns a per-document hit histogram "
+             "(distinct_document_count + total_chunk_count). A /regex/ with a "
+             "capture group instead buckets matches by the captured substring "
+             "(distinct_value_count + total_match_count). Cannot be combined "
+             "with --preview/--brief.",
     )
     p.add_argument(
         "--preview",
@@ -206,11 +256,81 @@ def _build_fts_query(query: str, match_mode: str) -> str:
     return " ".join(pieces)
 
 
+def _parse_count_by(value: str) -> tuple[str, re.Pattern | None]:
+    """Classify a --count-by value.
+
+    Returns ('document', None) for the literal keyword, or ('regex', compiled)
+    for a /pattern/ that carries at least one capture group. Raises SkillError
+    on a malformed value, an uncompilable pattern, or a capture-less regex.
+    """
+    if value == "document":
+        return "document", None
+    if len(value) >= 2 and value.startswith("/") and value.endswith("/"):
+        pattern = value[1:-1]
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            raise SkillError(
+                "INVALID_COUNT_BY_REGEX",
+                f"--count-by regex {value!r} does not compile: {exc}.",
+            )
+        if compiled.groups < 1:
+            raise SkillError(
+                "COUNT_BY_NO_CAPTURE",
+                f"--count-by regex {value!r} has no capture group; wrap the "
+                "value to bucket on in parentheses, e.g. '/H\\.R\\.\\s*(\\d+)/'.",
+            )
+        return "regex", compiled
+    raise SkillError(
+        "INVALID_COUNT_BY",
+        f"--count-by must be 'document' or a /regex/ with a capture group; "
+        f"got {value!r}.",
+    )
+
+
+def _count_by_regex(cur, where: str, params: list, pattern: re.Pattern) -> tuple[Counter, bool]:
+    """Tally pattern's first capture group across every matching chunk's text.
+
+    Counts per match (a chunk with two matches contributes two), skipping a
+    capture that didn't participate (group(1) is None). Returns the histogram
+    and whether the match cap truncated it. Enforces a between-chunk wall-clock
+    deadline — see the COUNT_BY_* guard note above for why it's not mid-match.
+    """
+    counter: Counter = Counter()
+    total = 0
+    deadline = time.monotonic() + COUNT_BY_DEADLINE_SECONDS
+    rows = cur.execute(
+        f"SELECT c.text FROM chunks_fts "
+        f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+        f"WHERE {where}",
+        params,
+    )
+    for (text,) in rows:
+        if time.monotonic() > deadline:
+            raise SkillError(
+                "COUNT_BY_TIMEOUT",
+                f"--count-by regex exceeded {COUNT_BY_DEADLINE_SECONDS:g}s; "
+                "narrow the scan scope or simplify the pattern.",
+            )
+        for match in pattern.finditer(text):
+            value = match.group(1)
+            if value is None:
+                continue
+            counter[value] += 1
+            total += 1
+            if total >= COUNT_BY_MAX_MATCHES:
+                return counter, True  # match cap hit → partial counts
+    return counter, False
+
+
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     match_mode = "terms" if args.match_terms else "phrase"
+    count_mode, count_regex = (None, None)
+    if args.count_by is not None:
+        count_mode, count_regex = _parse_count_by(args.count_by)
     scope = resolve_scope(
         conn,
         in_documents=args.in_documents,
@@ -238,7 +358,27 @@ def work(*, conn, args, session_id) -> dict:
 
     cur = conn.cursor()
 
-    if args.count_by == "document":
+    if count_mode == "regex":
+        if no_match:
+            counter, truncated = Counter(), False
+        else:
+            counter, truncated = _count_by_regex(cur, where, params, count_regex)
+        # Headline + total are full (pre-pagination); buckets sort by count
+        # desc then value asc. --sort doesn't apply: a captured value spans
+        # documents/dates, so chronological ordering is meaningless here.
+        ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        page = ordered[args.offset : args.offset + args.limit]
+        return _envelope({
+            "count_by": args.count_by,
+            "offset": args.offset,
+            "limit": args.limit,
+            "distinct_value_count": len(counter),
+            "total_match_count": sum(counter.values()),
+            "truncated": truncated,
+            "groups": [{"value": value, "count": count} for value, count in page],
+        })
+
+    if count_mode == "document":
         if no_match:
             distinct_document_count = total_chunk_count = 0
             documents = []
