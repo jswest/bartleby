@@ -1,12 +1,16 @@
-# benchmarks/ scripts + README are tracked (a reproducible model-selection
-# tool). Only the local run outputs and secrets are ignored.
+# benchmarks/ configuration (corpus.yaml, models.yaml, judges.yaml), the
+# corpus PDFs, and the README are tracked (a reproducible model-selection
+# tool). The append-only stores, derived caches, and secrets are local-only.
+benchmarks/results/
+benchmarks/judgements/
+benchmarks/sources/
+benchmarks/blind*
+benchmarks/*.jsonl
+benchmarks/*.csv
+benchmarks/.env
+# Pre-#268 local-only artifacts that may linger in working copies.
 benchmarks/results*
 benchmarks/judged*
-benchmarks/blind*
-benchmarks/*-judged.csv
-benchmarks/.env
-# Local-only summarizer variants kept out of VC (cloud-cost is out of scope
-# for the local-selection benchmark; see benchmarks/README.md).
 benchmarks/summarize_openai.py
 benchmarks/summarize_omlx_vs_ollama.py
 build

@@ -146,6 +146,103 @@ def main():
     )
     embed_parser.add_argument("text", type=str)
 
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="Benchmark summarizer models against the committed corpus"
+    )
+    benchmark_sub = benchmark_parser.add_subparsers(dest="benchmark_command")
+    bs = benchmark_sub.add_parser(
+        "summarize",
+        help="Append summarize runs for every model × corpus doc (or a subset)",
+    )
+    bs.add_argument(
+        "--models", type=str, default=None,
+        help="Comma-separated <provider>/<model> list (e.g. ollama/gemma4:e2b); "
+             "default: every model in models.yaml.",
+    )
+    bs.add_argument(
+        "--documents", type=str, default=None,
+        help="Comma-separated doc-id list; default: every doc in corpus.yaml.",
+    )
+    bs.add_argument(
+        "--runs", type=int, default=1,
+        help="Runs to append per (model, doc) cell this invocation (default 1).",
+    )
+    bs.add_argument(
+        "--seed", type=int, default=None,
+        help="Seed for the matrix-order shuffle so the plan is reproducible.",
+    )
+    bs.add_argument(
+        "--ollama-host", type=str, default=None,
+        help="Override the Ollama host (default http://localhost:11434).",
+    )
+    bj = benchmark_sub.add_parser(
+        "judge",
+        help="Top up blind judge scores for every distinct summary on record",
+    )
+    bj.add_argument(
+        "--model", type=str, default=None,
+        help="Judge as <provider>/<model>; default: the first entry in judges.yaml.",
+    )
+    bj.add_argument(
+        "--passes", type=int, default=3,
+        help="Judgments each distinct summary should have (default 3). "
+             "Declarative and idempotent: re-running the same value is a "
+             "no-op; want more judgments on what's already judged, raise it "
+             "(--passes 8 adds 5 to a summary that has 3).",
+    )
+    bl = benchmark_sub.add_parser(
+        "leaderboard", help="Ranked report merging runs, schema gate, and judge scores"
+    )
+    bl.add_argument(
+        "--judges", type=str, default=None,
+        help="Comma-separated <provider>/<model> judge filter; default: all on record.",
+    )
+    bl.add_argument(
+        "--since", type=str, default=None,
+        help="Only records on/after this ISO date (e.g. 2026-06-01).",
+    )
+    bl.add_argument(
+        "--until", type=str, default=None,
+        help="Only records on/before this ISO date.",
+    )
+    bl.add_argument(
+        "--output", type=str, default=None,
+        help="Also write the leaderboard to this CSV file.",
+    )
+    bl.add_argument(
+        "--min-schema", type=float, default=100.0,
+        help="Minimum schema-valid %% to survive the hard gate (default 100).",
+    )
+
+    bb = benchmark_sub.add_parser(
+        "blind", help="Write blinded summaries + a key file for a human spot-check"
+    )
+    bb.add_argument(
+        "--out", type=str, default=None,
+        help="Output directory (default <benchmarks-dir>/blind).",
+    )
+    bb.add_argument(
+        "--seed", type=int, default=None,
+        help="Seed the per-model pick + label shuffle for reproducibility.",
+    )
+
+    be = benchmark_sub.add_parser("errors", help="List failed runs")
+
+    for sub in (bs, bj, bl, bb, be):
+        sub.add_argument(
+            "--benchmarks-dir", type=str, default="benchmarks",
+            help="Benchmarks directory (default ./benchmarks).",
+        )
+    for sub in (bl, bb, be):
+        sub.add_argument(
+            "--models", type=str, default=None,
+            help="Comma-separated <provider>/<model> filter.",
+        )
+        sub.add_argument(
+            "--documents", type=str, default=None,
+            help="Comma-separated doc-id filter.",
+        )
+
     logs_parser = subparsers.add_parser("logs", help="View the audit log for a session")
     logs_parser.add_argument("--session", type=str, default=None)
     logs_parser.add_argument("--limit", type=int, default=50)
@@ -175,6 +272,7 @@ def main():
         "scribe": lambda: _scribe(args),
         "session": lambda: _session(args, session_parser),
         "embed": lambda: _embed(args),
+        "benchmark": lambda: _benchmark(args, benchmark_parser),
         "logs": lambda: _logs(args),
         "serve": lambda: _serve(),
     }
@@ -219,6 +317,16 @@ def _scribe(args):
 def _embed(args):
     from bartleby.commands.embed import main as embed_main
     embed_main(args.text)
+
+
+def _benchmark(args, parser):
+    from bartleby.commands import benchmark as benchmark_cmd
+
+    if not args.benchmark_command:
+        parser.print_help()
+        sys.exit(1)
+
+    getattr(benchmark_cmd, args.benchmark_command)(args)
 
 
 def _logs(args):
