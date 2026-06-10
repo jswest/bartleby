@@ -115,7 +115,7 @@ def test_schema_mismatch_points_at_upgrade_first(tmp_path, monkeypatch):
     c = open_db("proj")
     c.cursor().execute(
         "UPDATE meta SET value = ? WHERE key = 'schema_version'",
-        (str(SCHEMA_VERSION + 1),),
+        (str(SCHEMA_VERSION - 1),),
     )
     c.close()
 
