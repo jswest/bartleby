@@ -188,10 +188,57 @@ def main():
         help="Judgments each distinct summary should have (default 3); "
              "idempotent — re-running tops up, never duplicates.",
     )
-    for sub in (bs, bj):
+    bl = benchmark_sub.add_parser(
+        "leaderboard", help="Ranked report merging runs, schema gate, and judge scores"
+    )
+    bl.add_argument(
+        "--judges", type=str, default=None,
+        help="Comma-separated <provider>/<model> judge filter; default: all on record.",
+    )
+    bl.add_argument(
+        "--since", type=str, default=None,
+        help="Only records on/after this ISO date (e.g. 2026-06-01).",
+    )
+    bl.add_argument(
+        "--until", type=str, default=None,
+        help="Only records on/before this ISO date.",
+    )
+    bl.add_argument(
+        "--output", type=str, default=None,
+        help="Also write the leaderboard to this CSV file.",
+    )
+    bl.add_argument(
+        "--min-schema", type=float, default=100.0,
+        help="Minimum schema-valid %% to survive the hard gate (default 100).",
+    )
+
+    bb = benchmark_sub.add_parser(
+        "blind", help="Write blinded summaries + a key file for a human spot-check"
+    )
+    bb.add_argument(
+        "--out", type=str, default=None,
+        help="Output directory (default <benchmarks-dir>/blind).",
+    )
+    bb.add_argument(
+        "--seed", type=int, default=None,
+        help="Seed the per-model pick + label shuffle for reproducibility.",
+    )
+
+    be = benchmark_sub.add_parser("errors", help="List failed runs")
+
+    for sub in (bs, bj, bl, bb, be):
         sub.add_argument(
             "--benchmarks-dir", type=str, default="benchmarks",
             help="Benchmarks directory (default ./benchmarks).",
+        )
+    for sub in (bl, bb, be):
+        sub.add_argument(
+            "--models", type=str, default=None,
+            help="Comma-separated <provider>/<model> filter.",
+        )
+        sub.add_argument(
+            "--documents", type=str, default=None,
+            help="Comma-separated doc-id filter.",
         )
 
     logs_parser = subparsers.add_parser("logs", help="View the audit log for a session")
