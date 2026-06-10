@@ -206,19 +206,24 @@ def validated_replacement(
     return new_value
 
 
-def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
-    """Replace this finding's chunks with freshly chunked + embedded ones.
+def embed_body_chunks(body: str) -> list[ChunkInput]:
+    """Chunk + embed ``body`` into ``ChunkInput``s, no DB touch (issue #340).
 
-    Deletes any existing finding chunks, chunks the body, embeds each chunk,
-    inserts them via the typed helper, and returns the new chunk_ids in
-    insertion order. Callers also need to manage ``finding_citations``.
+    The EMBED phase of the finding/summary write path, split out from the WRITE
+    phase so callers can run it *before* opening any write — embedding doesn't
+    need the row's id. ``embed_texts`` is in-process sentence-transformers with a
+    ~5-10s lazy model load on first call in a fresh process; under the runner's
+    transaction wrap, doing it after the first write would hold the write lock
+    across that load (``busy_timeout`` is only 5000ms → ``BusyError`` under
+    concurrency). Hoisting it ahead of the first write keeps apsw's deferred
+    transaction from grabbing a lock until the millisecond SQL tail. Returns
+    ``[]`` for an empty body.
     """
-    delete_chunks_for(conn, "finding", finding_id)
     rows = chunk_markdown_string(body)
     if not rows:
         return []
     embeddings = embed_texts([r.text for r in rows])
-    chunk_inputs = [
+    return [
         ChunkInput(
             text=row.text,
             embedding=emb,
@@ -228,7 +233,37 @@ def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
         )
         for i, (row, emb) in enumerate(zip(rows, embeddings))
     ]
+
+
+def write_finding_chunks(
+    conn, finding_id: int, chunk_inputs: list[ChunkInput]
+) -> list[int]:
+    """Replace this finding's chunks with pre-embedded ones (WRITE phase).
+
+    Deletes any existing finding chunks and inserts ``chunk_inputs`` (built by
+    :func:`embed_body_chunks`) via the typed helper, returning the new chunk_ids
+    in insertion order. This is the only part that writes, so callers hoist
+    :func:`embed_body_chunks` above their first write and call this at the SQL
+    tail. Callers also need to manage ``finding_citations``.
+    """
+    delete_chunks_for(conn, "finding", finding_id)
+    if not chunk_inputs:
+        return []
     return insert_finding_chunks(conn, finding_id, chunk_inputs)
+
+
+def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
+    """Embed ``body`` then replace this finding's chunks (embed + write in one).
+
+    The original single-call helper, now a thin composition of
+    :func:`embed_body_chunks` and :func:`write_finding_chunks`. ``save_finding``
+    and ``edit_finding`` call the two phases separately so the embed runs *before*
+    their first write (issue #340 — keeping the model load out of the txn's
+    write-lock window). ``merge_findings`` still calls this combined form: it
+    already holds a write txn across embedding by its own design, so the hoist
+    buys it nothing and that script is owned elsewhere.
+    """
+    return write_finding_chunks(conn, finding_id, embed_body_chunks(body))
 
 
 def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> None:

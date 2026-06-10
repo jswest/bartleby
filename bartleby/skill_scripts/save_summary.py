@@ -65,6 +65,26 @@ def work(*, conn, args, session_id) -> dict:
         "SELECT summary_id FROM summaries WHERE document_id = ?",
         (args.document_id,),
     ).fetchone()
+
+    # Embed BEFORE the first write (the prior-summary delete below) so the
+    # transaction's write lock doesn't span the lazy model load (issue #340 —
+    # apsw's txn is deferred, so no lock is held until the first DELETE/INSERT).
+    # On a failed replace this also means the prior summary and its chunks are
+    # still untouched if embedding raises.
+    rows = chunk_markdown_string(args.text)
+    chunk_inputs = [
+        ChunkInput(
+            text=row.text,
+            embedding=emb,
+            chunk_index=i,
+            section_heading=row.section_heading,
+            content_type=row.content_type,
+        )
+        for i, (row, emb) in enumerate(
+            zip(rows, embed_texts([r.text for r in rows]))
+        )
+    ] if rows else []
+
     if prior:
         delete_chunks_for(conn, "summary", prior[0])
         cur.execute("DELETE FROM summaries WHERE summary_id = ?", (prior[0],))
@@ -78,21 +98,7 @@ def work(*, conn, args, session_id) -> dict:
     )
     summary_id = conn.last_insert_rowid()
 
-    rows = chunk_markdown_string(args.text)
-    chunk_ids: list[int] = []
-    if rows:
-        embeddings = embed_texts([r.text for r in rows])
-        chunk_inputs = [
-            ChunkInput(
-                text=row.text,
-                embedding=emb,
-                chunk_index=i,
-                section_heading=row.section_heading,
-                content_type=row.content_type,
-            )
-            for i, (row, emb) in enumerate(zip(rows, embeddings))
-        ]
-        chunk_ids = insert_summary_chunks(conn, summary_id, chunk_inputs)
+    chunk_ids = insert_summary_chunks(conn, summary_id, chunk_inputs)
 
     return {
         "summary_id": summary_id,
@@ -102,7 +108,10 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    run(tool_name="save_summary", parse_args=parse_args, work=work, argv=argv)
+    run(
+        tool_name="save_summary", parse_args=parse_args, work=work, argv=argv,
+        mutates=True,
+    )
 
 
 if __name__ == "__main__":

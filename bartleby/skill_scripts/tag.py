@@ -205,6 +205,14 @@ def work(*, conn, args, session_id) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # NOT mutates=True — deliberately unwrapped (issue #340). Unlike the other
+    # write scripts, work() loops one LLM classification per document, possibly
+    # `--all` over the whole corpus, against the user's often-busy local Ollama.
+    # Per-document failure is tolerated by design (the `failed` bucket, ~:182-195)
+    # and resume is cheap via the `_already_tagged` skip (~:100-112). Wrapping the
+    # whole sweep in one transaction would hold a write lock for minutes-to-hours
+    # AND roll back every already-classified document on a mid-sweep failure,
+    # destroying that resumability. Incremental per-document commit is correct.
     run(tool_name="tag", parse_args=parse_args, work=work, argv=argv)
 
 
