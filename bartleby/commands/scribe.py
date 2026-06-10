@@ -29,7 +29,6 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-import os
 import shutil
 import sys
 import threading
@@ -43,7 +42,6 @@ from loguru import logger
 
 from bartleby.config import (
     config_drift,
-    ensure_provider_env,
     load_config,
     redact_config,
 )
@@ -53,8 +51,9 @@ from bartleby.ingest import edgar as edgar_pipeline
 from bartleby.ingest import images as image_pipeline
 from bartleby.ingest import pdfplumber as pdfplumber_pipeline
 from bartleby.ingest import pool
+from bartleby.ingest import resolve
 from bartleby.ingest import sec2md as sec2md_pipeline
-from bartleby.ingest.progress import ScribeProgress
+from bartleby.ingest.progress import ScribeProgress, _ProgressTally
 from bartleby.ingest.chunk import (
     IMAGE_EXTENSIONS,
     PDF_EXTENSIONS,
@@ -79,21 +78,15 @@ from bartleby.ingest.writer import (
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
-    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
-    DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
-    DOCLING_HF_REPOS,
-    EMBEDDING_MODEL,
-    PER_WORKER_GB,
-    RESERVED_CORES,
 )
 from bartleby.project import get_project_dir
-from bartleby.providers import Provider, get_provider
+from bartleby.providers import Provider
 
 
 HTML_EXTENSIONS = {".html", ".htm"}
@@ -688,26 +681,6 @@ class _DocUnit:
     stages: dict[str, float] | None = None
 
 
-class _ProgressTally:
-    """Counts completed work units and forwards ``(done, total)`` to a progress
-    callback — the shared meter for the caption (#166) and summarize (#188)
-    stages, which both report identically against a fixed-size work-list."""
-
-    def __init__(
-        self, total: int, on_progress: Callable[[int, int], None] | None
-    ) -> None:
-        self._total = total
-        self._on_progress = on_progress
-        self._done = 0
-        if on_progress is not None:
-            on_progress(0, total)
-
-    def advance(self) -> None:
-        self._done += 1
-        if self._on_progress is not None:
-            self._on_progress(self._done, self._total)
-
-
 def _caption_all(
     writer: Writer,
     units: list[_DocUnit],
@@ -1107,155 +1080,7 @@ def _classify(
     return to_parse, to_resume, skipped, duplicates
 
 
-# -------------------- resolution / entry --------------------
-
-
-def _resolve_llm_provider(
-    config: dict,
-    *,
-    provider_override: str | None,
-    model_override: str | None,
-) -> tuple[Provider | None, str | None]:
-    if config.get("summary_depth", "none") != "one-shot":
-        return None, None
-
-    name = provider_override or config.get("provider")
-    model = model_override or config.get("model")
-    if not name or not model:
-        console.warn(
-            "summary_depth=one-shot but no provider/model configured; "
-            "skipping summaries."
-        )
-        return None, None
-
-    ensure_provider_env(name, config)
-    return get_provider(name, ollama_base_url=config.get("ollama_base_url")), model
-
-
-def _resolve_vision_provider(
-    config: dict,
-) -> tuple[Provider | None, str | None]:
-    name = config.get("vision_provider")
-    model = config.get("vision_model")
-    if not name or not model:
-        return None, None
-    ensure_provider_env(name, config)
-    return get_provider(name, ollama_base_url=config.get("ollama_base_url")), model
-
-
-def _resolve_max_workers(config: dict, *, timings: bool) -> int:
-    """Resolve how many parse workers to run.
-
-    An explicit ``max_workers`` in config wins (warning when it exceeds what the
-    machine can safely hold); otherwise auto-pick ``min(cpu_count -
-    RESERVED_CORES, free_ram_gb // PER_WORKER_GB)``, floored at 1 (see those
-    consts for the why). ``--timings`` forces 1: the per-stage breakdown it
-    produces is a sequential baseline, meaningless once documents parse
-    concurrently and overlap.
-    """
-    if timings:
-        if int(config.get("max_workers") or 1) > 1:
-            console.warn("--timings runs sequentially (max_workers=1) for a clean baseline.")
-        return 1
-
-    import psutil
-
-    cores = os.cpu_count() or 1
-    free_gb = psutil.virtual_memory().available / 1024**3
-    usable = max(1, cores - RESERVED_CORES)
-    auto = max(1, min(usable, int(free_gb // PER_WORKER_GB)))
-
-    configured = config.get("max_workers")
-    if configured is None:
-        return auto
-    n = max(1, int(configured))
-    if n > auto:
-        console.warn(
-            f"max_workers={n} exceeds what this machine can comfortably run "
-            f"({cores} cores − {RESERVED_CORES} reserved, ~{free_gb:.0f}GB free "
-            f"→ {auto}); proceeding, but watch for memory pressure."
-        )
-    return n
-
-
-def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
-    """Resolve how many images caption concurrently in the post-parse stage.
-
-    Unlike parse workers (RAM-bound, auto-sized), captioning is network/IO-bound,
-    so this is a plain configured count defaulting to ``DEFAULT_CAPTION_WORKERS``.
-    ``--timings`` forces 1: the per-stage breakdown is a sequential baseline,
-    meaningless once captions overlap (same rationale as ``max_workers``).
-
-    A local Ollama vision provider clamps to 1 regardless (#243): Ollama's
-    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
-    and parallel workers only queue. An explicit ``caption_workers`` > 1 is
-    ignored (with a warning) rather than honored — the clamp is the point.
-    """
-    configured = int(config.get("caption_workers") or DEFAULT_CAPTION_WORKERS)
-    if timings:
-        if configured > 1:
-            console.warn(
-                "--timings captions sequentially (caption_workers=1) for a "
-                "clean baseline."
-            )
-        return 1
-    if config.get("vision_provider") == "ollama":
-        # Re-read the raw value (not `configured`, which has the default folded
-        # in) so the warning fires only on an explicit count, not the default.
-        if int(config.get("caption_workers") or 0) > 1:
-            console.warn(
-                "caption_workers > 1 ignored — Ollama serializes requests "
-                "(OLLAMA_NUM_PARALLEL defaults to 1); captioning one image at a time."
-            )
-        return 1
-    return max(1, configured)
-
-
-def _resolve_summarize_workers(config: dict, *, timings: bool) -> int:
-    """Resolve how many documents summarize concurrently in the post-parse pass.
-
-    Like captioning (and unlike RAM-bound parse workers), summarization is
-    network/IO-bound, so this is a plain configured count defaulting to
-    ``DEFAULT_SUMMARIZE_WORKERS``. ``--timings`` forces 1 for a clean per-document
-    baseline, meaningless once summaries overlap (same rationale as the others).
-
-    A local Ollama LLM provider clamps to 1 regardless (#243): Ollama's
-    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
-    and parallel workers only queue. An explicit ``summarize_workers`` > 1 is
-    ignored (with a warning) rather than honored — the clamp is the point.
-    """
-    configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
-    if timings:
-        if configured > 1:
-            console.warn(
-                "--timings summarizes sequentially (summarize_workers=1) for a "
-                "clean baseline."
-            )
-        return 1
-    if config.get("provider") == "ollama":
-        # Re-read the raw value (not `configured`, which has the default folded
-        # in) so the warning fires only on an explicit count, not the default.
-        if int(config.get("summarize_workers") or 0) > 1:
-            console.warn(
-                "summarize_workers > 1 ignored — Ollama serializes requests "
-                "(OLLAMA_NUM_PARALLEL defaults to 1); summarizing one document "
-                "at a time."
-            )
-        return 1
-    return max(1, configured)
-
-
-def _required_hf_models(pdf_converter: str, html_converter: str) -> tuple[str, ...]:
-    """HF repos this ingest run will load, used to gate offline mode (#88).
-
-    The embedding model is always needed; docling's layout/table models only
-    when a docling converter is active for PDFs or HTML. The gate stays online
-    until every model here is cached, so lazy downloads succeed.
-    """
-    models = [EMBEDDING_MODEL]
-    if "docling" in (pdf_converter, html_converter):
-        models.extend(DOCLING_HF_REPOS)
-    return tuple(models)
+# -------------------- entry --------------------
 
 
 def _report_failures(writer: Writer) -> None:
@@ -1321,7 +1146,9 @@ def main(
     from bartleby.lib.quiet import setup_quiet_third_party
     setup_quiet_third_party(
         verbose=verbose,
-        required_models=_required_hf_models(pdf_converter_name, html_converter_name),
+        required_models=resolve._required_hf_models(
+            pdf_converter_name, html_converter_name
+        ),
     )
 
     logger.remove()
@@ -1329,10 +1156,10 @@ def main(
 
     project_name = resolve_project_name(project)
 
-    llm_provider, llm_model = _resolve_llm_provider(
+    llm_provider, llm_model = resolve._resolve_llm_provider(
         config, provider_override=provider, model_override=model,
     )
-    vision_provider, vision_model = _resolve_vision_provider(config)
+    vision_provider, vision_model = resolve._resolve_vision_provider(config)
 
     # `files` is one path or many (CLI passes a list via nargs="+"); normalize
     # so collection always walks a list. `--only` names are comma-splittable and
@@ -1428,9 +1255,11 @@ def main(
                     f"skipped as {reason}"
                 )
 
-        max_workers = _resolve_max_workers(config, timings=timings) if to_parse else 1
-        caption_workers = _resolve_caption_workers(config, timings=timings)
-        summarize_workers = _resolve_summarize_workers(config, timings=timings)
+        max_workers = (
+            resolve._resolve_max_workers(config, timings=timings) if to_parse else 1
+        )
+        caption_workers = resolve._resolve_caption_workers(config, timings=timings)
+        summarize_workers = resolve._resolve_summarize_workers(config, timings=timings)
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
                 f"Parsing {len(to_parse)} file(s) across {max_workers} workers"
@@ -1479,7 +1308,7 @@ def main(
                 max_workers=max_workers,
                 warmup=_warm_worker,
                 verbose=verbose,
-                required_models=_required_hf_models(
+                required_models=resolve._required_hf_models(
                     pdf_converter_name, html_converter_name
                 ),
                 on_progress=lambda ev: parse_phase.lane(ev.worker, ev.item, ev.stage),

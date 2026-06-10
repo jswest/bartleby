@@ -72,7 +72,7 @@ def isolated_project(tmp_path, monkeypatch):
     # The pool is exercised separately in test_ingest_pool.py with a picklable,
     # model-free parse_fn.
     monkeypatch.setattr(
-        "bartleby.commands.scribe._resolve_max_workers", lambda *a, **k: 1,
+        "bartleby.ingest.resolve._resolve_max_workers", lambda *a, **k: 1,
     )
 
     bartleby.project.create_project("test_proj")
@@ -275,7 +275,7 @@ def test_scribe_writes_summary_when_provider_configured(
 
     stub = _StubProvider(text="## Stub summary\n\nKey points appear here.")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: stub,
     )
     # Bypass docling for the summary chunking too — return one chunk.
@@ -342,7 +342,7 @@ def test_scribe_summarizes_existing_document_on_later_run(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
@@ -381,7 +381,7 @@ def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -434,7 +434,7 @@ def test_scribe_ingests_pdf_via_docling_without_second_parse(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -500,7 +500,7 @@ def test_scribe_dedupes_identical_images_across_documents(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -540,7 +540,7 @@ def test_scribe_captions_many_images_concurrently_in_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdfs = []
@@ -583,7 +583,7 @@ def test_scribe_dedupes_shared_image_within_one_run(
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     image_bytes = _png_bytes(width=120, height=80, color=(33, 99, 200))
@@ -641,7 +641,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
     config["caption_workers"] = 3
     monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailVision(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailVision(),
     )
 
     pdfs = []
@@ -675,7 +675,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 
 
 def test_resolve_caption_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
 
     # Default when unset or zero; explicit value respected.
@@ -694,7 +694,7 @@ def test_resolve_caption_workers_defaults_and_timings():
 
 
 def test_resolve_caption_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
@@ -731,7 +731,7 @@ def test_scribe_summarizes_many_documents_concurrently_in_one_run(
     )
     stub = _StubProvider(text="summary body")
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
@@ -790,7 +790,7 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         lambda: _summary_config(summarize_workers=3),
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: _OneFailLLM(),
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailLLM(),
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
@@ -817,7 +817,7 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 
 
 def test_resolve_summarize_workers_defaults_and_timings():
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
 
     # Default when unset or zero; explicit value respected.
@@ -836,7 +836,7 @@ def test_resolve_summarize_workers_defaults_and_timings():
 
 
 def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
 
     warnings: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
@@ -981,7 +981,7 @@ def test_scribe_ingests_standalone_image_file(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1031,7 +1031,7 @@ def test_scribe_skips_sub_minimum_image_without_calling_vlm(
     )
     vision = _StubVisionProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: vision,
     )
 
@@ -1479,7 +1479,7 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
         description="A green rectangle chart with no axis labels.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
@@ -1515,7 +1515,7 @@ def test_scribe_persists_authored_date_from_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="2024-09-12",
         ),
@@ -1551,7 +1551,7 @@ def test_scribe_drops_malformed_authored_date(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(
             text="summary body", authored_date="Q3 2024",
         ),
@@ -1589,7 +1589,7 @@ def test_scribe_truncation_note_in_summary(
         },
     )
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: _StubProvider(text="summary body"),
     )
     from bartleby.ingest.chunk import ChunkRow
@@ -1739,7 +1739,7 @@ def test_scribe_summarizes_standalone_image_from_image_chunks(
         description="A photo of a red barn in a field.", notes="",
     ))
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider",
+        "bartleby.ingest.resolve.get_provider",
         lambda name, **kwargs: summary_stub if name == "anthropic" else vision_stub,
     )
     from bartleby.ingest.chunk import ChunkRow
@@ -2077,7 +2077,7 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     )
     vision = _FlakyVisionProvider(fail_times=1)
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     # Count real pdfplumber parses to prove the second run doesn't re-parse.
@@ -2160,7 +2160,7 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     )
     vision = _FlakyVisionProvider(fail_times=10_000)  # always fails
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **k: vision,
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
     )
 
     pdf = tmp_path / "doc.pdf"
@@ -2300,7 +2300,7 @@ def test_scribe_timings_includes_decoupled_summarize_stage(
     )
     stub = _StubProvider()
     monkeypatch.setattr(
-        "bartleby.commands.scribe.get_provider", lambda name, **kwargs: stub,
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
@@ -2334,7 +2334,7 @@ def test_scribe_without_timings_writes_nothing_to_stdout(
 
 def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
     from types import SimpleNamespace
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     monkeypatch.setattr(scribe_module.os, "cpu_count", lambda: cores)
     monkeypatch.setattr(
         "psutil.virtual_memory",
@@ -2343,13 +2343,13 @@ def _fake_machine(monkeypatch, *, cores: int, free_gb: float):
 
 
 def test_resolve_max_workers_timings_forces_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=16, free_gb=128)
     assert scribe_module._resolve_max_workers({"max_workers": 8}, timings=True) == 1
 
 
 def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RAM-bound: 8 cores but only ~48GB free → 48 // 12.0 = 4 workers.
     _fake_machine(monkeypatch, cores=8, free_gb=48)
     assert scribe_module._resolve_max_workers({}, timings=False) == 4
@@ -2359,7 +2359,7 @@ def test_resolve_max_workers_auto_is_min_of_cores_and_ram(monkeypatch):
 
 
 def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     # RESERVED_CORES (2) is held back from the auto-pick, never below 1.
     _fake_machine(monkeypatch, cores=4, free_gb=128)
     assert scribe_module._resolve_max_workers({}, timings=False) == 2   # 4 − 2
@@ -2370,13 +2370,13 @@ def test_resolve_max_workers_auto_reserves_cores_floored_at_one(monkeypatch):
 
 
 def test_resolve_max_workers_auto_floors_at_one(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=8, free_gb=1)   # 1 // 12.0 = 0 → floored to 1
     assert scribe_module._resolve_max_workers({}, timings=False) == 1
 
 
 def test_resolve_max_workers_honors_explicit_value_over_auto_with_warning(monkeypatch):
-    from bartleby.commands import scribe as scribe_module
+    from bartleby.ingest import resolve as scribe_module
     _fake_machine(monkeypatch, cores=4, free_gb=128)   # auto = 4 − 2 = 2
     warned: list[str] = []
     monkeypatch.setattr(scribe_module.console, "warn", lambda m: warned.append(m))

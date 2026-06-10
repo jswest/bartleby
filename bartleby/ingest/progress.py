@@ -78,6 +78,26 @@ def _fmt_eta(secs: float) -> str:
     return f"{hours}h{mins:02d}m"
 
 
+class _ProgressTally:
+    """Counts completed work units and forwards ``(done, total)`` to a progress
+    callback — the shared meter for the caption (#166) and summarize (#188)
+    stages, which both report identically against a fixed-size work-list."""
+
+    def __init__(
+        self, total: int, on_progress: Callable[[int, int], None] | None
+    ) -> None:
+        self._total = total
+        self._on_progress = on_progress
+        self._done = 0
+        if on_progress is not None:
+            on_progress(0, total)
+
+    def advance(self) -> None:
+        self._done += 1
+        if self._on_progress is not None:
+            self._on_progress(self._done, self._total)
+
+
 class ScribeProgress:
     """Live multi-worker progress for a scribe ingest run (see module docstring).
 
