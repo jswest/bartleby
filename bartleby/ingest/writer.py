@@ -24,7 +24,7 @@ upstream in parsing.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import apsw
@@ -67,8 +67,34 @@ class ParsedImage:
 
 
 @dataclass
+class ParsedSection:
+    """One anchor-delimited section of a split filing (#254).
+
+    A section is a full document in its own right — own chunks, own summary —
+    persisted with ``parent_document_id`` pointing at its container and the TOC
+    anchor metadata (``anchor_id`` / ``section_title`` / ``section_order``). Its
+    ``file_hash`` is a derived hash ``sha256(file_bytes + anchor_id)`` so it
+    stays UNIQUE, re-ingest-stable, and never collides with the container's
+    ``sha256(file_bytes)``.
+    """
+    file_hash: str
+    anchor_id: str
+    section_title: str | None
+    section_order: int
+    token_count: int
+    document_chunks: list[ChunkInput]
+
+
+@dataclass
 class ParsedDocument:
-    """The product of parsing one source file — one atomic write unit."""
+    """The product of parsing one source file — one atomic write unit.
+
+    Normally one ``documents`` row. When ``sections`` is non-empty (#254), this
+    is instead a TOC-anchored container: it persists as a **zero-chunk** row
+    (its own ``document_chunks`` are empty) wired to N child section rows, all
+    in one transaction. ``document_chunks`` and ``sections`` are mutually
+    exclusive — a container owns no chunks of its own.
+    """
     file_hash: str
     file_name: str
     archive_path: Path
@@ -76,6 +102,7 @@ class ParsedDocument:
     token_count: int
     document_chunks: list[ChunkInput]
     images: list[ParsedImage]
+    sections: list[ParsedSection] = field(default_factory=list)
 
 
 @dataclass
@@ -309,6 +336,36 @@ class Writer:
 
     # ---- writes: one transaction per unit ----
 
+    def _insert_document_row(
+        self,
+        *,
+        file_hash: str,
+        file_name: str,
+        file_path: str,
+        page_count: int | None,
+        token_count: int,
+        anchor_id: str | None = None,
+        section_title: str | None = None,
+        section_order: int | None = None,
+    ) -> int:
+        """INSERT one ``documents`` row and return its id.
+
+        The caller must already hold the connection's transaction (the leading
+        underscore is that contract). ``anchor_id``/``section_title``/
+        ``section_order`` are the #254 section columns — NULL for a plain or
+        container row, set for a child section. ``parent_document_id`` is wired
+        by the caller after the container row exists.
+        """
+        self.conn.cursor().execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, page_count, token_count, "
+            " ingest_run_id, anchor_id, section_title, section_order) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (file_hash, file_name, file_path, page_count, token_count,
+             self.run_id, anchor_id, section_title, section_order),
+        )
+        return self.conn.last_insert_rowid()
+
     def persist_parse(self, parsed: ParsedDocument) -> int:
         """Commit a parsed document — row, text chunks, and image rows — atomically.
 
@@ -321,6 +378,13 @@ class Writer:
         so a byte-identical document already persisted is reused rather than
         crashed on the INSERT (#225). ``_classify`` already diverts in-run
         duplicates up front; this is the belt-and-braces guard at the write itself.
+
+        When ``parsed.sections`` is set (#254) this is a TOC-anchored container:
+        its N section rows persist first (each with its own chunks), then the
+        zero-chunk container row LAST, with parent links wired afterward — all in
+        the one transaction. Persisting the container last means a crash mid-split
+        commits nothing, and resume (which keys on the container's file_hash)
+        re-parses the file cleanly. Returns the container's document_id.
         """
         with self.conn:
             self._clear_failure(parsed.file_hash, "parse")
@@ -328,15 +392,39 @@ class Writer:
             if existing is not None:
                 return existing
             cur = self.conn.cursor()
-            cur.execute(
-                "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count, "
-                " ingest_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (parsed.file_hash, parsed.file_name, str(parsed.archive_path),
-                 parsed.page_count, parsed.token_count, self.run_id),
+            # Sections persist first; the container row lands LAST in this one
+            # transaction (#254). Resume keys on the container's file_hash, so a
+            # crash mid-split commits nothing and the file re-parses cleanly —
+            # the section rows are never visible without their container.
+            section_ids: list[int] = []
+            for section in parsed.sections:
+                section_id = self._insert_document_row(
+                    file_hash=section.file_hash, file_name=parsed.file_name,
+                    file_path=str(parsed.archive_path), page_count=None,
+                    token_count=section.token_count,
+                    anchor_id=section.anchor_id,
+                    section_title=section.section_title,
+                    section_order=section.section_order,
+                )
+                if section.document_chunks:
+                    insert_document_chunks(
+                        self.conn, section_id, section.document_chunks,
+                        ingest_run_id=self.run_id,
+                    )
+                section_ids.append(section_id)
+
+            document_id = self._insert_document_row(
+                file_hash=parsed.file_hash, file_name=parsed.file_name,
+                file_path=str(parsed.archive_path), page_count=parsed.page_count,
+                token_count=parsed.token_count,
             )
-            document_id = self.conn.last_insert_rowid()
+            if section_ids:
+                # Wire every section's parent now that the container row exists.
+                cur.executemany(
+                    "UPDATE documents SET parent_document_id = ? "
+                    "WHERE document_id = ?",
+                    [(document_id, sid) for sid in section_ids],
+                )
             if parsed.document_chunks:
                 insert_document_chunks(
                     self.conn, document_id, parsed.document_chunks,

@@ -18,6 +18,12 @@ SEC2MD_MAX_TOKENS = 400  # headroom under embedder's 512-token cap (matches docl
 _SNIFF_WINDOW_BYTES = 4096
 _IXBRL_MARKER = b'xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"'
 
+# A filing must resolve at least this many internal TOC anchors to in-document
+# targets before it is split into sections (#254). Splitting into one section is
+# just the whole file with extra ceremony; the win starts when a monolith
+# fractures into many independently-summarizable units.
+_MIN_SECTIONS_TO_SPLIT = 2
+
 
 @dataclass
 class Sec2mdChunk:
@@ -32,6 +38,21 @@ class Sec2mdResult:
     full_text: str
     page_count: int | None
     chunks: list[Sec2mdChunk]
+
+
+@dataclass
+class Sec2mdSection:
+    """One anchor-delimited slice of a filing (#254).
+
+    ``anchor_id`` is the HTML ``id`` the table of contents linked to; ``title``
+    is the TOC link text (free semantic labelling); ``order`` is its position in
+    the TOC. ``result`` is the independently-converted body of just that slice —
+    its own chunks, its own (eventual) summary.
+    """
+    anchor_id: str
+    title: str | None
+    order: int
+    result: Sec2mdResult
 
 
 def _require_sec2md():
@@ -105,3 +126,102 @@ def convert_bytes(html: bytes) -> Sec2mdResult:
         page_count=page_count,
         chunks=chunks,
     )
+
+
+def convert_sections(path: Path) -> list[Sec2mdSection]:
+    """Split a TOC-anchored filing into per-section conversions (#254).
+
+    Returns one :class:`Sec2mdSection` per internal anchor the table of contents
+    resolves to an in-document target, in TOC order, each with its slice
+    converted independently via :func:`convert_bytes`. Returns ``[]`` when the
+    filing carries no usable TOC (fewer than ``_MIN_SECTIONS_TO_SPLIT`` resolved
+    anchors) — the caller then ingests it whole, exactly as before.
+
+    The split is purely structural: the raw HTML body is sliced at the
+    top-level ancestors of each anchor target, so every byte of content lands in
+    exactly one section and nothing is duplicated or dropped.
+    """
+    return _convert_sections_bytes(path.read_bytes())
+
+
+def _convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
+    _require_sec2md()
+    from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html, "html.parser")
+
+    body = soup.body or soup
+    targets = _resolve_toc_targets(soup, body)
+    if len(targets) < _MIN_SECTIONS_TO_SPLIT:
+        return []
+
+    sections: list[Sec2mdSection] = []
+    for order, (anchor_id, title, target_el) in enumerate(targets):
+        start = _top_level_ancestor(target_el, body)
+        next_start = (
+            _top_level_ancestor(targets[order + 1][2], body)
+            if order + 1 < len(targets) else None
+        )
+        fragment = _slice_between(start, next_start)
+        if not fragment.strip():
+            continue
+        section_html = f"<html><body>{fragment}</body></html>".encode("utf-8")
+        result = convert_bytes(section_html)
+        if not result.chunks:
+            # An anchor pointing at an empty/decorative slice carries nothing to
+            # index — skip it rather than persist a content-free section row.
+            continue
+        sections.append(Sec2mdSection(
+            anchor_id=anchor_id, title=title or None, order=order, result=result,
+        ))
+
+    # If the slices collapsed to a single (or no) real section, splitting buys
+    # nothing — let the caller ingest the file whole.
+    if len(sections) < _MIN_SECTIONS_TO_SPLIT:
+        return []
+    return sections
+
+
+def _resolve_toc_targets(soup, body) -> list[tuple[str, str, object]]:
+    """The TOC's internal anchors that resolve to in-document targets, in order.
+
+    Each entry is ``(anchor_id, link_text, target_element)``. Only the first
+    link to a given id is kept (a TOC that lists a section twice still yields one
+    section), and only ids that actually exist as a target within the body
+    count — a dangling ``#ref`` is no section boundary.
+    """
+    seen: set[str] = set()
+    targets: list[tuple[str, str, object]] = []
+    for a in soup.find_all("a"):
+        href = a.get("href") or ""
+        if not href.startswith("#") or len(href) < 2:
+            continue
+        anchor_id = href[1:]
+        if anchor_id in seen:
+            continue
+        target = body.find(id=anchor_id)
+        if target is None:
+            continue
+        seen.add(anchor_id)
+        targets.append((anchor_id, a.get_text(strip=True), target))
+    return targets
+
+
+def _top_level_ancestor(el, body):
+    """The body-level block that contains ``el`` (the slice boundary unit)."""
+    while el.parent is not None and el.parent is not body:
+        el = el.parent
+    return el
+
+
+def _slice_between(start, end) -> str:
+    """Serialize every top-level sibling from ``start`` up to (not incl) ``end``."""
+    parts: list[str] = []
+    node = start
+    while node is not None and node is not end:
+        if getattr(node, "name", None) is not None:
+            parts.append(str(node))
+        node = node.find_next_sibling()
+    return "".join(parts)

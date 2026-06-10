@@ -265,3 +265,48 @@ def test_describe_corpus_invalid_date_raises(seeded_project):
         describe_corpus.main(["--project", seeded_project["project"],
                               "--authored-after", "nonsense"])
     assert exc.value.code == 1
+
+
+def test_describe_corpus_excludes_anchor_container_from_unsummarized(
+    seeded_project, capsys
+):
+    """An anchor-split container (#254) owns zero chunks and owes no summary, so
+    it must not inflate the unsummarized tally. seeded_project already has alpha
+    (summarized) + beta (unsummarized); add a container with one section row.
+    The section is an ordinary unsummarized document; the container is not."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    from bartleby.db.schema import EMBEDDING_DIM
+
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        # Container: zero chunks, original file_hash, the four section columns NULL.
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, token_count) "
+            "VALUES (?, ?, ?, ?)",
+            ("filing", "filing.htm", "/tmp/filing.htm", 0),
+        )
+        container_id = conn.last_insert_rowid()
+        # One section row pointing at the container, with its own chunk.
+        cur.execute(
+            "INSERT INTO documents "
+            "(file_hash, file_name, file_path, token_count, "
+            " parent_document_id, anchor_id, section_title, section_order) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("filing#sec1", "filing.htm", "/tmp/filing.htm", 50,
+             container_id, "sec1", "Business", 0),
+        )
+        section_id = conn.last_insert_rowid()
+        insert_document_chunks(conn, section_id, [
+            ChunkInput(text="section body about the business operations here",
+                       embedding=[0.2] * EMBEDDING_DIM, chunk_index=0),
+        ])
+    finally:
+        conn.close()
+
+    out = _run(project, capsys)
+    # 4 docs: alpha (summarized), beta (unsummarized), container, section.
+    assert out["document_count"] == 4
+    # Container is excluded; only alpha is summarized; beta + section owe one.
+    assert out["summary_coverage"] == {"summarized": 1, "unsummarized": 2}

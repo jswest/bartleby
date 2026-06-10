@@ -40,7 +40,15 @@ CREATE TABLE documents (
     page_count INTEGER,
     token_count INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ingest_run_id INTEGER REFERENCES ingests(run_id)
+    ingest_run_id INTEGER REFERENCES ingests(run_id),
+    -- #254 anchor-splitting (additive, NULL = an ordinary whole-file document):
+    -- a TOC-anchored EDGAR filing splits into a zero-chunk container row (these
+    -- four NULL, holds the original file_hash) plus N section rows that point
+    -- parent_document_id at it and carry the TOC anchor / link-text / order.
+    parent_document_id INTEGER REFERENCES documents(document_id),
+    anchor_id TEXT,
+    section_title TEXT,
+    section_order INTEGER
 );
 
 CREATE TABLE summaries (
