@@ -60,21 +60,25 @@ def summary_sha(summary: dict) -> str:
         json.dumps(summary, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _build_prompt(source_text: str, summary: dict) -> list[dict]:
+def _user_prompt(source_text: str, summary: dict) -> str:
+    """The grading prompt — source document + candidate summary. Shared by the
+    OpenAI judge (as the user message) and the anthropic-cc judge (as the
+    ``claude -p`` prompt), so both score identical text."""
     candidate = (
         f"title: {summary['title']}\n"
         f"description: {summary['description']}\n"
         f"text:\n{summary['text']}"
     )
+    return (
+        f"SOURCE DOCUMENT:\n{source_text}\n\n"
+        f"CANDIDATE SUMMARY:\n{candidate}"
+    )
+
+
+def _build_prompt(source_text: str, summary: dict) -> list[dict]:
     return [
         {"role": "system", "content": JUDGE_INSTRUCTIONS},
-        {
-            "role": "user",
-            "content": (
-                f"SOURCE DOCUMENT:\n{source_text}\n\n"
-                f"CANDIDATE SUMMARY:\n{candidate}"
-            ),
-        },
+        {"role": "user", "content": _user_prompt(source_text, summary)},
     ]
 
 
@@ -144,14 +148,34 @@ def _collect_work(root: BenchmarkRoot, judge: ModelRef, passes: int) -> list[dic
     return work
 
 
+def _make_judge_fn(root: BenchmarkRoot, judge: ModelRef, judge_client):
+    """A ``(source_text, summary) -> result`` callable for the judge's provider.
+    ``judge_client`` is the test-injection seam: an OpenAI client for ``openai``,
+    a subprocess runner for ``anthropic-cc``."""
+    if judge.provider == "openai":
+        if judge_client is None:
+            from bartleby.benchmark.clients import make_openai_client
+            judge_client = make_openai_client(root)
+        return lambda src, summary: judge_summary(
+            judge_client, judge.model, src, summary)
+
+    from bartleby.benchmark import cc_judge
+    cc_judge.preflight()
+    return lambda src, summary: cc_judge.judge_summary_cc(
+        judge.model, src, summary, runner=judge_client)
+
+
 def run(root: BenchmarkRoot, judge: ModelRef | None = None,
         passes: int = DEFAULT_PASSES, judge_client=None) -> None:
     """Top up every distinct summary to ``passes`` judgments. ``judge_client``
-    is injectable for tests."""
+    is injectable for tests: an OpenAI client for ``openai`` judges, or a
+    subprocess runner callable for ``anthropic-cc`` judges."""
     root.require()
     judge = judge or root.load_judges()[0]
-    if judge.provider != "openai":
-        raise SystemExit(f"Only openai judges are supported (got {judge})")
+    if judge.provider not in ("openai", "anthropic-cc"):
+        raise SystemExit(
+            f"Unsupported judge provider {judge.provider!r} (got {judge}); "
+            f"judges must be openai/<model> or anthropic-cc/<model>")
 
     work = _collect_work(root, judge, passes)
     if not work:
@@ -159,9 +183,7 @@ def run(root: BenchmarkRoot, judge: ModelRef | None = None,
               f"{passes} pass(es) from {judge}.", file=sys.stderr)
         return
 
-    if judge_client is None:
-        from bartleby.benchmark.clients import make_openai_client
-        judge_client = make_openai_client(root)
+    judge_fn = _make_judge_fn(root, judge, judge_client)
 
     total = sum(item["need"] for item in work)
     print(f"Judging {len(work)} distinct summary(ies), {total} call(s) "
@@ -173,8 +195,7 @@ def run(root: BenchmarkRoot, judge: ModelRef | None = None,
             print(f"  [{call_no}/{total}] {item['ref']} · {item['doc_id']} "
                   f"(summary {item['sha'][:8]}, pass {item['done'] + i})",
                   file=sys.stderr, flush=True)
-            result = judge_summary(judge_client, judge.model,
-                                   item["source_text"], item["summary"])
+            result = judge_fn(item["source_text"], item["summary"])
             append_record(item["jpath"], {
                 "provider": item["ref"].provider,
                 "model": item["ref"].model,
