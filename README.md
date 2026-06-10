@@ -457,6 +457,26 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 
 Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. It's safe to leave running alongside an ingest or a research session.
 
+### `bartleby benchmark`
+
+Pick the best local Ollama model for the document summarizer — and keep the
+choice honest as your installed models change. A re-runnable selection tool:
+`summarize` appends runs across every model × document, `judge` scores them
+with a blind cloud judge, and `leaderboard` ranks the results; `blind` and
+`errors` support spot-checking. Evidence accumulates in append-only stores, so
+re-run any stage and the picture sharpens.
+
+```
+bartleby benchmark summarize   # append summarize runs (every model × document)
+bartleby benchmark judge       # top up blind cloud-judge scores
+bartleby benchmark leaderboard # the ranked report (--output writes CSV)
+bartleby benchmark blind       # blinded summaries + key for a human spot-check
+bartleby benchmark errors      # failed runs, with raw-output previews
+```
+
+Run from the repo root (or pass `--benchmarks-dir`). The full recipe — configs,
+stores, and provenance — lives in [`benchmarks/README.md`](benchmarks/README.md).
+
 ---
 
 ## Supported LLM providers (for ingest summarization)
