@@ -232,6 +232,9 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
     assert out["status"] == "merged"
     assert out["from"]["name"] == "a"
     assert out["into"]["name"] == "b"
+    # Partial overlap: doc_a is new on b, doc_b already on b.
+    assert out["inserted"] == 1
+    assert out["already_present"] == 1
 
     conn = open_db(seeded_project["project"])
     try:
@@ -252,6 +255,57 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
         ])
     finally:
         conn.close()
+
+
+def test_merge_tags_disjoint_reports_all_inserted(seeded_project, capsys):
+    """No overlap: every source assignment is newly inserted onto the dest."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+        a_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('b', 'd2')")
+        # a tags doc_a and doc_b; b tags nothing → no collision on merge.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?), (?, ?)",
+            (seeded_project["doc_a"], a_id, seeded_project["doc_b"], a_id),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"], "--from", "a", "--into", "b",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["inserted"] == 2
+    assert out["already_present"] == 0
+
+
+def test_merge_tags_full_overlap_reports_none_inserted(seeded_project, capsys):
+    """Full overlap: dest already carries every source doc → nothing inserted."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('a', 'd1')")
+        a_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('b', 'd2')")
+        b_id = conn.last_insert_rowid()
+        # Both tags cover doc_a and doc_b — a's assignments are all duplicates.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) "
+            "VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
+            (seeded_project["doc_a"], a_id, seeded_project["doc_b"], a_id,
+             seeded_project["doc_a"], b_id, seeded_project["doc_b"], b_id),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"], "--from", "a", "--into", "b",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["inserted"] == 0
+    assert out["already_present"] == 2
 
 
 # ---------- tag (classification) ----------

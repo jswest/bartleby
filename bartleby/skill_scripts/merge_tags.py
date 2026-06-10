@@ -5,7 +5,13 @@ Errors if either tag doesn't exist or if ``--from`` == ``--into``.
 
 Output:
     {"status": "merged", "from": {"tag_id": int, "name": str},
-     "into": {"tag_id": int, "name": str}, "moved_assignments": int}
+     "into": {"tag_id": int, "name": str}, "inserted": int,
+     "already_present": int}
+
+``inserted`` is the number of source assignments actually copied onto the
+destination tag. ``already_present`` is the number skipped because the
+destination tag already carried that document (the overlap absorbed by
+``INSERT OR IGNORE``). Their sum is the source tag's pre-merge assignment count.
 """
 
 from __future__ import annotations
@@ -42,12 +48,14 @@ def work(*, conn, args, session_id) -> dict:
         "SELECT document_id, ? FROM document_tags WHERE tag_id = ?",
         (dst.tag_id, src.tag_id),
     )
+    inserted = conn.changes()
     cur.execute("DELETE FROM tags WHERE tag_id = ?", (src.tag_id,))
     return {
         "status": "merged",
         "from": {"tag_id": src.tag_id, "name": src.name},
         "into": {"tag_id": dst.tag_id, "name": dst.name},
-        "moved_assignments": moved_before,
+        "inserted": inserted,
+        "already_present": moved_before - inserted,
     }
 
 
