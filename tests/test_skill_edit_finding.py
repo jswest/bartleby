@@ -9,7 +9,11 @@ import pytest
 from bartleby.skill_scripts import edit_finding, save_finding
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -63,16 +67,26 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
     finding_id = saved["finding_id"]
     a, b = saved["_chunks"]
 
-    # Fetch a third chunk to verify swapping citations works.
+    # Fetch a third chunk to verify swapping citations works, and capture the
+    # finding's current body-chunk ids before the edit replaces them.
     conn = open_db(seeded_project["project"])
     try:
-        c = conn.cursor().execute(
+        cur = conn.cursor()
+        c = cur.execute(
             "SELECT chunk_id FROM chunks WHERE source_kind='document' "
             "AND source_id = ? AND chunk_index = 2",
             (seeded_project["doc_a"],),
         ).fetchone()[0]
+        old_finding_chunk_ids = {
+            row[0] for row in cur.execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ?",
+                (finding_id,),
+            )
+        }
     finally:
         conn.close()
+    assert old_finding_chunk_ids  # sanity: the finding had body chunks
 
     new_body = f"# Fixed\n\nOnly claim now[^{c}]."
     new_body_file = tmp_path / "edited.md"
@@ -132,6 +146,21 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
                 "SELECT text FROM chunks_fts WHERE rowid = ?", (cid,)
             ).fetchone()
             assert fts_text == (new_body,)
+        # The chunks_vec mirror tracks the rebuild: the new body chunks are
+        # present in vec, and any old chunk id NOT reused by the new body is
+        # gone. (SQLite reuses chunk_id values, so disjointness can't be
+        # assumed — only the ids that fell out of the finding must be absent.)
+        new_finding_chunk_ids = set(finding_chunk_ids)
+        for cid in new_finding_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 1
+        for cid in old_finding_chunk_ids - new_finding_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 0
+
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 

@@ -11,7 +11,11 @@ from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
@@ -126,16 +130,16 @@ def test_delete_finding_removes_row_chunks_and_citations(
             "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
             (finding_id,),
         ).fetchone()[0] == 0
-        # The finding's body chunks are gone from chunks + the fts/vec mirrors.
+        # The finding's body chunks are gone from chunks + the vec mirror.
+        # (chunks_fts is external-content, so a per-rowid COUNT reads THROUGH
+        # chunks and is vacuous — the FTS leg is verified by the integrity
+        # check in assert_chunk_tables_consistent below instead.)
         assert cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='finding' "
             "AND source_id = ?",
             (finding_id,),
         ).fetchone()[0] == 0
         for cid in body_chunk_ids:
-            assert cur.execute(
-                "SELECT COUNT(*) FROM chunks_fts WHERE rowid = ?", (cid,)
-            ).fetchone()[0] == 0
             assert cur.execute(
                 "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,)
             ).fetchone()[0] == 0
@@ -144,6 +148,8 @@ def test_delete_finding_removes_row_chunks_and_citations(
             assert cur.execute(
                 "SELECT COUNT(*) FROM chunks WHERE chunk_id = ?", (cid,)
             ).fetchone()[0] == 1
+
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 
