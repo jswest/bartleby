@@ -11,7 +11,11 @@ from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    assert_chunk_tables_consistent,
+    project_env,
+    seeded_project,
+)
 
 
 def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
@@ -59,6 +63,20 @@ def _doc_chunk_ids(project, doc_id) -> list[int]:
         conn.close()
 
 
+def _finding_chunk_ids(project, finding_id) -> list[int]:
+    conn = open_db(project)
+    try:
+        return [
+            r[0] for r in conn.cursor().execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ? ORDER BY chunk_index",
+                (finding_id,),
+            )
+        ]
+    finally:
+        conn.close()
+
+
 def _save(project, tmp_path, capsys, *, name, title, cite) -> int:
     body_file = tmp_path / f"{name}.md"
     body_file.write_text(f"# {title}\n\nClaim[^{cite}].", encoding="utf-8")
@@ -80,6 +98,11 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
     target = _save(project, tmp_path, capsys, name="t", title="Keep me", cite=c0)
     src1 = _save(project, tmp_path, capsys, name="s1", title="Dup one", cite=c1)
     src2 = _save(project, tmp_path, capsys, name="s2", title="Dup two", cite=c2)
+
+    # Capture the source findings' body-chunk ids before the merge consumes
+    # them, so we can assert they leave all three chunk tables.
+    src_chunk_ids = _finding_chunk_ids(project, src1) + _finding_chunk_ids(project, src2)
+    assert src_chunk_ids  # sanity: the sources had body chunks
 
     merged_body = f"# Consolidated\n\nAll together[^{c0}][^{c1}][^{c2}]."
     merged_file = tmp_path / "merged.md"
@@ -133,6 +156,35 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
                 "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
                 (src,),
             ).fetchone()[0] == 0
+
+        # The source body chunks left BOTH mirrors, and the target's NEW body
+        # chunks are present in both. The merged body re-chunks the target, so
+        # its chunk ids are whatever the finding now owns.
+        target_chunk_ids = [
+            r[0] for r in cur.execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
+                "AND source_id = ?", (target,),
+            )
+        ]
+        assert target_chunk_ids  # sanity: the merged target has body chunks
+        for cid in src_chunk_ids:
+            if cid in target_chunk_ids:
+                continue  # chunk_id reused by the rebuilt target body
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_fts WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 0
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 0
+        for cid in target_chunk_ids:
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_fts WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 1
+            assert cur.execute(
+                "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (cid,),
+            ).fetchone()[0] == 1
+
+        assert_chunk_tables_consistent(conn)
     finally:
         conn.close()
 
