@@ -43,7 +43,6 @@ from bartleby.ingest import caption
 from bartleby.ingest import classify
 from bartleby.ingest import parse
 from bartleby.ingest import parsers
-from bartleby.ingest import pool
 from bartleby.ingest import resolve
 from bartleby.ingest import summary
 from bartleby.ingest.progress import ScribeProgress
@@ -122,13 +121,11 @@ def main(
             f"expected 'docling' or 'sec2md'."
         )
 
-    from bartleby.lib.quiet import setup_quiet_third_party
-    setup_quiet_third_party(
-        verbose=verbose,
-        required_models=resolve._required_hf_models(
-            pdf_converter_name, html_converter_name
-        ),
+    required_models = resolve._required_hf_models(
+        pdf_converter_name, html_converter_name
     )
+    from bartleby.lib.quiet import setup_quiet_third_party
+    setup_quiet_third_party(verbose=verbose, required_models=required_models)
 
     logger.remove()
     logger.add(sys.stderr, level="DEBUG" if verbose else "WARNING")
@@ -266,66 +263,18 @@ def main(
         n_lanes = max(max_workers, caption_workers, summarize_workers)
         with ScribeProgress(n_lanes=n_lanes) as progress:
             # ---- Phase 1: parse + persist ------------------------------------
-            # Resumed docs were parsed by an earlier run — no parse, just the
-            # missing captions the caption phase fills; summaries are settled by
-            # their own pass over the DB (#167). Under --timings each unit's record
-            # starts from parse and gains caption/summarize downstream.
+            # Drains the pool through the single Writer and returns the DocUnits
+            # (resumed + freshly parsed) the next two phases carry forward.
             incomplete_count = 0
-            units: list[parse.DocUnit] = [
-                parse.DocUnit(
-                    item.document_id, item.file_name, item.file_hash,
-                    stages={} if timings else None,
-                )
-                for item in to_resume
-            ]
-            parse_phase = progress.phase("parse")
-            parse_phase.start(len(to_parse))
-            for outcome in pool.parse_stream(
-                to_parse,
-                parse_fn=parsers._parse_request,
-                config=parse_config,
+            units = parse.parse_all(
+                writer, to_parse, to_resume,
+                parse_config=parse_config,
                 max_workers=max_workers,
-                warmup=parsers._warm_worker,
+                progress=progress,
+                required_models=required_models,
                 verbose=verbose,
-                required_models=resolve._required_hf_models(
-                    pdf_converter_name, html_converter_name
-                ),
-                on_progress=lambda ev: parse_phase.lane(ev.worker, ev.item, ev.stage),
-            ):
-                req = outcome.request
-                # Notices the worker collected (it has no Live console of its
-                # own); emit them here, where console.warn coordinates with the
-                # progress bar instead of stomping it.
-                for warning in outcome.warnings:
-                    console.warn(warning)
-                if outcome.error is not None:
-                    writer.record_failure(
-                        req.file_hash, req.file_name, "parse", outcome.error
-                    )
-                    message = f"Failed: {req.file_name}: {outcome.error}"
-                    if outcome.offline:
-                        from bartleby.lib.quiet import OFFLINE_HINT
-                        message += f"\n  {OFFLINE_HINT}"
-                    console.error(message)
-                    parse_phase.advance()
-                    continue
-
-                writer.clear_failure(req.file_hash, "parse")
-                persist_t = time.perf_counter()
-                document_id = writer.persist_parse(outcome.parsed)
-                stages = None
-                if timings and outcome.parse_stages is not None:
-                    # Chunk INSERTs fold into `embed`, per #162 — they land here,
-                    # just after the worker's embed step, under the same bucket.
-                    stages = dict(outcome.parse_stages)
-                    stages["embed"] = (
-                        stages.get("embed", 0.0) + (time.perf_counter() - persist_t)
-                    )
-                units.append(parse.DocUnit(
-                    document_id, req.file_name, req.file_hash,
-                    page_count=outcome.parsed.page_count, stages=stages,
-                ))
-                parse_phase.advance()
+                timings=timings,
+            )
 
             # ---- Phase 2: caption every uncaptioned image, concurrently ------
             # _caption_all drives the tally via on_progress (0,total then per
