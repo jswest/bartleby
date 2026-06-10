@@ -139,7 +139,10 @@ def test_scan_brief_keeps_only_locators(scan_corpus, capsys):
     assert out["matches"]
     assert out["total"] == 3  # envelope/total unchanged
     for m in out["matches"]:
-        assert set(m) == {"document_id", "file_name", "chunk_id", "page_number"}
+        assert set(m) == {
+            "document_id", "file_name", "chunk_id", "page_number",
+            "authored_date",
+        }
 
 
 def test_scan_brief_ignores_preview(scan_corpus, capsys):
@@ -355,7 +358,8 @@ def test_scan_output_shape(scan_corpus, capsys):
     m = out["matches"][0]
     assert set(m.keys()) == {
         "document_id", "file_name", "chunk_id", "chunk_index",
-        "page_number", "section_heading", "content_type", "text", "text_length",
+        "page_number", "section_heading", "content_type", "authored_date",
+        "text", "text_length",
     }
     assert m["file_name"] == "filing_a.txt"
     assert m["document_id"] == scan_corpus["d1"]
@@ -587,6 +591,20 @@ def test_scan_date_bound_includes_nulls(scan_corpus, capsys):
     assert out["total"] == 3
     assert out["filters"]["include_nulls"] is True
     assert out["filters"]["excluded_null_dated"] == 0
+
+
+def test_scan_match_carries_authored_date(scan_corpus, capsys):
+    """authored_date rides every match (default + brief), null for undated docs."""
+    _date_d1(scan_corpus)  # d1 dated 2024-03-01; d2/d3 stay undated.
+    for extra in ([], ["--brief"]):
+        _run(scan_corpus, [MARKER, *extra])
+        out = json.loads(capsys.readouterr().out)
+        by_doc = {}
+        for m in out["matches"]:
+            assert "authored_date" in m  # present in every mode
+            by_doc[m["document_id"]] = m["authored_date"]
+        assert by_doc[scan_corpus["d1"]] == "2024-03-01"
+        assert by_doc[scan_corpus["d2"]] is None  # undated → null
 
 
 def test_scan_count_by_carries_date_filter(scan_corpus, capsys):
