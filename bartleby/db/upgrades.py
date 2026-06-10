@@ -177,17 +177,20 @@ def upgrade(conn: apsw.Connection, current_version: int) -> None:
                 f"No additive upgrade from v{v} to v{v + 1}. "
                 f"This is a non-additive bump; re-ingest is required."
             )
+        # Stamp the new version INSIDE the step's transaction: the DDL and the
+        # schema_version bump commit together. A crash between two steps leaves
+        # the DB at the last completed step's version (never a structural-vs-
+        # meta mismatch), so a re-run resumes from there and completes.
         with conn:
             step(conn)
+            conn.cursor().execute(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                (str(v + 1),),
+            )
         v += 1
 
     with conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
-            (str(SCHEMA_VERSION),),
-        )
-        cur.execute(
+        conn.cursor().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('upgraded_at', ?)",
             (datetime.now(timezone.utc).isoformat(),),
         )
