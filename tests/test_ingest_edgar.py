@@ -252,6 +252,69 @@ _CROSSREF_FILING = b"""<?xml version="1.0"?>
 </html>
 """
 
+# A GENUINE TOC that shares ONE top-level page-div with the cover text: registrant
+# name and CIK sit in the same div as the nav link list. Excising the whole div to
+# drop the nav would take the cover text with it (DATA LOSS). The cover prose must
+# survive in the preamble; only the pure-nav portion is navigation.
+_TOC_SHARES_DIV_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div>
+<p>Registrant name STARLIGHT AEROSPACE INCORPORATED, Central Index Key 0001999888.</p>
+<p>Annual report for the fiscal period ended December 31, 2025, ticker STAR outstanding.</p>
+<div>
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+</div>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+</body>
+</html>
+"""
+
+# NO real TOC: two adjacent forward links sit INLINE inside one content paragraph
+# ("…including Part II and Part III…"). The 2-link run would win, mis-split the
+# doc, and (under the old excision rule) excise the host paragraph — losing its
+# prose. The file must ingest whole and keep every word.
+_INLINE_LINKS_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<p>This overview summarizes the filing including <a href="#partII">Part II</a> and
+<a href="#partIII">Part III</a> which discuss the financial results in great detail.</p>
+<h2 id="partII">Part II</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="partIII">Part III</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+</body>
+</html>
+"""
+
+# The classic EDGAR double-linked TOC: a table whose every row links BOTH the item
+# title AND the page number to the SAME anchor. Deduping by anchor before measuring
+# contiguity drops every page-number link, leaving link_idx gaps that collapse the
+# run to length 1 → no split (REGRESSION). Contiguity must be computed over the
+# kept-or-duplicate links so the run survives and the file splits.
+_DOUBLE_LINKED_TOC_FILING = b"""<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<table>
+<tr><td><a href="#sec_business">Item 1. Business</a></td><td><a href="#sec_business">5</a></td></tr>
+<tr><td><a href="#sec_risk">Item 1A. Risk Factors</a></td><td><a href="#sec_risk">12</a></td></tr>
+<tr><td><a href="#sec_glossary">Item 2. Glossary</a></td><td><a href="#sec_glossary">20</a></td></tr>
+</table>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+<h2 id="sec_glossary">Glossary of Terms</h2>
+<p>Apogee is the highest point in an orbit reached by a spacecraft during flight.</p>
+</body>
+</html>
+"""
+
 
 @pytest.fixture
 def edgar_project(tmp_path, monkeypatch):
@@ -361,6 +424,62 @@ def test_convert_sections_ignores_in_text_cross_reference_links():
         for s in sections for c in s.result.chunks
     )
     assert occurrences == 1
+
+
+def test_convert_sections_keeps_cover_text_sharing_div_with_toc():
+    """A genuine TOC sharing ONE page-div with the cover text splits the filing,
+    but the cover prose is NOT excised with the nav block — only the pure-nav
+    portion is dropped, so the cover-page facts survive in the preamble (DATA-LOSS
+    defect: the old rule excised the whole shared div)."""
+    sections = sec2md._convert_sections_bytes(_TOC_SHARES_DIV_FILING)
+    # It still splits into the two real sections (preceded by the preamble).
+    assert [s.anchor_id for s in sections] == [
+        sec2md._PREAMBLE_ANCHOR_ID, "sec_business", "sec_risk",
+    ]
+    # The cover text — co-resident with the TOC in one div — lands in the preamble.
+    preamble_text = " ".join(c.text for c in sections[0].result.chunks)
+    assert "STARLIGHT AEROSPACE" in preamble_text
+    assert "0001999888" in preamble_text
+    # Every byte still accounted for: the risk paragraph appears exactly once.
+    occurrences = sum(
+        c.text.lower().count("explode")
+        for s in sections for c in s.result.chunks
+    )
+    assert occurrences == 1
+
+
+def test_convert_sections_does_not_split_on_inline_content_links():
+    """Two adjacent forward links INLINE in a content paragraph (not a dedicated
+    nav block) are prose cross-references, not a TOC: the file does NOT mis-split
+    AND the host paragraph's prose is not dropped (DATA-LOSS defect)."""
+    sections = sec2md._convert_sections_bytes(_INLINE_LINKS_FILING)
+    # No TOC → ingest whole.
+    assert sections == []
+    # And nothing is lost: converting the file whole keeps the host paragraph's
+    # prose (a non-zero token count), where the old excision rule would have
+    # dropped it.
+    whole = sec2md.convert_bytes(_INLINE_LINKS_FILING)
+    whole_text = " ".join(c.text.lower() for c in whole.chunks)
+    assert "this overview summarizes the filing" in whole_text
+
+
+def test_convert_sections_splits_double_linked_toc():
+    """A TOC table that links BOTH the item title and the page number to the same
+    anchor still forms one contiguous run and splits into the correct sections —
+    deduping the final target list must not let duplicate links break run
+    contiguity (REGRESSION the rework introduced)."""
+    sections = sec2md._convert_sections_bytes(_DOUBLE_LINKED_TOC_FILING)
+    assert [s.anchor_id for s in sections] == [
+        "sec_business", "sec_risk", "sec_glossary",
+    ]
+    # One section per anchor despite the doubled links; titles take the first
+    # (item-title) link, not the page number.
+    assert [s.title for s in sections] == [
+        "Item 1. Business", "Item 1A. Risk Factors", "Item 2. Glossary",
+    ]
+    assert any("rockets" in c.text.lower() for c in sections[0].result.chunks)
+    assert any("explode" in c.text.lower() for c in sections[1].result.chunks)
+    assert any("apogee" in c.text.lower() for c in sections[2].result.chunks)
 
 
 def test_persist_parse_preamble_section_is_searchable(edgar_project, tmp_path):
