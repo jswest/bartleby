@@ -262,6 +262,29 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     assert "No /Root object" not in str(exc.value)
 
 
+def test_scribe_exits_nonzero_when_a_unit_fails(
+    isolated_project, tmp_path, mock_embed
+):
+    """A run that leaves any unit unresolved exits non-zero, so a scripted
+    caller (`bartleby scribe ... && next-step`) halts instead of reading the
+    nothing-ingested run as green (#311). The `.pdf` is really HTML, so parse
+    fails into failed_ingests and no document lands."""
+    src = tmp_path / "ViewDoc.pdf"
+    src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
+
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(src))
+    assert exc.value.code == 1
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM failed_ingests").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_writes_summary_when_provider_configured(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -619,7 +642,8 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
 ):
     """A single image whose VLM call raises is recorded as a caption failure;
     the other images in the same concurrent run are still captioned — one bad
-    image never tears down the phase."""
+    image never tears down the phase. The run still exits non-zero, because that
+    one caption is an unresolved unit (#311)."""
     import threading
 
     class _OneFailVision:
@@ -658,7 +682,9 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
         )
         pdfs.append(str(pdf))
 
-    scribe.main(project="test_proj", files=pdfs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=pdfs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -764,7 +790,8 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
 ):
     """A single document whose summarize call raises is recorded as a summary
     failure; the others in the same concurrent run still summarize — one bad
-    document never tears down the pass."""
+    document never tears down the pass. The run still exits non-zero, because
+    that one summary is an unresolved unit (#311)."""
     import threading
 
     class _OneFailLLM:
@@ -806,7 +833,9 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
         for i in range(3)
     ]
-    scribe.main(project="test_proj", files=srcs)
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=srcs)
+    assert exc.value.code == 1
 
     conn = open_db("test_proj")
     try:
@@ -2101,7 +2130,10 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     _pdf_with_image(pdf, _png_bytes(), text="Durable body text " * 12)
 
     # Run 1: the VLM fails. Text chunks land; the image is recorded uncaptioned.
-    scribe.main(project="test_proj", files=str(pdf))
+    # The uncaptioned image is an unresolved unit, so the run exits non-zero (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert parses["n"] == 1
     conn = open_db("test_proj")
     try:
@@ -2170,9 +2202,12 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     pdf = tmp_path / "doc.pdf"
     _pdf_with_image(pdf, _png_bytes(), text="Body text " * 12)
 
-    # Each run makes exactly one more attempt until the cap is reached.
+    # Each run makes exactly one more attempt until the cap is reached. The
+    # image never captions, so every run exits non-zero on the unresolved unit (#311).
     for _ in range(MAX_INGEST_ATTEMPTS):
-        scribe.main(project="test_proj", files=str(pdf))
+        with pytest.raises(SystemExit) as exc:
+            scribe.main(project="test_proj", files=str(pdf))
+        assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
 
     conn = open_db("test_proj")
@@ -2188,8 +2223,11 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     finally:
         conn.close()
 
-    # A further run is a no-op against the VLM — the unit is capped.
-    scribe.main(project="test_proj", files=str(pdf))
+    # A further run is a no-op against the VLM — the unit is capped. It's still
+    # unresolved, so the run keeps exiting non-zero rather than reading green (#311).
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(pdf))
+    assert exc.value.code == 1
     assert vision.calls == MAX_INGEST_ATTEMPTS
     conn = open_db("test_proj")
     try:
