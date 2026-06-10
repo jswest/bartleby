@@ -50,6 +50,15 @@ def test_meta_populated_on_init(conn):
     assert rows["created_at"]
 
 
+def test_attach_disables_load_extension(conn):
+    # After _attach the SQL load_extension() function must be disabled
+    # (defense-in-depth), so attempts to load extensions from SQL fail.
+    with pytest.raises(apsw.SQLError):
+        conn.cursor().execute("SELECT load_extension('x')")
+    # ...but the already-loaded sqlite_vec stays functional.
+    assert conn.cursor().execute("SELECT vec_version()").fetchone()[0]
+
+
 def test_all_tables_exist(conn):
     cur = conn.cursor()
     tables = {
