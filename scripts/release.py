@@ -4,8 +4,12 @@
 Versioning scheme — ``v0.<SCHEMA_VERSION>.<patch>``:
 
 * **MINOR == SCHEMA_VERSION** (read straight from ``bartleby/db/schema.py``). It
-  increments monotonically and never moves without a re-ingest, so the version
-  number self-documents the schema: ``v0.8.3`` means "schema 8, third patch".
+  increments monotonically, so the version number self-documents the schema:
+  ``v0.8.3`` means "schema 8, third patch". A minor bump has two dispositions.
+  *Additive* — every crossed version has a ``_UPGRADES`` chain entry
+  (``bartleby/db/upgrades.py``): existing corpora run
+  ``bartleby project upgrade <name>`` and the notes say so. *Breaking* — some
+  step has no chain entry: the notes order a full re-ingest.
 * **PATCH** increments for every release at the same schema; resets to ``0`` on a
   schema bump.
 * **MAJOR** is a human call (a real 1.0, a ground-up rewrite) — never automated
@@ -34,7 +38,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 SCHEMA_PATH = "bartleby/db/schema.py"
+
+from bartleby.db.upgrades import _UPGRADES  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +104,20 @@ def schema_moved(schema_version: int, last_tag: str | None) -> bool:
     return parse_version_tag(last_tag)[1] != schema_version
 
 
+def upgrade_covers(schema_from: int, schema_to: int) -> bool:
+    """True when the ``_UPGRADES`` chain spans every crossed version.
+
+    An *additive* bump has a chain entry for each step ``v -> v+1`` between the
+    old and new schema, so existing corpora run ``bartleby project upgrade``
+    rather than re-ingesting. A single missing step makes the whole bump
+    breaking (re-ingest). A non-forward move (``schema_from >= schema_to``) is
+    never an additive upgrade.
+    """
+    if schema_from >= schema_to:
+        return False
+    return all(v in _UPGRADES for v in range(schema_from, schema_to))
+
+
 def check_drift(old_source: str, new_source: str) -> str | None:
     """Compare two ``schema.py`` sources; return an error string if they drift.
 
@@ -124,14 +145,26 @@ def build_release_notes(
     schema_from: int | None,
     schema_to: int | None,
 ) -> str:
-    """Assemble GitHub Release notes from the git log, with a re-ingest banner
-    prepended on a schema bump."""
+    """Assemble GitHub Release notes from the git log, with a schema banner
+    prepended on a schema bump.
+
+    An *additive* bump (``_UPGRADES`` covers every crossed version) tells users
+    to run ``bartleby project upgrade <name>``; a *breaking* bump orders a full
+    re-ingest.
+    """
     parts: list[str] = []
     if schema_from is not None and schema_to is not None and schema_from != schema_to:
-        parts.append(
-            f"⚠️ **This release changes the database schema "
-            f"({schema_from} → {schema_to}). Existing corpora must be re-ingested.**\n"
-        )
+        if upgrade_covers(schema_from, schema_to):
+            parts.append(
+                f"⚠️ **This release changes the database schema "
+                f"({schema_from} → {schema_to}). Existing corpora upgrade in place: "
+                f"run `bartleby project upgrade <name>`.**\n"
+            )
+        else:
+            parts.append(
+                f"⚠️ **This release changes the database schema "
+                f"({schema_from} → {schema_to}). Existing corpora must be re-ingested.**\n"
+            )
     parts.append("## Changes\n")
     if log_lines:
         parts.extend(f"- {line}" for line in log_lines)
@@ -228,8 +261,16 @@ def main(argv: list[str] | None = None) -> int:
         commits, schema_from=schema_from, schema_to=schema_version if moved else None,
     )
 
+    if moved:
+        disposition = (
+            "  (bumped → upgrade in place)"
+            if upgrade_covers(schema_from, schema_version)
+            else "  (bumped → re-ingest)"
+        )
+    else:
+        disposition = ""
     print(f"Last tag:     {last_tag or '(none)'}")
-    print(f"Schema:       {schema_version}{'  (bumped → re-ingest)' if moved else ''}")
+    print(f"Schema:       {schema_version}{disposition}")
     print(f"Next release: {new_tag}")
     print()
     print(notes)
