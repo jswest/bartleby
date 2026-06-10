@@ -124,12 +124,56 @@ def test_notes_include_commits():
     assert "⚠️" not in notes  # no re-ingest banner when the schema didn't move
 
 
-def test_notes_banner_on_schema_bump():
+def test_notes_reingest_banner_on_breaking_bump(monkeypatch):
+    # No _UPGRADES entry for the 8 -> 9 step: breaking bump, re-ingest.
+    monkeypatch.setattr(release, "_UPGRADES", {})
     notes = release.build_release_notes(
-        ["Big change"], schema_from=7, schema_to=8,
+        ["Big change"], schema_from=8, schema_to=9,
     )
     assert "⚠️" in notes
-    assert "7 → 8" in notes
+    assert "8 → 9" in notes
+    assert "re-ingested" in notes
+    assert "project upgrade" not in notes
+
+
+def test_notes_upgrade_banner_on_additive_bump(monkeypatch):
+    # Every crossed step (8 -> 9) has a chain entry: upgrade in place, no re-ingest.
+    monkeypatch.setattr(release, "_UPGRADES", {8: object()})
+    notes = release.build_release_notes(
+        ["Big change"], schema_from=8, schema_to=9,
+    )
+    assert "⚠️" in notes
+    assert "8 → 9" in notes
+    assert "bartleby project upgrade <name>" in notes
+    assert "re-ingested" not in notes
+
+
+# --- upgrade_covers --------------------------------------------------------
+
+def test_upgrade_covers_single_step_present(monkeypatch):
+    monkeypatch.setattr(release, "_UPGRADES", {7: object()})
+    assert release.upgrade_covers(7, 8) is True
+
+
+def test_upgrade_covers_multi_step_all_present(monkeypatch):
+    monkeypatch.setattr(release, "_UPGRADES", {5: object(), 6: object(), 7: object()})
+    assert release.upgrade_covers(5, 8) is True
+
+
+def test_upgrade_covers_missing_step_is_breaking(monkeypatch):
+    monkeypatch.setattr(release, "_UPGRADES", {5: object(), 7: object()})  # 6 missing
+    assert release.upgrade_covers(5, 8) is False
+
+
+def test_upgrade_covers_no_entry_is_breaking(monkeypatch):
+    monkeypatch.setattr(release, "_UPGRADES", {})
+    assert release.upgrade_covers(8, 9) is False
+
+
+def test_upgrade_covers_non_forward_is_false(monkeypatch):
+    monkeypatch.setattr(release, "_UPGRADES", {8: object()})
+    assert release.upgrade_covers(9, 9) is False
+    assert release.upgrade_covers(9, 8) is False
 
 
 def test_notes_baseline_when_no_commits():
