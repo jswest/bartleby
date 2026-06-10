@@ -55,15 +55,18 @@ Output (compact by default):
         "page_number": int | null,
         "section_heading": str | null,
         "content_type": str | null,
+        "authored_date": str | null,   # summarizer-inferred; null for undated docs
         "text": str,          # snippet, truncated to `preview`
         "text_length": int,   # pre-truncation length
       }, ...]
     }
 
 With ``--brief`` each match keeps only locators — ``document_id``,
-``file_name``, ``chunk_id``, ``page_number`` — dropping ``chunk_index``,
-``section_heading``, ``content_type``, ``text``, and ``text_length`` (so
-``--preview`` has no effect). Pairs with the always-present ``total`` for pure
+``file_name``, ``chunk_id``, ``page_number``, ``authored_date`` — dropping
+``chunk_index``, ``section_heading``, ``content_type``, ``text``, and
+``text_length`` (so ``--preview`` has no effect). ``authored_date`` rides along
+even here (it's locator-grade), so brief matches stay sortable/triageable by
+time without a re-lookup. Pairs with the always-present ``total`` for pure
 "where does this phrase occur" enumeration. The envelope is unchanged.
 
 Count-by aggregate (``--count-by document``):
@@ -219,8 +222,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--brief",
         action="store_true",
-        help="Locators only (document_id, file_name, chunk_id, page_number); "
-             "drops the text snippet and text_length. Ignores --preview.",
+        help="Locators only (document_id, file_name, chunk_id, page_number, "
+             "authored_date); drops the text snippet and text_length. Ignores "
+             "--preview.",
     )
     p.add_argument(
         "--sort",
@@ -460,9 +464,14 @@ def work(*, conn, args, session_id) -> dict:
         params,
     ).fetchone()[0]
 
+    # authored_date rides the summaries LEFT JOIN that --sort date already needs —
+    # the canonical summarizer-inferred date that list_documents and the date
+    # filters use — so it costs no extra query and is NULL for undated docs (no
+    # summary, or a summary with no inferred date).
     rows = cur.execute(
         f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
-        f"       c.page_number, c.content_type, c.text, d.file_name "
+        f"       c.page_number, c.content_type, c.text, d.file_name, "
+        f"       s.authored_date "
         f"FROM chunks_fts "
         f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
         f"JOIN documents d ON d.document_id = c.source_id "
@@ -480,9 +489,11 @@ def work(*, conn, args, session_id) -> dict:
                 "file_name": file_name,
                 "chunk_id": chunk_id,
                 "page_number": page_number,
+                "authored_date": authored_date,
             }
             for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name) in rows
+                 page_number, content_type, text, file_name,
+                 authored_date) in rows
         ]
     else:
         matches = [
@@ -494,11 +505,13 @@ def work(*, conn, args, session_id) -> dict:
                 "page_number": page_number,
                 "section_heading": section_heading,
                 "content_type": content_type,
+                "authored_date": authored_date,
                 "text": apply_preview(text, preview),
                 "text_length": len(text),
             }
             for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name) in rows
+                 page_number, content_type, text, file_name,
+                 authored_date) in rows
         ]
     return _envelope({
         "offset": args.offset, "limit": args.limit, "total": total,
