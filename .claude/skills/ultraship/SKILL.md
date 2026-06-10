@@ -12,9 +12,11 @@ existing `/ship` promotion mode — that boundary does not move and the
 
 This is additive over `/ship onto`: sub-PRs stay **"Part of #N"** with no
 `Closes`, merged via `gh pr merge`; the `omnibus-checklist` block, native
-sub-issue links, promotion mode, and the guard hook are all untouched; the
-per-player gates (`uv run pytest` → `simplify-refactor` → `uv run pytest`) still
-run inside each worker.
+sub-issue links, promotion mode, and the guard hook are all untouched. The
+per-player `uv run pytest` gate still runs inside each player; the
+`simplify-refactor` half of the gate runs at the **stage-manager** over each
+sub-PR's diff, because a subagent player can't spawn that agent (see "Players,
+mechanically").
 
 ## The two honest bets
 
@@ -41,7 +43,7 @@ diff at 8 a.m. The risk-ranked report exists specifically to fight that.
 |---|---|---|---|
 | **director** | *Is it the right work?* — sharpen up front; grade vs `goal` at the end | `plan` interview + run FINISH | a strong reasoning/grading model |
 | **stage-manager** | *Sequence + reconcile* — orchestrate, merge, apply small fixes | the orchestrator (you) | a strong coding/agent model |
-| **players** | *Implement the sub-issue* | one per sub-issue, own sibling worktree | a strong coding model |
+| **players** | *Implement the sub-issue* | one subagent per sub-issue, own sibling worktree | a strong coding model |
 | **critic** | *Is it correct?* — bugs, especially integration | run FINISH, looped | a strong reasoning model |
 
 The director **bookends** the production: shapes it at the start, judges it at
@@ -52,8 +54,9 @@ each role's *job* — a strong reasoning model for the director/critic grading
 roles, a strong coding model for the stage-manager/players. As of this writing
 **Fable 5** is the strongest model for the judgment roles and **Opus** for the
 coding roles, but do not hard-code a model id as a contract: when a better model
-ships, prefer it. Pass the choice through `claude -p --model <id>` per role; if
-unsure, inherit the session default rather than pin a stale id.
+ships, prefer it. Players are dispatched as subagents (below), so pass their
+model through the Agent tool's `model`; pass any other role's model through its
+own launch. If unsure, inherit the session default rather than pin a stale id.
 
 ## Two verbs
 
@@ -175,19 +178,23 @@ landed is the worst outcome; abort loud, never guess a plan.
                   worktree (`../bartleby-issue-<N>-<slug>`, never nested) off the
                   CURRENT omnibus HEAD. Instructions = that issue's objective +
                   the director's-notes.
-3. players        Implement; run per-player gates IN ORDER — `uv run pytest` ->
-                  `simplify-refactor` -> apply -> `uv run pytest` -> commit
-                  (`/ship`'s pytest-skip rules apply). Write their own
+3. players        Implement; run the per-player gate — `uv run pytest` -> commit
+                  (`/ship`'s pytest-skip rules apply). A subagent player can't
+                  spawn the `simplify-refactor` agent, so that half of the gate
+                  runs at the stage-manager in step 4. Write their own
                   `docs/decisions/GH-NNNN-*.md` file but NOT the
                   `docs/decisions/README.md` line (see Docs). Push the branch,
                   open a "Part of #N" sub-PR against the omnibus branch (no
                   `Closes`).
-4. stage-manager  Merge the sub-PRs serially (a train, never N-way): run the
-                  integration suite (full `uv run pytest` on the omnibus branch
-                  post-merge; `/ship`'s skip rules apply) — green + clean merge ->
-                  `gh pr merge`, tick the checklist block, ensure the native
-                  sub-issue link; genuine conflict or red suite -> PARK (leave the
-                  sub-PR OPEN, record it). No unattended conflict-resolution.
+4. stage-manager  Merge the sub-PRs serially (a train, never N-way): first run
+                  `simplify-refactor` over the sub-PR's diff (the gate half
+                  deferred from step 3) and push accepted fixes onto its branch;
+                  then run the integration suite (full `uv run pytest` on
+                  the omnibus branch post-merge; `/ship`'s skip rules apply) —
+                  green + clean merge -> `gh pr merge`, tick the checklist block,
+                  ensure the native sub-issue link; genuine conflict or red suite
+                  -> PARK (leave the sub-PR OPEN, record it). No unattended
+                  conflict-resolution.
 5. stage-manager  -> critic: review the assembled omnibus.
 6. critic         Risk-ranked, plain-language findings (see Report).
 7. stage-manager  Triage & assign:
@@ -218,15 +225,19 @@ a player as a fresh-branch rework.
 
 ## Players, mechanically
 
-A player is a **headless `claude -p` process** launched in its sibling worktree,
-running with permissions pre-granted (an allowlist of git / `gh` / `uv` / the
-gate agents, or `--dangerously-skip-permissions`) — otherwise it hangs on the
-first permission prompt at 1 a.m. with nobody to approve. This is a deliberate
-safety decision (an unsupervised agent with broad command access in a worktree),
-recorded in `docs/decisions/`. A blocked or genuinely-unsure player **parks with
-a written question** for the report — it never guesses (the up-front interview is
-what keeps this rare). On restart the stage-manager adopts or cleans **only its
-own** orphaned player worktrees; it never touches a worktree it didn't create.
+A player is an **isolated subagent** the stage-manager dispatches (the Agent tool
+with `isolation: worktree`), running in its own sibling worktree off the current
+omnibus HEAD. Because a subagent runs inside the stage-manager's own session
+under your login, it needs no separate auth and no `--dangerously-skip-permissions`:
+it inherits the session's permission posture and can't hang on a fresh 1 a.m.
+permission prompt — the failure mode a spawned `claude -p` process carried. This
+is a deliberate decision (recorded in `docs/decisions/`); the trade-off is that a
+subagent **can't spawn another agent**, so the `simplify-refactor` half of the
+gate runs at the stage-manager (run step 4), not inside the player. A blocked or
+genuinely-unsure player **parks with a written question** for the report — it
+never guesses (the up-front interview is what keeps this rare). On restart the
+stage-manager adopts or cleans **only its own** orphaned player worktrees; it
+never touches a worktree it didn't create.
 
 ## Integration & state = sub-PRs + git
 
@@ -300,8 +311,9 @@ step 9.
 - Auto-cutting releases (stays the separate `/release` act).
 - The director inventing vision — it grades only against `goal` + `objective`s +
   director's-notes + CLAUDE.md agreements.
-- Standalone cross-issue dedup — per-player `simplify` covers per-issue hygiene;
-  cross-issue duplication is rare and low-stakes.
+- Standalone cross-issue dedup — the stage-manager's per-sub-PR `simplify-refactor`
+  pass (run step 4) covers per-issue hygiene; cross-issue duplication is rare and
+  low-stakes.
 - Mid-run re-sequencing — conflicts park instead.
 - A `parallel` manifest field — parallelism is derived.
 - Unattended conflict **auto-resolution** — conflicts park; never resolved
