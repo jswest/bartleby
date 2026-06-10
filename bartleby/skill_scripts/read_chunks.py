@@ -92,8 +92,8 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, chunk_locations, comma_int_list, memory_enabled, nonneg_int,
-    positive_int, source_names,
+    apply_preview, assert_findings_accessible, chunk_locations, comma_int_list,
+    memory_enabled, nonneg_int, owned_finding_ids, positive_int, source_names,
 )
 
 
@@ -129,26 +129,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
-
-
-def _owned_finding_ids(conn, finding_ids, session_id: int) -> set[int]:
-    """Subset of ``finding_ids`` authored by ``session_id``.
-
-    Callers pass the ``source_id`` of finding-kind chunks, which for findings
-    equals ``findings.finding_id``.
-    """
-    ids = list(finding_ids)
-    if not ids:
-        return set()
-    placeholders = ",".join("?" * len(ids))
-    return {
-        row[0]
-        for row in conn.cursor().execute(
-            f"SELECT finding_id FROM findings "
-            f"WHERE finding_id IN ({placeholders}) AND session_id = ?",
-            (*ids, session_id),
-        )
-    }
 
 
 def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
@@ -193,7 +173,7 @@ def _read_by_chunk_ids(
     # ``missing`` as if they didn't exist (mirrors read_finding's MEMORY_OFF).
     if not mem:
         finding_sids = {r[2] for r in rows.values() if r[1] == "finding"}
-        owned = _owned_finding_ids(conn, finding_sids, session_id)
+        owned = owned_finding_ids(conn, finding_sids, session_id)
         rows = {
             cid: r
             for cid, r in rows.items()
@@ -271,7 +251,7 @@ def _read_by_document(conn, args) -> dict:
     }
 
 
-def _read_around_chunk(conn, args, *, mem: bool, session_id: int) -> dict:
+def _read_around_chunk(conn, args, *, session_id: int) -> dict:
     cur = conn.cursor()
     target = cur.execute(
         "SELECT chunk_id, source_kind, source_id, chunk_index "
@@ -288,14 +268,8 @@ def _read_around_chunk(conn, args, *, mem: bool, session_id: int) -> dict:
     # Memory wall: refuse a window centred on another session's finding chunk.
     # The window never crosses (source_kind, source_id), so gating the target
     # also keeps foreign finding chunks out of the neighbourhood.
-    if not mem and sk == "finding" and not _owned_finding_ids(conn, {sid}, session_id):
-        raise SkillError(
-            "MEMORY_OFF",
-            f"This session has memory disabled and chunk {args.around_chunk} "
-            "belongs to a finding authored by another session, so it is not "
-            "accessible. Start a memory-enabled session (omit --no-memory) to "
-            "read other sessions' findings.",
-        )
+    if sk == "finding":
+        assert_findings_accessible(conn, session_id, [sid], action="read")
 
     rows = list(cur.execute(
         "SELECT chunk_id, chunk_index, section_heading, page_number, "
@@ -330,7 +304,7 @@ def work(*, conn, args, session_id) -> dict:
             conn, args.chunk_ids, args.preview, mem=mem, session_id=session_id,
         )
     if args.around_chunk is not None:
-        return _read_around_chunk(conn, args, mem=mem, session_id=session_id)
+        return _read_around_chunk(conn, args, session_id=session_id)
     return _read_by_document(conn, args)
 
 

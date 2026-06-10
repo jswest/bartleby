@@ -72,6 +72,71 @@ def memory_enabled(conn, session_id: int) -> bool:
     ).fetchone()[0])
 
 
+def owned_finding_ids(conn, finding_ids, session_id: int) -> set[int]:
+    """Subset of ``finding_ids`` authored by ``session_id``.
+
+    The single ownership query behind the memory wall's finding half. Callers
+    pass ``finding_id``s (for finding-kind chunks, that's the chunk's
+    ``source_id``). Ids absent from ``findings`` — or owned by another session —
+    are simply not in the returned set.
+    """
+    ids = list(finding_ids)
+    if not ids:
+        return set()
+    placeholders = ",".join("?" * len(ids))
+    return {
+        row[0]
+        for row in conn.cursor().execute(
+            f"SELECT finding_id FROM findings "
+            f"WHERE finding_id IN ({placeholders}) AND session_id = ?",
+            (*ids, session_id),
+        )
+    }
+
+
+def assert_findings_accessible(
+    conn, session_id: int, finding_ids, *, action: str,
+) -> None:
+    """Enforce the memory wall's finding-ownership half over ``finding_ids``.
+
+    The invariant, expressed once: a ``memory_enabled=0`` session may *touch* a
+    finding only if it authored it — reading another session's finding (or its
+    chunks) would contaminate an evaluation with prior conclusions. A no-op when
+    memory is enabled (every finding is accessible). Otherwise, if any id was
+    authored by another session, raise ``MEMORY_OFF`` naming the foreign id(s)
+    in ``foreign_finding_ids``; ``action`` (``"read"`` / ``"edit"`` /
+    ``"delete"`` / ``"merge"``) fills the message tail.
+
+    Every gating site routes through here so the wall is expressed in one place,
+    not re-derived per script. (``search``'s blanket result-filtering and
+    ``read_chunks``'s ``--chunks`` drop-to-``missing`` are the wall's *silent*
+    halves; they share :func:`owned_finding_ids` but don't raise.)
+    """
+    if memory_enabled(conn, session_id):
+        return
+    requested = list(finding_ids)
+    foreign = sorted(set(requested) - owned_finding_ids(conn, requested, session_id))
+    if not foreign:
+        return
+    if len(foreign) == 1:
+        subject = (
+            f"finding {foreign[0]} was authored by another session, so it is "
+            "not accessible"
+        )
+    else:
+        subject = (
+            f"findings {foreign} were authored by another session, so they are "
+            "not accessible"
+        )
+    raise SkillError(
+        "MEMORY_OFF",
+        f"This session has memory disabled and {subject}. Start a "
+        f"memory-enabled session (omit --no-memory) to {action} other "
+        "sessions' findings.",
+        foreign_finding_ids=foreign,
+    )
+
+
 def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
     """Raise ``UNKNOWN_CITATIONS`` if any chunk_id is missing from ``chunks``."""
     if not chunk_ids:

@@ -39,9 +39,9 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    assert_findings_accessible,
     finding_chunk_and_citation_ids,
     load_finding_body,
-    memory_enabled,
     rebuild_finding_chunks,
     replace_finding_citations,
     resolve_citations,
@@ -84,14 +84,7 @@ def work(*, conn, args, session_id) -> dict:
     # session would leak its content (and mutate it as a side effect). A
     # memory-off session may only touch findings it authored — mirroring
     # read_finding's wall. Gate before any validation or write.
-    if not memory_enabled(conn, session_id) and owning_session_id != session_id:
-        raise SkillError(
-            "MEMORY_OFF",
-            f"This session has memory disabled and finding {args.finding_id} "
-            "was authored by another session, so it is not accessible. Start a "
-            "memory-enabled session (omit --no-memory) to edit other sessions' "
-            "findings.",
-        )
+    assert_findings_accessible(conn, session_id, [args.finding_id], action="edit")
 
     new_title = validated_replacement(
         args.title, current_title, code="EMPTY_TITLE", label="title",
