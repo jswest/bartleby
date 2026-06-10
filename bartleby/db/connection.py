@@ -45,6 +45,7 @@ def resolve_project_name(project_name: str | None) -> str:
 def _attach(conn: apsw.Connection) -> None:
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
     cur = conn.cursor()
     cur.execute("PRAGMA foreign_keys = ON")
     cur.execute("PRAGMA journal_mode = WAL")
