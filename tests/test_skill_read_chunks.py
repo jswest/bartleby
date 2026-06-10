@@ -437,6 +437,45 @@ def test_read_chunks_around_memory_off_foreign_finding_walled(seeded_project, ca
     assert out["code"] == "MEMORY_OFF"
 
 
+def test_read_chunks_no_hint_for_walled_finding_chunk_colliding_with_document(
+    seeded_project, capsys,
+):
+    """A walled finding chunk whose id collides with a live document_id: no hint.
+
+    Regression: the cross-namespace hint fires for a ``missing`` id that is a
+    live document_id. A memory-walled foreign finding chunk lands in ``missing``
+    too, and its chunk_id can collide with a real document_id (the two id spaces
+    overlap freely). The hint must NOT fire there — the id is genuinely a chunk
+    in this corpus, just walled — only when the id is not a chunk here at all.
+    """
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(conn, session_id=author, body="walled body")
+        # Force a document_id that equals the walled finding chunk_id, so the
+        # collision the hint keys off of is present.
+        conn.cursor().execute(
+            "INSERT INTO documents "
+            "(document_id, file_hash, file_name, file_path) "
+            "VALUES (?, ?, ?, ?)",
+            (foreign, f"hash-{foreign}", "collider.pdf", "/x/collider.pdf"),
+        )
+    finally:
+        conn.close()
+
+    start_session(project, memory_enabled=False)
+
+    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    out = json.loads(capsys.readouterr().out)
+    # The walled chunk is missing (no leak)...
+    assert out["missing"] == [foreign]
+    assert out["chunks"] == []
+    # ...and despite the document_id collision, no misleading hint fires.
+    assert "hints" not in out
+    assert "walled body" not in json.dumps(out)
+
+
 def test_read_chunks_around_memory_off_own_finding_allowed(seeded_project, capsys):
     """--around-chunk on the session's own finding chunk still works memory-off."""
     project = seeded_project["project"]
