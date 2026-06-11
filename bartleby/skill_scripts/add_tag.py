@@ -58,7 +58,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--pattern", type=str, default=None,
         help="Extraction regex with a (?P<value>…) group. Requires --value-type.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

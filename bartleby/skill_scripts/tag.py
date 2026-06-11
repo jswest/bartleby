@@ -76,7 +76,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--force", action="store_true",
         help="Re-classify even when relevant assignments already exist.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

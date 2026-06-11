@@ -24,7 +24,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("rename_tag", __doc__)
     p.add_argument("--old", type=str, required=True)
     p.add_argument("--new", type=str, required=True)
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

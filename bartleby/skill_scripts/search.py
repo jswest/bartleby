@@ -147,7 +147,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "under --brief."
         ),
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
@@ -190,8 +189,6 @@ def _scope_clause(
     ``scope`` maps source_kind → either a list of allowed source_ids
     (filtered scope) or ``None`` (unrestricted — match all of that kind).
     """
-    if not scope:
-        return "0", []
     parts: list[str] = []
     params: list = []
     for kind, ids in scope.items():

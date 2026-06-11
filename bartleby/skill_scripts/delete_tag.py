@@ -20,7 +20,6 @@ from bartleby.skill_scripts._tags import require_tag_by_name
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("delete_tag", __doc__)
     p.add_argument("--tag", type=str, required=True)
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

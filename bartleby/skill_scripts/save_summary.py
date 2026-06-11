@@ -31,7 +31,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--authored-date", type=str, default=None, dest="authored_date",
         help="ISO 8601 YYYY-MM-DD. Silently stored as NULL if malformed.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
