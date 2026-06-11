@@ -9,9 +9,10 @@ from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
-from bartleby.db.connection import project_db_path
+from bartleby.db.connection import _attach, project_db_path
 from bartleby.db.schema import SCHEMA_VERSION
 from bartleby.db import upgrades as upgrades_mod
+from bartleby.integrity import run_all_checks
 from bartleby.project import (
     create_project,
     delete_project,
@@ -65,7 +66,7 @@ def use(*, name: str) -> None:
     _console.print(f"Active project set to: [bold]{name}[/bold]")
 
 
-def info(*, name: str | None) -> None:
+def info(*, name: str | None, verify: bool = False) -> None:
     name = name or get_active_project()
     if not name:
         _console.print(
@@ -74,37 +75,79 @@ def info(*, name: str | None) -> None:
         sys.exit(1)
     try:
         i = get_project_info(name)
-    except (ValueError, FileNotFoundError, RuntimeError) as e:
+    except (ValueError, FileNotFoundError) as e:
         _console.print(f"[red]{e}[/red]")
         sys.exit(1)
+    except RuntimeError as e:
+        # A schema-version mismatch makes get_project_info's open_db raise. Under
+        # --verify that IS the finding (the integrity audit names it), so press
+        # on to the checks instead of aborting; otherwise it's fatal as before.
+        if not verify:
+            _console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+        i = None
 
-    table = Table(title=f"Project: {i['name']}")
-    table.add_column("Field", style="bold")
-    table.add_column("Value")
-    table.add_row("Active", "yes" if i["is_active"] else "no")
-    table.add_row("Path", str(i["path"]))
-    table.add_row("Database", "ready" if i["has_db"] else "missing")
-    if i["has_db"]:
-        table.add_row("DB size", f"{i['db_size_mb']} MB")
-        table.add_row("Schema version", str(i["schema_version"]))
-        table.add_row("Embedding model", str(i["embedding_model"]))
-        table.add_row("Documents", str(i["document_count"]))
-        table.add_row("Sessions", str(i["session_count"]))
-        table.add_row("Findings", str(i["finding_count"]))
-        c = i["chunk_counts"]
-        table.add_row(
-            "Chunks",
-            f"{c['document']} document  /  {c['image']} image  /  "
-            f"{c['summary']} summary  /  {c['finding']} finding",
-        )
-        f = i["failed_ingests"]
-        if f["total"]:
-            capped_note = f" ({f['capped']} capped, not retried)" if f["capped"] else ""
+    if i is not None:
+        table = Table(title=f"Project: {i['name']}")
+        table.add_column("Field", style="bold")
+        table.add_column("Value")
+        table.add_row("Active", "yes" if i["is_active"] else "no")
+        table.add_row("Path", str(i["path"]))
+        table.add_row("Database", "ready" if i["has_db"] else "missing")
+        if i["has_db"]:
+            table.add_row("DB size", f"{i['db_size_mb']} MB")
+            table.add_row("Schema version", str(i["schema_version"]))
+            table.add_row("Embedding model", str(i["embedding_model"]))
+            table.add_row("Documents", str(i["document_count"]))
+            table.add_row("Sessions", str(i["session_count"]))
+            table.add_row("Findings", str(i["finding_count"]))
+            c = i["chunk_counts"]
             table.add_row(
-                "Failed units",
-                f"[yellow]{f['total']} incomplete{capped_note}[/yellow]",
+                "Chunks",
+                f"{c['document']} document  /  {c['image']} image  /  "
+                f"{c['summary']} summary  /  {c['finding']} finding",
             )
-    _console.print(table)
+            f = i["failed_ingests"]
+            if f["total"]:
+                capped_note = (
+                    f" ({f['capped']} capped, not retried)" if f["capped"] else ""
+                )
+                table.add_row(
+                    "Failed units",
+                    f"[yellow]{f['total']} incomplete{capped_note}[/yellow]",
+                )
+        _console.print(table)
+
+    if verify:
+        _verify(name)
+
+
+def _verify(name: str) -> None:
+    """Run the read-only integrity audit and exit non-zero on any failure.
+
+    Opens its own raw connection (vec extension attached, no schema-version gate)
+    so a stamped-vs-code mismatch is *reported* by the schema check rather than
+    raised before any check runs. Read-only throughout.
+    """
+    db_path = project_db_path(name)
+    if not db_path.exists():
+        _console.print(f"[red]Project '{name}' has no database to verify.[/red]")
+        sys.exit(1)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        _attach(conn)
+        results = run_all_checks(conn)
+    finally:
+        conn.close()
+
+    _console.print("\n[bold]Integrity checks[/bold]")
+    for r in results:
+        mark = "[green]PASS[/green]" if r.passed else "[red]FAIL[/red]"
+        _console.print(f"  {mark}  {r.name}: {r.detail}")
+
+    if not all(r.passed for r in results):
+        sys.exit(1)
 
 
 def upgrade(*, name: str) -> None:

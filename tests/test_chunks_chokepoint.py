@@ -24,12 +24,18 @@ ALLOWLIST = {PACKAGE_ROOT / "db" / "chunks.py"}
 
 # Match ``INSERT INTO <table>`` where <table> is exactly one of the chunks
 # tables. ``\s+`` between INTO and the table tolerates the newline-split SQL in
-# chunks.py. The trailing ``(?![\w.])`` is a precise right boundary: it rejects
-# longer identifiers (e.g. ``chunks_archive``) so ``chunks`` does not falsely
-# match a prefix of ``chunks_fts``/``chunks_vec`` or any other table, while
-# still allowing ``chunks(`` / ``chunks `` / end-of-string.
+# chunks.py. The ``(?![\w.])`` after the table name is a precise right boundary:
+# it rejects longer identifiers (e.g. ``chunks_archive``) so ``chunks`` does not
+# falsely match a prefix of ``chunks_fts``/``chunks_vec`` or any other table,
+# while still allowing ``chunks(`` / ``chunks `` / end-of-string.
+#
+# The ``(?!\s*\(\s*chunks_fts\b)`` exclusion lets through FTS5's *command* form
+# ``INSERT INTO chunks_fts(chunks_fts, ...)`` (e.g. the load-bearing
+# ``'integrity-check'`` probe): naming the table itself as the first column is
+# the FTS5 command convention, a vacuous write that inserts no chunk row. A real
+# external-content row write names ``rowid``/``text`` columns and is still caught.
 CHUNKS_INSERT = re.compile(
-    r"INSERT\s+INTO\s+(?:chunks_fts|chunks_vec|chunks)(?![\w.])",
+    r"INSERT\s+INTO\s+(?:chunks_fts|chunks_vec|chunks)(?![\w.])(?!\s*\(\s*chunks_fts\b)",
     re.IGNORECASE,
 )
 
@@ -68,6 +74,14 @@ def test_guard_detects_a_planted_violation() -> None:
     assert not CHUNKS_INSERT.search("INSERT INTO chunks_archive VALUES (?)")
     assert not CHUNKS_INSERT.search("# we never INSERT INTO chunkside tables")
     assert not CHUNKS_INSERT.search("INSERT INTO documents VALUES (?)")
+    # FTS5 command form (table name as first column) — a vacuous probe, not a
+    # chunk write — is exempt; a real row write into the same table is not.
+    assert not CHUNKS_INSERT.search(
+        "INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)"
+    )
+    assert CHUNKS_INSERT.search(
+        "INSERT INTO chunks_fts(rowid, text, section_heading) VALUES (?, ?, ?)"
+    )
 
 
 def test_helper_module_is_present_and_does_insert() -> None:
