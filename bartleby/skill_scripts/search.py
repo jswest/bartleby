@@ -467,6 +467,11 @@ def work(*, conn, args, session_id) -> dict:
     results = []
     for rank, (chunk_id, score) in enumerate(scored, start=1):
         _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
+        # Resolve the display name once. An unresolvable pair (source row deleted
+        # by a concurrent session between chunk fetch and name resolution) is
+        # absent from ``names`` — degrade to "" rather than KeyError-aborting the
+        # whole search (issue #465; matches read_chunks' "absent pair" contract).
+        source_name = names.get((source_kind, source_id), "")
         loc = locations.get(
             chunk_id,
             {"file_name": None, "page_number": None, "authored_date": None},
@@ -482,7 +487,7 @@ def work(*, conn, args, session_id) -> dict:
                 "document_id": source_id if source_kind == "document" else None,
                 "source_kind": source_kind,
                 "source_id": source_id,
-                "source_name": names[(source_kind, source_id)],
+                "source_name": source_name,
                 "file_name": loc["file_name"],
                 "page_number": loc["page_number"],
                 "authored_date": loc["authored_date"],
@@ -501,7 +506,7 @@ def work(*, conn, args, session_id) -> dict:
             results.append({
                 "chunk_id": chunk_id,
                 "source_kind": source_kind,
-                "source_name": names[(source_kind, source_id)],
+                "source_name": source_name,
                 "page_number": loc["page_number"],
                 "authored_date": loc["authored_date"],
                 "rank": rank,
@@ -513,7 +518,7 @@ def work(*, conn, args, session_id) -> dict:
             "chunk_id": chunk_id,
             "source_kind": source_kind,
             "source_id": source_id,
-            "source_name": names[(source_kind, source_id)],
+            "source_name": source_name,
             "file_name": loc["file_name"],
             "page_number": loc["page_number"],
             "authored_date": loc["authored_date"],
