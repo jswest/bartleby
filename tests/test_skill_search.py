@@ -793,6 +793,43 @@ def test_search_returning_unknown_field_errors(seeded_project, capsys):
     assert "document_id" in out["valid_fields"]
 
 
+def test_search_completes_when_source_deleted_underneath(seeded_project, capsys):
+    """A chunk whose (source_kind, source_id) pair no longer resolves — its
+    source row deleted by a concurrent session between fetch and name resolution
+    — must degrade that one hit's source_name to "" rather than aborting the
+    whole search with KeyError → INTERNAL_ERROR (issue #465)."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, "
+            "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+            ("h-ghost", "ghost.txt", "/tmp/ghost.txt", None, 0),
+        )
+        ghost_doc = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_document_chunks(conn, ghost_doc, [
+            ChunkInput(text="ghostword chunk", embedding=emb, chunk_index=0),
+        ])
+        # Drop the document row out from under its still-indexed chunk, so the
+        # (document, ghost_doc) pair is absent from source_names' result.
+        cur.execute("DELETE FROM documents WHERE document_id = ?", (ghost_doc,))
+    finally:
+        conn.close()
+
+    # Default, brief, and --returning all read source_name — each must survive.
+    for extra in ([], ["--brief"], ["--returning", "chunk_id,source_name"]):
+        _run([
+            "--project", seeded_project["project"],
+            "--full-text", "ghostword", *extra,
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert "error" not in out, f"search aborted with {extra}: {out}"
+        hit = next(r for r in out["results"] if r["chunk_id"])
+        assert hit["source_name"] == ""
+
+
 def test_search_default_projection_unchanged_without_returning(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"], "--full-text", "alpha",
