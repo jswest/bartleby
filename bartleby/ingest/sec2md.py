@@ -1,9 +1,15 @@
 """sec2md wrapper — converter for iXBRL EDGAR filings.
 
-Slots in alongside ``docling`` on the HTML branch. Only opted in when
-``html_converter = sec2md`` in config (or ``--html-converter sec2md`` on the
-CLI), and even then only routed to for files that pass the iXBRL sniff. Other
-HTML/HTM files fall through to Docling. See issue #14 for the full scope.
+Slots in alongside ``docling`` on the HTML branch. For standalone HTML/HTM
+files it's opt-in: only when ``html_converter = sec2md`` in config (or
+``--html-converter sec2md`` on the CLI), and even then only routed to for files
+that pass the iXBRL sniff — other HTML/HTM files fall through to Docling.
+
+The EDGAR full-submission path is the exception: when a ``.txt`` is unwrapped
+as an SEC SGML envelope (see ``ingest/parsers.py``), its inner HTML/iXBRL
+bodies always route through sec2md regardless of ``html_converter`` — it's the
+only converter that reads SEC HTML and the alternative is raw tag soup, so the
+dependency is hard there. See issue #14 for the full scope.
 """
 
 from __future__ import annotations

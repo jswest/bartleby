@@ -49,10 +49,14 @@ Output (compact by default):
     {
       "query": str,
       "match_mode": "phrase" | "terms",
-      "in_documents": [int, ...] | null,
-      "tags": [str, ...] | null,
       "offset": int, "limit": int, "total": int,
       "preview": int,
+      "filters": {   # present ONLY when a scope filter is active (see below)
+        "tags": [str, ...], "in_documents": [int, ...],
+        "file_like": [str, ...], "heading_like": [str, ...],
+        "authored_after": str, "authored_before": str,
+        "include_nulls": bool, "excluded_null_dated": int
+      },
       "matches": [{
         "document_id": int,
         "file_name": str,
