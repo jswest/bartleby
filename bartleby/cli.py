@@ -62,6 +62,11 @@ def main():
     pu.add_argument("name", type=str)
     pi = project_sub.add_parser("info", help="Show project details")
     pi.add_argument("name", type=str, nargs="?", default=None)
+    pi.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run read-only corpus integrity checks; exit non-zero on any failure",
+    )
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
     pd.add_argument("-y", "--yes", action="store_true")
@@ -358,7 +363,7 @@ def _project(args, parser):
     elif args.project_command == "use":
         project_cmd.use(name=args.name)
     elif args.project_command == "info":
-        project_cmd.info(name=args.name)
+        project_cmd.info(name=args.name, verify=args.verify)
     elif args.project_command == "delete":
         project_cmd.delete(name=args.name, yes=args.yes)
     elif args.project_command == "upgrade":

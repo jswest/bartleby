@@ -16,6 +16,7 @@ from bartleby.db.chunks import (
 )
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.integrity import check_tri_table_sync
 
 
 def _emb(seed: float = 0.0) -> list[float]:
@@ -108,34 +109,15 @@ def seed_finding_via_main(seeded_project, tmp_path, capsys, *, title,
 def assert_chunk_tables_consistent(conn) -> None:
     """Assert ``chunks``, ``chunks_fts``, and ``chunks_vec`` agree.
 
-    The two mirror tables are checked DIFFERENTLY because they are different
-    kinds of virtual table:
-
-    - ``chunks_fts`` is an external-content FTS5 table (``content='chunks'``),
-      so any non-MATCH read (rowid lookup, ``COUNT``) is satisfied THROUGH
-      ``chunks`` and would be vacuous. The only way to catch drift between the
-      FTS index and its content table is FTS5's own ``'integrity-check'``
-      command. It MUST be invoked in the two-argument ``rank=1`` form
-      (``VALUES('integrity-check', 1)``): the rank argument is what makes
-      integrity-check actually re-derive the index from the external-content
-      ``chunks`` table and compare them, raising on drift in either direction.
-      The one-argument form is a no-op for content/index drift in this SQLite
-      (apsw 3.51 / SQLite 3.51) — it passes even when the index is missing rows
-      or holds stale entries.
-    - ``chunks_vec`` is a real ``vec0`` table with its own row storage, so its
-      ``rowid`` set can be compared against ``chunks`` directly.
+    Thin wrapper over the shippable :func:`bartleby.integrity.check_tri_table_sync`
+    (lifted out in #487 so the command and the suite share one implementation).
+    The load-bearing detail — the FTS leg uses FTS5's external-content
+    ``'integrity-check'`` in the ``rank=1`` form (the one-argument form is a no-op
+    for content/index drift in apsw 3.51 / SQLite 3.51), and the vec leg compares
+    rowid sets exactly — lives in that module's docstring now.
     """
-    cur = conn.cursor()
-    # FTS leg: external-content integrity check (rank=1 raises on drift).
-    cur.execute("INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)")
-    # Vector leg: rowid sets must match exactly.
-    chunk_ids = {r[0] for r in cur.execute("SELECT chunk_id FROM chunks")}
-    vec_ids = {r[0] for r in cur.execute("SELECT rowid FROM chunks_vec")}
-    assert vec_ids == chunk_ids, (
-        f"chunks_vec rowids drifted from chunks: "
-        f"only in vec={sorted(vec_ids - chunk_ids)}, "
-        f"only in chunks={sorted(chunk_ids - vec_ids)}"
-    )
+    result = check_tri_table_sync(conn)
+    assert result.passed, result.detail
 
 
 @pytest.fixture
