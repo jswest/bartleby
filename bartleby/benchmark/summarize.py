@@ -33,7 +33,7 @@ from bartleby.benchmark.sources import (
     select_documents,
 )
 from bartleby.benchmark.stores import BenchmarkRoot, append_record, read_records
-from bartleby.commands.config import DEFAULT_TEMPERATURE
+from bartleby.lib.consts import DEFAULT_TEMPERATURE
 
 
 def prompt_sha() -> str:

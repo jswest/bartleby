@@ -51,10 +51,14 @@ from bartleby.ingest.writer import FailedUnit, MAX_INGEST_ATTEMPTS, Writer
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
+    ALLOWED_HTML_CONVERTERS,
+    ALLOWED_PDF_CONVERTERS,
     DEFAULT_HTML_CONVERTER,
+    DEFAULT_MAX_SUMMARIZE_TOKENS,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_TEMPERATURE,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
@@ -106,18 +110,18 @@ def main(
     pdf_converter_name = (
         pdf_converter or config.get("pdf_converter", DEFAULT_PDF_CONVERTER)
     ).lower()
-    if pdf_converter_name not in ("pdfplumber", "docling"):
+    if pdf_converter_name not in ALLOWED_PDF_CONVERTERS:
         raise ValueError(
             f"Unknown pdf_converter {pdf_converter_name!r}; "
-            f"expected 'pdfplumber' or 'docling'."
+            f"expected one of {', '.join(ALLOWED_PDF_CONVERTERS)}."
         )
     html_converter_name = (
         html_converter or config.get("html_converter", DEFAULT_HTML_CONVERTER)
     ).lower()
-    if html_converter_name not in ("docling", "sec2md"):
+    if html_converter_name not in ALLOWED_HTML_CONVERTERS:
         raise ValueError(
             f"Unknown html_converter {html_converter_name!r}; "
-            f"expected 'docling' or 'sec2md'."
+            f"expected one of {', '.join(ALLOWED_HTML_CONVERTERS)}."
         )
 
     required_models = resolve._required_hf_models(
@@ -192,9 +196,11 @@ def main(
         archive_root=archive_root,
         timings=timings,
     )
-    temperature = float(config.get("temperature", 0))
+    temperature = float(config.get("temperature", DEFAULT_TEMPERATURE))
     reasoning_effort = config.get("reasoning_effort")
-    max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
+    max_summarize_tokens = int(
+        config.get("max_summarize_tokens", DEFAULT_MAX_SUMMARIZE_TOKENS)
+    )
     summaries_enabled = llm_provider is not None and bool(llm_model)
 
     conn = open_db(project_name)

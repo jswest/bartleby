@@ -8,16 +8,18 @@ from bartleby.config import config_path, load_config, save_config
 from bartleby.lib.consts import (
     ALLOWED_HTML_CONVERTERS,
     ALLOWED_PDF_CONVERTERS,
+    ALLOWED_PROVIDERS,
     DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
+    DEFAULT_MAX_SUMMARIZE_TOKENS,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_SUMMARIZE_WORKERS,
+    DEFAULT_TEMPERATURE,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
-from bartleby.providers import ALLOWED_PROVIDERS
 
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
 # Unified reasoning-effort enum mapped per-provider (OpenAI reasoning_effort,
@@ -32,17 +34,8 @@ PROVIDER_DEFAULT_MODEL = {
     "wsjpt": "fast",
 }
 
-VISION_PROVIDER_DEFAULT_MODEL = {
-    "anthropic": "claude-haiku-4-5",
-    "openai": "gpt-5-mini",
-    "ollama": "qwen3-vl:30b",
-    "wsjpt": "fast",
-}
-
 DEFAULT_SUMMARY_DEPTH = "one-shot"
-DEFAULT_TEMPERATURE = 0.0
 DEFAULT_REASONING_EFFORT = "low"
-DEFAULT_MAX_SUMMARIZE_TOKENS = 50_000
 DEFAULT_MAX_READ_TOKENS = 50_000
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
@@ -60,27 +53,30 @@ def _help(text: str) -> None:
         console.print(f"  {line}", style="dim")
 
 
-def _prompt_provider(existing: dict, *, help_text: str,
-                     label: str = "LLM provider",
-                     key: str = "provider") -> str:
-    default_provider = existing.get(key, "anthropic")
-    if default_provider not in ALLOWED_PROVIDERS:
-        default_provider = "anthropic"
-    choices = " / ".join(ALLOWED_PROVIDERS)
+def _prompt_choice(label: str, choices: list[str], existing_value: str | None,
+                   default: str, *, help_text: str, invalid_noun: str) -> str:
+    """Prompt for a value from a fixed allowlist, looping until it's valid.
+
+    The effective default is the existing config value when it's still in the
+    allowlist, else the caller-supplied canonical default.
+    """
+    effective_default = existing_value if existing_value in choices else default
+    rendered = " / ".join(choices)
     _help(help_text)
     while True:
-        provider = Prompt.ask(
-            f"{label} ({choices})", default=default_provider
+        value = Prompt.ask(
+            f"{label} ({rendered})", default=effective_default
         ).lower()
-        if provider in ALLOWED_PROVIDERS:
-            return provider
-        console.print(f"[red]Invalid provider. Choose from: {choices}[/red]")
+        if value in choices:
+            return value
+        console.print(
+            f"[red]Invalid {invalid_noun}. Choose from: {rendered}[/red]"
+        )
 
 
 def _prompt_model(provider: str, existing: dict,
-                  *, help_text: str, key: str = "model",
-                  defaults: dict[str, str] = PROVIDER_DEFAULT_MODEL) -> str:
-    default_model = existing.get(key) or defaults[provider]
+                  *, help_text: str, key: str = "model") -> str:
+    default_model = existing.get(key) or PROVIDER_DEFAULT_MODEL[provider]
     _help(help_text)
     return Prompt.ask("Model name", default=default_model)
 
@@ -103,49 +99,6 @@ def _prompt_api_key(provider: str, existing: dict, *, help_text: str | None = No
     return entered or None
 
 
-def _prompt_pdf_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("pdf_converter", DEFAULT_PDF_CONVERTER)
-    if default not in ALLOWED_PDF_CONVERTERS:
-        default = DEFAULT_PDF_CONVERTER
-    choices = " / ".join(ALLOWED_PDF_CONVERTERS)
-    _help(help_text)
-    while True:
-        b = Prompt.ask(
-            f"PDF converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_PDF_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_html_converter(existing: dict, *, help_text: str) -> str:
-    default = existing.get("html_converter", DEFAULT_HTML_CONVERTER)
-    if default not in ALLOWED_HTML_CONVERTERS:
-        default = DEFAULT_HTML_CONVERTER
-    choices = " / ".join(ALLOWED_HTML_CONVERTERS)
-    _help(help_text)
-    while True:
-        b = Prompt.ask(
-            f"HTML converter ({choices})", default=default
-        ).lower()
-        if b in ALLOWED_HTML_CONVERTERS:
-            return b
-        console.print(f"[red]Invalid converter. Choose from: {choices}[/red]")
-
-
-def _prompt_summary_depth(existing: dict, *, help_text: str) -> str:
-    default = existing.get("summary_depth", DEFAULT_SUMMARY_DEPTH)
-    choices = " / ".join(ALLOWED_SUMMARY_DEPTHS)
-    _help(help_text)
-    while True:
-        depth = Prompt.ask(
-            f"Summary depth ({choices})", default=default
-        ).lower()
-        if depth in ALLOWED_SUMMARY_DEPTHS:
-            return depth
-        console.print(f"[red]Invalid summary depth. Choose from: {choices}[/red]")
-
-
 def _prompt_temperature(existing: dict, *, help_text: str) -> float:
     default = float(existing.get("temperature", DEFAULT_TEMPERATURE))
     _help(help_text)
@@ -154,19 +107,6 @@ def _prompt_temperature(existing: dict, *, help_text: str) -> float:
         if 0 <= t <= 1:
             return t
         console.print("[red]Temperature must be between 0 and 1[/red]")
-
-
-def _prompt_reasoning_effort(existing: dict, *, help_text: str) -> str:
-    default = existing.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
-    choices = " / ".join(ALLOWED_REASONING_EFFORTS)
-    _help(help_text)
-    while True:
-        effort = Prompt.ask(
-            f"Reasoning effort ({choices})", default=default
-        ).lower()
-        if effort in ALLOWED_REASONING_EFFORTS:
-            return effort
-        console.print(f"[red]Invalid effort. Choose from: {choices}[/red]")
 
 
 def _prompt_ollama_url(existing: dict) -> str:
@@ -226,8 +166,10 @@ def main():
     )
 
     if use_llm:
-        provider = _prompt_provider(
-            existing,
+        provider = _prompt_choice(
+            "LLM provider", ALLOWED_PROVIDERS,
+            existing.get("provider"), "anthropic",
+            invalid_noun="provider",
             help_text="The service that runs your summarization model.",
         )
         config["provider"] = provider
@@ -248,8 +190,10 @@ def main():
             config["ollama_base_url"] = _prompt_ollama_url(existing)
 
         console.print("\n[bold]Summarization[/bold]")
-        depth = _prompt_summary_depth(
-            existing,
+        depth = _prompt_choice(
+            "Summary depth", ALLOWED_SUMMARY_DEPTHS,
+            existing.get("summary_depth"), DEFAULT_SUMMARY_DEPTH,
+            invalid_noun="summary depth",
             help_text="none = skip summaries; one-shot = one summary per "
             "document.\nSummaries are indexed for search/scan and shown in listings.",
         )
@@ -260,8 +204,10 @@ def main():
                 help_text="0 = deterministic, repeatable summaries; higher = "
                 "more varied wording.\nLeave at 0 unless summaries feel too rigid.",
             )
-            config["reasoning_effort"] = _prompt_reasoning_effort(
-                existing,
+            config["reasoning_effort"] = _prompt_choice(
+                "Reasoning effort", ALLOWED_REASONING_EFFORTS,
+                existing.get("reasoning_effort"), DEFAULT_REASONING_EFFORT,
+                invalid_noun="effort",
                 help_text="How hard the model reasons before summarizing. Lower = "
                 "fewer billed reasoning tokens and faster, which is plenty for "
                 "summaries.\nApplies to OpenAI (gpt-5) and effort-capable Anthropic "
@@ -300,13 +246,17 @@ def main():
         config["summary_depth"] = "none"
 
     console.print("\n[bold]Converters[/bold]")
-    config["pdf_converter"] = _prompt_pdf_converter(
-        existing,
+    config["pdf_converter"] = _prompt_choice(
+        "PDF converter", ALLOWED_PDF_CONVERTERS,
+        existing.get("pdf_converter"), DEFAULT_PDF_CONVERTER,
+        invalid_noun="converter",
         help_text="pdfplumber = fast text extraction; docling = slower but "
         "layout-aware (tables, columns, reading order).",
     )
-    config["html_converter"] = _prompt_html_converter(
-        existing,
+    config["html_converter"] = _prompt_choice(
+        "HTML converter", ALLOWED_HTML_CONVERTERS,
+        existing.get("html_converter"), DEFAULT_HTML_CONVERTER,
+        invalid_noun="converter",
         help_text="docling handles general HTML/Markdown; sec2md is specialized "
         "for iXBRL EDGAR filings (preserves SEC tables/headings, others stay on "
         "docling).",
@@ -332,14 +282,16 @@ def main():
         default=bool(existing.get("vision_provider")),
     )
     if use_vision:
-        vprovider = _prompt_provider(
-            existing, label="Vision provider", key="vision_provider",
+        vprovider = _prompt_choice(
+            "Vision provider", ALLOWED_PROVIDERS,
+            existing.get("vision_provider"), "anthropic",
+            invalid_noun="provider",
             help_text="The service that runs your vision (image) model.",
         )
         config["vision_provider"] = vprovider
         config["vision_model"] = _prompt_model(
             vprovider, existing,
-            key="vision_model", defaults=VISION_PROVIDER_DEFAULT_MODEL,
+            key="vision_model",
             help_text="The vision model used to caption/OCR images. The default "
             "is a fast, low-cost choice for this provider.",
         )
