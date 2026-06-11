@@ -573,29 +573,20 @@ class CaptureSpec:
             name_by_index.get(i, f"g{i}") for i in range(1, pattern.groups + 1)
         ]
 
-    def capture(self, match: re.Match) -> dict[str, str | None]:
-        """Project one ``re.Match`` to ``{column: captured_value_or_None}``.
-
-        A group that didn't participate (``match.group(i)`` is ``None``) maps to
-        ``None`` for its column — the row is kept, the cell is null.
-        """
-        return {
-            col: match.group(i)
-            for i, col in enumerate(self.columns, start=1)
-        }
-
     def extract_first(self, text: str) -> dict[str, str | None]:
         """Columns from the **first** match in ``text``, or all-``None`` if none.
 
         The per-chunk ``--extract`` semantics: one row's worth of columns. A
         non-matching pattern yields a cell of ``None`` per column without
         dropping the row, so the caller can union several specs' columns onto one
-        chunk row.
+        chunk row. Within a match, a group that didn't participate
+        (``match.group(i)`` is ``None``) is likewise a null cell.
         """
         match = self.pattern.search(text)
-        if match is None:
-            return {col: None for col in self.columns}
-        return self.capture(match)
+        return {
+            col: match.group(i) if match else None
+            for i, col in enumerate(self.columns, start=1)
+        }
 
 
 def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
