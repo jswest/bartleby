@@ -557,21 +557,6 @@ _VALUE_GROUP = "value"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def validate_value_type(raw: str | None) -> str | None:
-    """Return a validated ``value_type`` (or None for a boolean tag).
-
-    Raises ``INVALID_VALUE_TYPE`` on anything outside :data:`VALUE_TYPES`.
-    """
-    if raw is None:
-        return None
-    if raw not in VALUE_TYPES:
-        raise SkillError(
-            "INVALID_VALUE_TYPE",
-            f"--value-type must be one of {', '.join(VALUE_TYPES)}; got {raw!r}.",
-        )
-    return raw
-
-
 def compile_pattern(pattern: str):
     """Compile a value-tag pattern with re2, requiring a ``(?P<value>…)`` group.
 

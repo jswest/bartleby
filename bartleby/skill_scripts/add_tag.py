@@ -41,7 +41,6 @@ from bartleby.skill_scripts._tags import (
     compile_pattern,
     find_similar_tag,
     normalize_name,
-    validate_value_type,
 )
 
 
@@ -76,10 +75,12 @@ def work(*, conn, args, session_id) -> dict:
             "Tag name must contain at least one alphanumeric character.",
         )
 
-    # Value-tag: --value-type and --pattern are all-or-nothing. Validate the
-    # type and compile the pattern (re2, must expose (?P<value>…)) before any
-    # write so a malformed value-tag never lands.
-    value_type = validate_value_type(args.value_type)
+    # Value-tag: --value-type and --pattern are all-or-nothing. argparse's
+    # ``choices=list(VALUE_TYPES)`` already constrains args.value_type to None
+    # or a valid type before work() runs, so we read it directly and only need
+    # to compile the pattern (re2, must expose (?P<value>…)) before any write
+    # so a malformed value-tag never lands.
+    value_type = args.value_type
     pattern = args.pattern
     if (value_type is None) != (pattern is None):
         raise SkillError(
