@@ -323,6 +323,60 @@ def test_scan_heading_like_count_by_document(heading_corpus, capsys):
     assert out["filters"]["heading_like"] == ["2023 Q%"]
 
 
+# ---------- text-only MATCH: heading-only terms are not body hits (#464) ----------
+
+
+@pytest.fixture
+def heading_only_corpus(project_env):  # noqa: F811
+    """One doc whose chunk carries a term (``Appendix``) only in its
+    ``section_heading`` — never in the body text. Proves scan's MATCH is
+    confined to the text column, while --heading-like can still reach it."""
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("hx", "memo.txt", "/tmp/memo.txt", 1, 100),
+        )
+        doc = conn.last_insert_rowid()
+        ids = insert_document_chunks(conn, doc, [
+            ChunkInput(text="The quarterly numbers are attached below.",
+                       embedding=_emb(0.0), chunk_index=0,
+                       section_heading="Appendix Tables", page_number=1),
+        ])
+    finally:
+        conn.close()
+    return {"project": project_env, "doc": doc, "chunk_id": ids[0]}
+
+
+def test_scan_heading_only_term_yields_no_match(heading_only_corpus, capsys):
+    """``Appendix`` lives only in the section_heading, so the text-qualified
+    MATCH returns nothing — the snippet would never contain the term."""
+    _run(heading_only_corpus, ["Appendix", "--match-terms"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []
+
+
+def test_scan_body_term_still_matches(heading_only_corpus, capsys):
+    """A term in the body text matches as before — text-only didn't break grep."""
+    _run(heading_only_corpus, ["quarterly", "--match-terms"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert [m["chunk_id"] for m in out["matches"]] == [heading_only_corpus["chunk_id"]]
+
+
+def test_scan_heading_like_reaches_heading_only_term(heading_only_corpus, capsys):
+    """Deliberate heading recall stays available: --heading-like surfaces the
+    chunk a body-text MATCH would (correctly) miss."""
+    _run(heading_only_corpus, ["quarterly", "--match-terms",
+                               "--heading-like", "Appendix%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert [m["chunk_id"] for m in out["matches"]] == [heading_only_corpus["chunk_id"]]
+
+
 def test_scan_unfiltered_omits_filters_object(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)

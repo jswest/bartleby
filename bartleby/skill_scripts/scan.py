@@ -15,6 +15,12 @@ Scope: documents only. Summaries, findings, and image chunks are never
 returned.
 
 Matching:
+    The FTS query is confined to the chunk **body text** (the MATCH is
+    column-qualified ``{text} : (...)``), so a term that appears only in a
+    chunk's ``section_heading`` is *not* a match — every returned snippet
+    actually contains the query. To filter on headings deliberately, use
+    ``--heading-like`` (a separate ``section_heading LIKE`` predicate).
+
     Default is a literal **phrase** — the whole query must appear as a
     contiguous token sequence. Pass ``--match-terms`` to switch to a boolean
     AND of the individual tokens (each must appear somewhere in the chunk, in
@@ -203,7 +209,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
     apply_preview, comma_int_list, nonneg_int, parse_capture_regex,
-    positive_int, project_row,
+    positive_int, project_row, text_qualified_fts,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -542,8 +548,11 @@ def work(*, conn, args, session_id) -> dict:
     # documents (an empty tag / in-documents / date slice).
     no_match = not fts_query or (restrict is not None and not restrict)
 
+    # Confine MATCH to the body text (``{text} : (...)``) so a heading-only term
+    # never inflates grep-totals with a snippet that doesn't contain it.
+    # Deliberate heading recall stays available via --heading-like.
     where = "chunks_fts MATCH ? AND c.source_kind = 'document'"
-    params: list = [fts_query]
+    params: list = [text_qualified_fts(fts_query)]
     if restrict is not None:
         placeholders = ",".join("?" * len(restrict))
         where += f" AND c.source_id IN ({placeholders})"

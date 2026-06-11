@@ -400,6 +400,35 @@ def test_fts_query_quotes_each_token():
     assert search_script._fts_query("   ") == ""
 
 
+def test_fts_leg_skips_heading_only_term(seeded_project, capsys):
+    """#464: the FTS leg is column-qualified to the body text, so a term that
+    lives only in a chunk's section_heading ('Methods') returns no FTS hit,
+    while a real body term ('equity') still does."""
+    conn = open_db(seeded_project["project"])
+    try:
+        scope = {"document": None}
+        # 'Methods' is the heading of doc_a chunk 1; it never appears in any body.
+        assert search_script._fts_search(conn, "Methods", scope, 20) == []
+        # Positive control: 'equity' is in that chunk's body text.
+        hits = search_script._fts_search(conn, "equity", scope, 20)
+        assert hits, "expected a body-text FTS hit for 'equity'"
+    finally:
+        conn.close()
+
+
+def test_search_heading_only_term_no_fts_result(seeded_project, capsys):
+    """End-to-end: a heading-only full-text query surfaces no body chunk whose
+    text lacks the term (the keyword leg no longer injects heading hits)."""
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "Methods",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["modes"] == ["full-text"]
+    # Full-text-only + a heading-only term ⇒ the keyword leg yields nothing.
+    assert out["results"] == []
+
+
 def test_search_results_have_rank_and_normalized_score(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
