@@ -544,6 +544,85 @@ def project_row(
     return {field: full[field] for field in requested}
 
 
+class CaptureSpec:
+    """A compiled ``/regex/`` plus the column names its capture groups project to.
+
+    The shared regex-capture primitive behind ``scan --extract`` and
+    ``scan --count-by '/regex/'`` (which is extract-then-group-and-count over the
+    same spec). Column naming is fixed once at parse time: a **named** group
+    ``(?P<name>...)`` projects to a column ``name``; a **bare** group ``(...)``
+    projects to a positional column ``g1``, ``g2``, ... numbered over *all*
+    groups (named or not) in pattern order. So ``/(?P<bill>\\d+)-(\\w+)/`` yields
+    columns ``["bill", "g2"]``. The numbering follows ``re``'s group indices so a
+    positional name never collides with a different group's slot.
+
+    Deliberately **not** a query engine: a spec extracts captured substrings into
+    a tidy row of columns; it never filters, joins, or aggregates (that is the
+    caller's job — see ``scan``'s #48/#10 boundary).
+    """
+
+    __slots__ = ("pattern", "raw", "columns")
+
+    def __init__(self, pattern: re.Pattern, raw: str):
+        self.pattern = pattern
+        self.raw = raw
+        # group index -> column name. Named groups keep their name; bare groups
+        # get the positional ``g<N>`` over re's 1-based group indices.
+        name_by_index = {idx: name for name, idx in pattern.groupindex.items()}
+        self.columns = [
+            name_by_index.get(i, f"g{i}") for i in range(1, pattern.groups + 1)
+        ]
+
+    def extract_first(self, text: str) -> dict[str, str | None]:
+        """Columns from the **first** match in ``text``, or all-``None`` if none.
+
+        The per-chunk ``--extract`` semantics: one row's worth of columns. A
+        non-matching pattern yields a cell of ``None`` per column without
+        dropping the row, so the caller can union several specs' columns onto one
+        chunk row. Within a match, a group that didn't participate
+        (``match.group(i)`` is ``None``) is likewise a null cell.
+        """
+        match = self.pattern.search(text)
+        return {
+            col: match.group(i) if match else None
+            for i, col in enumerate(self.columns, start=1)
+        }
+
+
+def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
+    """Parse a ``/regex/`` capture pattern into a :class:`CaptureSpec`.
+
+    The single ``/.../``-delimited, compile, require-a-capture-group parse shared
+    by ``--extract`` and ``--count-by``. ``flag`` names the originating flag so
+    the error envelope is specific. Raises (as the JSON error envelope, never a
+    traceback):
+
+    - ``INVALID_CAPTURE_REGEX`` — not ``/.../``-delimited, or doesn't compile.
+    - ``CAPTURE_NO_GROUP`` — compiles but carries no capture group (nothing to
+      project into a column).
+    """
+    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
+        raise SkillError(
+            "INVALID_CAPTURE_REGEX",
+            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
+        )
+    pattern_src = value[1:-1]
+    try:
+        compiled = re.compile(pattern_src)
+    except re.error as exc:
+        raise SkillError(
+            "INVALID_CAPTURE_REGEX",
+            f"{flag} regex {value!r} does not compile: {exc}.",
+        )
+    if compiled.groups < 1:
+        raise SkillError(
+            "CAPTURE_NO_GROUP",
+            f"{flag} regex {value!r} has no capture group; wrap the value to "
+            "capture in parentheses, e.g. '/H\\.R\\.\\s*(\\d+)/'.",
+        )
+    return CaptureSpec(compiled, value)
+
+
 def comma_int_list(label: str) -> Callable[[str], list[int]]:
     """argparse ``type=`` factory for a comma-separated list of ints.
 

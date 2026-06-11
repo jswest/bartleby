@@ -530,14 +530,14 @@ def test_scan_count_by_regex_no_capture_group_errors(templated_corpus, capsys):
     with pytest.raises(SystemExit) as exc:
         _run(templated_corpus, [BILL_MARKER, "--count-by", r"/H\.R\.\s*\d+/"])
     assert exc.value.code == 1
-    assert json.loads(capsys.readouterr().out)["code"] == "COUNT_BY_NO_CAPTURE"
+    assert json.loads(capsys.readouterr().out)["code"] == "CAPTURE_NO_GROUP"
 
 
 def test_scan_count_by_regex_uncompilable_errors(templated_corpus, capsys):
     with pytest.raises(SystemExit) as exc:
         _run(templated_corpus, [BILL_MARKER, "--count-by", "/(/"])
     assert exc.value.code == 1
-    assert json.loads(capsys.readouterr().out)["code"] == "INVALID_COUNT_BY_REGEX"
+    assert json.loads(capsys.readouterr().out)["code"] == "INVALID_CAPTURE_REGEX"
 
 
 def test_scan_count_by_rejects_bare_non_document_value(templated_corpus, capsys):
@@ -553,6 +553,221 @@ def test_scan_count_by_regex_rejects_preview_and_brief(templated_corpus, capsys)
             _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE, *bad])
         assert exc.value.code == 1
         assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
+# ---------- --extract '/regex/' (capture-to-columns table, issue #420) ----------
+
+
+EXTRACT_MARKER = "Filing entry"
+# A named-group amount and a bare-group bill number on the same marker line.
+AMOUNT_RE = r"/amount:\s*\$(?P<amount>[\d,]+)/"
+BILL_NAMED_RE = r"/H\.R\.\s*(?P<bill>\d+)/"
+BILL_BARE_RE = r"/H\.R\.\s*(\d+)/"
+
+
+@pytest.fixture
+def extract_corpus(project_env):  # noqa: F811
+    """Filings sharing a marker, each carrying an amount; only some carry a bill.
+
+    d1 has both amount + bill, d2 has only an amount (bill regex won't match →
+    null cell), d3 carries a tag and its own amount. Lets us prove named +
+    positional columns, the kept-row-with-null behaviour, and scope composition.
+    """
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+
+        def _doc(file_hash, file_name):
+            cur.execute(
+                "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (file_hash, file_name, f"/tmp/{file_name}", 1, 50),
+            )
+            return conn.last_insert_rowid()
+
+        d1 = _doc("ea", "extract_a.txt")
+        d2 = _doc("eb", "extract_b.txt")
+        d3 = _doc("ec", "extract_c.txt")
+        c1 = insert_document_chunks(conn, d1, [
+            ChunkInput(text="Filing entry amount: $120,000 under H.R. 4346",
+                       embedding=_emb(0.0), chunk_index=0, page_number=1),
+        ])
+        c2 = insert_document_chunks(conn, d2, [
+            ChunkInput(text="Filing entry amount: $85,500 with no bill reference",
+                       embedding=_emb(1.0), chunk_index=0, page_number=1),
+        ])
+        c3 = insert_document_chunks(conn, d3, [
+            ChunkInput(text="Filing entry amount: $42,000 under H.R. 815",
+                       embedding=_emb(2.0), chunk_index=0, page_number=1),
+        ])
+
+        # Tag d3 so we can prove --tag composes with --extract.
+        cur.execute(
+            "INSERT INTO tags (name, description) VALUES (?, ?)",
+            ("senate", "senate filings"),
+        )
+        tag_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+            (d3, tag_id),
+        )
+    finally:
+        conn.close()
+    return {
+        "project": project_env, "d1": d1, "d2": d2, "d3": d3,
+        "c1": c1[0], "c2": c2[0], "c3": c3[0],
+    }
+
+
+def test_scan_extract_named_group_becomes_column(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["columns"] == ["amount"]
+    assert out["total"] == 3
+    by_doc = {r["document_id"]: r for r in out["rows"]}
+    assert by_doc[extract_corpus["d1"]]["amount"] == "120,000"
+    assert by_doc[extract_corpus["d2"]]["amount"] == "85,500"
+    # Every row carries the locator trio plus the capture column.
+    for r in out["rows"]:
+        assert set(r) == {"chunk_id", "document_id", "file_name", "amount"}
+
+
+def test_scan_extract_bare_group_gets_positional_name(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", BILL_BARE_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["columns"] == ["g1"]
+    by_doc = {r["document_id"]: r for r in out["rows"]}
+    assert by_doc[extract_corpus["d1"]]["g1"] == "4346"
+    assert by_doc[extract_corpus["d3"]]["g1"] == "815"
+
+
+def test_scan_extract_nonmatching_pattern_yields_null_keeps_row(extract_corpus, capsys):
+    # d2 has an amount but no bill: its bill column is null, the row survives.
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                          "--extract", BILL_NAMED_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["columns"] == ["amount", "bill"]
+    assert out["total"] == 3
+    by_doc = {r["document_id"]: r for r in out["rows"]}
+    assert by_doc[extract_corpus["d2"]]["amount"] == "85,500"
+    assert by_doc[extract_corpus["d2"]]["bill"] is None  # null, not dropped
+    assert by_doc[extract_corpus["d1"]]["bill"] == "4346"
+
+
+def test_scan_extract_column_collision_errors(extract_corpus, capsys):
+    # Two bare groups both want g1 → ambiguous, rejected with a clean envelope.
+    with pytest.raises(SystemExit) as exc:
+        _run(extract_corpus, [EXTRACT_MARKER, "--extract", BILL_BARE_RE,
+                              "--extract", r"/amount:\s*\$([\d,]+)/"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EXTRACT_COLUMN_COLLISION"
+    assert out["column"] == "g1"
+
+
+def test_scan_extract_composes_with_tag(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                          "--tag", "senate"])
+    out = json.loads(capsys.readouterr().out)
+    # Only d3 carries the tag.
+    assert out["total"] == 1
+    assert [r["document_id"] for r in out["rows"]] == [extract_corpus["d3"]]
+    assert out["rows"][0]["amount"] == "42,000"
+    assert out["filters"]["tags"] == ["senate"]
+
+
+def test_scan_extract_composes_with_file_like(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                          "--file-like", "extract_a%"])
+    out = json.loads(capsys.readouterr().out)
+    assert [r["document_id"] for r in out["rows"]] == [extract_corpus["d1"]]
+    assert out["rows"][0]["amount"] == "120,000"
+
+
+def test_scan_extract_composes_with_in_documents(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                          "--in-documents", f"{extract_corpus['d2']},{extract_corpus['d3']}"])
+    out = json.loads(capsys.readouterr().out)
+    got = sorted(r["document_id"] for r in out["rows"])
+    assert got == sorted([extract_corpus["d2"], extract_corpus["d3"]])
+
+
+def test_scan_extract_paginates_with_full_total(extract_corpus, capsys):
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE, "--limit", "1"])
+    p1 = json.loads(capsys.readouterr().out)
+    assert p1["total"] == 3          # honest total under pagination
+    assert len(p1["rows"]) == 1
+    assert p1["rows"][0]["document_id"] == extract_corpus["d1"]
+
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                          "--limit", "1", "--offset", "2"])
+    p3 = json.loads(capsys.readouterr().out)
+    assert p3["total"] == 3
+    assert [r["document_id"] for r in p3["rows"]] == [extract_corpus["d3"]]
+
+
+def test_scan_extract_no_match_is_empty_with_columns(extract_corpus, capsys):
+    _run(extract_corpus, ["phrase that appears nowhere", "--extract", AMOUNT_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["rows"] == []
+    assert out["columns"] == ["amount"]  # column set known even with no rows
+
+
+def test_scan_extract_excludes_summary_chunks(extract_corpus, capsys):
+    # scan is docs-only; an extract row is still a document chunk.
+    _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert all(isinstance(r["document_id"], int) for r in out["rows"])
+    assert {r["document_id"] for r in out["rows"]} <= {
+        extract_corpus["d1"], extract_corpus["d2"], extract_corpus["d3"],
+    }
+
+
+def test_scan_extract_invalid_regex_errors(extract_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(extract_corpus, [EXTRACT_MARKER, "--extract", "/(/"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "INVALID_CAPTURE_REGEX"
+
+
+def test_scan_extract_no_capture_group_errors(extract_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(extract_corpus, [EXTRACT_MARKER, "--extract", r"/H\.R\.\s*\d+/"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "CAPTURE_NO_GROUP"
+
+
+def test_scan_extract_rejects_count_by(extract_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
+                              "--count-by", "document"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
+def test_scan_extract_rejects_preview_brief_returning(extract_corpus, capsys):
+    for bad in (["--preview", "100"], ["--brief"], ["--returning", "chunk_id"]):
+        with pytest.raises(SystemExit) as exc:
+            _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE, *bad])
+        assert exc.value.code == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
+def test_scan_count_by_regex_still_works_through_shared_machinery(templated_corpus, capsys):
+    """--count-by '/regex/' is now extract-then-group-and-count over the same
+    CaptureSpec; the histogram contract is unchanged."""
+    _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["groups"] == [
+        {"value": "4346", "count": 3},
+        {"value": "815", "count": 1},
+    ]
+    # A named bucket group still buckets the same (column name is irrelevant to
+    # the histogram).
+    _run(templated_corpus, [BILL_MARKER, "--count-by", r"/H\.R\.\s*(?P<bill>\d+)/"])
+    named = json.loads(capsys.readouterr().out)
+    assert named["groups"] == out["groups"]
 
 
 # ---------- date scope (shared with list_documents / describe_corpus) ----------
