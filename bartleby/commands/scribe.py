@@ -295,18 +295,15 @@ def main(
             )
 
             # ---- Phase 2: caption every uncaptioned image, concurrently ------
-            # _caption_all drives the tally via on_progress (0,total then per
-            # image) and the lanes via on_lane (per worker thread); the phase
-            # adapts the tally contract itself and reveals the caption total the
-            # first time it hears one.
-            cap_phase = progress.phase("caption")
+            # _caption_all drives the phase directly: start() reveals the caption
+            # total, advance() ticks the tally per image, lane() updates a worker
+            # row.
             caption._caption_all(
                 writer, units,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_enabled=parse_config.vision_enabled,
                 caption_workers=caption_workers, timings=timings,
-                on_progress=cap_phase.on_progress,
-                on_lane=cap_phase.lane,
+                phase=progress.phase("caption"),
             )
             # A document is caption-incomplete if any image is still uncaptioned
             # (failed / capped / no provider — recomputed from the DB so a shared
@@ -333,15 +330,13 @@ def main(
             if summaries_enabled:
                 pending = writer.documents_needing_summary()
                 if pending:
-                    sum_phase = progress.phase("summarize")
                     owed, summarize_times = summary._summarize_all(
                         writer, pending,
                         llm_provider=llm_provider, llm_model=llm_model,
                         temperature=temperature,
                         max_summarize_tokens=max_summarize_tokens,
                         summarize_workers=summarize_workers, timings=timings,
-                        on_progress=sum_phase.on_progress,
-                        on_lane=sum_phase.lane,
+                        phase=progress.phase("summarize"),
                         reasoning_effort=reasoning_effort,
                     )
                     incomplete_count += owed
