@@ -238,12 +238,11 @@ def test_list_documents_in_documents_scopes_to_ids(seeded_project, capsys):
 
 
 def test_list_documents_unscoped_default_unchanged(seeded_project, capsys):
-    # Default (no --in-documents) still returns the whole corpus, no filters echo.
+    # Default (no --in-documents) still returns the whole corpus.
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
     assert out["total"] == 2
     assert {d["file_name"] for d in out["documents"]} == {"alpha.pdf", "beta.txt"}
-    assert "filters" not in out
 
 
 def test_list_documents_no_filter_omits_filters_echo(seeded_project, capsys):
