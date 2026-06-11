@@ -9,11 +9,13 @@ from bartleby.lib.consts import (
     ALLOWED_HTML_CONVERTERS,
     ALLOWED_PDF_CONVERTERS,
     ALLOWED_PROVIDERS,
+    ALLOWED_REASONING_EFFORTS,
     DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_MAX_SUMMARIZE_TOKENS,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_TEMPERATURE,
@@ -22,10 +24,6 @@ from bartleby.lib.consts import (
 )
 
 ALLOWED_SUMMARY_DEPTHS = ["none", "one-shot"]
-# Unified reasoning-effort enum mapped per-provider (OpenAI reasoning_effort,
-# Anthropic output_config.effort). Cheap by default — summarization is a
-# mechanical task where minimal/low reasoning is almost always enough.
-ALLOWED_REASONING_EFFORTS = ["minimal", "low", "medium", "high"]
 
 PROVIDER_DEFAULT_MODEL = {
     "anthropic": "claude-haiku-4-5",
@@ -35,7 +33,6 @@ PROVIDER_DEFAULT_MODEL = {
 }
 
 DEFAULT_SUMMARY_DEPTH = "one-shot"
-DEFAULT_REASONING_EFFORT = "low"
 DEFAULT_MAX_READ_TOKENS = 50_000
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
