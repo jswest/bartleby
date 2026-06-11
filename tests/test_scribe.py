@@ -20,6 +20,7 @@ from bartleby.ingest import parse
 from bartleby.ingest import summary
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
+from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS, DEFAULT_SUMMARIZE_WORKERS
 from bartleby.ingest.chunk import resolve_extension
 from bartleby.providers.base import DocumentSummary, VlmDescription
 
@@ -670,23 +671,32 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
         conn.close()
 
 
-def test_resolve_caption_workers_defaults_and_timings():
+def _caption_workers(config, *, timings):
+    """Call the merged resolver with the caption-stage parameters scribe uses."""
     from bartleby.ingest import resolve as scribe_module
-    from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS
 
+    return scribe_module._resolve_io_workers(
+        config,
+        key="caption_workers",
+        default=DEFAULT_CAPTION_WORKERS,
+        provider=config.get("vision_provider"),
+        verb="captions",
+        unit="captioning one image",
+        timings=timings,
+    )
+
+
+def test_resolve_caption_workers_defaults_and_timings():
     # Default when unset or zero; explicit value respected.
-    assert scribe_module._resolve_caption_workers(
-        {}, timings=False) == DEFAULT_CAPTION_WORKERS
-    assert scribe_module._resolve_caption_workers(
+    assert _caption_workers({}, timings=False) == DEFAULT_CAPTION_WORKERS
+    assert _caption_workers(
         {"caption_workers": 0}, timings=False) == DEFAULT_CAPTION_WORKERS
-    assert scribe_module._resolve_caption_workers(
-        {"caption_workers": 9}, timings=False) == 9
+    assert _caption_workers({"caption_workers": 9}, timings=False) == 9
     # A cloud vision provider keeps the configured/default count.
-    assert scribe_module._resolve_caption_workers(
+    assert _caption_workers(
         {"vision_provider": "anthropic"}, timings=False) == DEFAULT_CAPTION_WORKERS
     # --timings forces a sequential baseline regardless of config.
-    assert scribe_module._resolve_caption_workers(
-        {"caption_workers": 9}, timings=True) == 1
+    assert _caption_workers({"caption_workers": 9}, timings=True) == 1
 
 
 def test_resolve_caption_workers_clamps_ollama(monkeypatch):
@@ -696,11 +706,10 @@ def test_resolve_caption_workers_clamps_ollama(monkeypatch):
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
-    assert scribe_module._resolve_caption_workers(
-        {"vision_provider": "ollama"}, timings=False) == 1
+    assert _caption_workers({"vision_provider": "ollama"}, timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
-    assert scribe_module._resolve_caption_workers(
+    assert _caption_workers(
         {"vision_provider": "ollama", "caption_workers": 8}, timings=False) == 1
     assert any("caption_workers > 1 ignored" in w for w in warnings)
 
@@ -822,20 +831,32 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
         conn.close()
 
 
-def test_resolve_summarize_workers_defaults_and_timings():
+def _summarize_workers(config, *, effective_provider, timings):
+    """Call the merged resolver with the summarize-stage parameters scribe uses."""
     from bartleby.ingest import resolve as scribe_module
-    from bartleby.lib.consts import DEFAULT_SUMMARIZE_WORKERS
 
+    return scribe_module._resolve_io_workers(
+        config,
+        key="summarize_workers",
+        default=DEFAULT_SUMMARIZE_WORKERS,
+        provider=effective_provider,
+        verb="summarizes",
+        unit="summarizing one document",
+        timings=timings,
+    )
+
+
+def test_resolve_summarize_workers_defaults_and_timings():
     # Default when unset or zero; explicit value respected.
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {}, effective_provider="openai", timings=False) == DEFAULT_SUMMARIZE_WORKERS
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"summarize_workers": 0}, effective_provider="openai", timings=False
     ) == DEFAULT_SUMMARIZE_WORKERS
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"summarize_workers": 9}, effective_provider="openai", timings=False) == 9
     # --timings forces a sequential baseline regardless of config.
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"summarize_workers": 9}, effective_provider="openai", timings=True) == 1
 
 
@@ -846,27 +867,24 @@ def test_resolve_summarize_workers_clamps_ollama(monkeypatch):
     monkeypatch.setattr(scribe_module.console, "warn", warnings.append)
 
     # Ollama serializes (OLLAMA_NUM_PARALLEL=1): clamp to 1, silent at default.
-    assert scribe_module._resolve_summarize_workers(
-        {}, effective_provider="ollama", timings=False) == 1
+    assert _summarize_workers({}, effective_provider="ollama", timings=False) == 1
     assert warnings == []
     # An explicit count > 1 is ignored (still 1) and warns.
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"summarize_workers": 8}, effective_provider="ollama", timings=False) == 1
     assert any("summarize_workers > 1 ignored" in w for w in warnings)
 
 
 def test_resolve_summarize_workers_tracks_provider_override():
     """The clamp keys off the effective provider, not config['provider'] (#314)."""
-    from bartleby.ingest import resolve as scribe_module
-
     # --provider ollama over a cloud config clamps to 1 (the clamp must not be
     # bypassed just because config['provider'] is a cloud backend).
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"provider": "openai", "summarize_workers": 4},
         effective_provider="ollama", timings=False) == 1
     # --provider anthropic over an ollama config keeps the configured count
     # (no spurious clamp when the run isn't actually against Ollama).
-    assert scribe_module._resolve_summarize_workers(
+    assert _summarize_workers(
         {"provider": "ollama", "summarize_workers": 4},
         effective_provider="anthropic", timings=False) == 4
 
