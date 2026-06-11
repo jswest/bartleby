@@ -112,6 +112,17 @@ def test_summarize_passes_through_valid_authored_date():
     assert result.authored_date == "2024-03-15"
 
 
+def test_summarize_drops_malformed_authored_date_through_summarize():
+    # Exercises the normalize_authored_date call site via summarize() itself,
+    # not the helper directly: a malformed provider date must drop to None.
+    p = FakeProvider(return_authored_date="Q3 2024")
+    result = summarize(
+        "doc", provider=p, model="m", temperature=0.0,
+        max_summarize_tokens=100,
+    )
+    assert result.authored_date is None
+
+
 @pytest.mark.parametrize("raw", [
     None, "", "Q3 2024", "2024", "2024-03", "March 15, 2024",
     "2024/03/15", "  ", "2024-13-01", "2024-02-30",
