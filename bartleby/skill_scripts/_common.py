@@ -22,6 +22,22 @@ _CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
 _MALFORMED_MARKER = re.compile(r"\[(\d+)\]")
 
 
+def text_qualified_fts(fts_expr: str) -> str:
+    """Column-qualify an FTS5 MATCH expression to the ``text`` column.
+
+    ``chunks_fts`` indexes both ``text`` and ``section_heading``, so a bare
+    ``MATCH (<expr>)`` also fires on heading-only hits — a chunk whose snippet
+    never contains the term. Wrapping as ``{text} : (<expr>)`` confines matching
+    to the body text, keeping scan and search a strict text-grep. Deliberate
+    heading recall stays reachable via scan's ``--heading-like`` and search's
+    vector leg. Returns the expression unchanged when empty, so an empty token
+    set never becomes a malformed ``{text} : ()``.
+    """
+    if not fts_expr:
+        return fts_expr
+    return f"{{text}} : ({fts_expr})"
+
+
 def extract_citations(body: str) -> list[int]:
     """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
     seen: dict[int, None] = {}
@@ -472,6 +488,172 @@ def finding_chunk_and_citation_ids(
         )
     ]
     return chunk_ids, citation_ids
+
+
+def comma_field_list(value: str) -> list[str]:
+    """argparse ``type=`` for ``--returning``: a comma-separated field list.
+
+    Splits on commas, trims whitespace, drops empties, and preserves order
+    (deduped). Validation against the per-script whitelist is *not* done here —
+    argparse can't see the whitelist and a bad field deserves the JSON error
+    envelope (``UNKNOWN_RETURNING_FIELD``), not argparse's exit-2 dump. So this
+    only rejects a syntactically empty selector; :func:`project_row` does the
+    whitelist check at work() time.
+    """
+    out: list[str] = []
+    for piece in value.split(","):
+        piece = piece.strip()
+        if piece and piece not in out:
+            out.append(piece)
+    if not out:
+        raise argparse.ArgumentTypeError("at least one field required")
+    return out
+
+
+def add_returning_arg(parser: argparse.ArgumentParser, whitelist: list[str]) -> None:
+    """Add the shared ``--returning <field>,...`` projection flag.
+
+    ``whitelist`` is the script's selectable field set (in canonical order); it
+    appears in the help so ``--help`` names the valid fields. Omitting the flag
+    leaves the script's default/brief projection untouched — ``--returning`` is
+    purely additive. Resolution + validation happen in :func:`project_row`.
+    """
+    parser.add_argument(
+        "--returning",
+        type=comma_field_list, default=None, dest="returning", metavar="FIELD,...",
+        help=(
+            "Project each row to exactly these comma-separated fields, in the "
+            "order given. Overrides the default projection (and --brief). "
+            "Selectable fields: " + ", ".join(whitelist) + ". An unknown field "
+            "returns an UNKNOWN_RETURNING_FIELD error naming the valid set."
+        ),
+    )
+
+
+def validate_returning(requested: list[str] | None, whitelist: list[str]) -> None:
+    """Reject an unknown ``--returning`` field up front, independent of row count.
+
+    ``project_row`` validates as it projects, but a query matching zero rows
+    never reaches it — so a typo'd field would slip through as a silent empty
+    result instead of the ``UNKNOWN_RETURNING_FIELD`` envelope the docstrings and
+    SKILL.md promise unconditionally. Call this once at the top of ``work()``
+    (before any early empty-result return) against the whitelist that applies to
+    the current mode. No-op when ``requested`` is ``None``.
+    """
+    if requested is None:
+        return
+    unknown = [f for f in requested if f not in whitelist]
+    if unknown:
+        raise SkillError(
+            "UNKNOWN_RETURNING_FIELD",
+            f"--returning got unknown field(s) {unknown}. Valid fields for "
+            f"this script: {', '.join(whitelist)}.",
+            valid_fields=list(whitelist),
+        )
+
+
+def project_row(
+    full: dict, requested: list[str] | None, whitelist: list[str],
+) -> dict | None:
+    """Project a fully-built row dict down to the ``--returning`` selection.
+
+    ``full`` must carry every field in ``whitelist`` (the caller builds the
+    whole row, then this selects). Returns ``None`` when ``requested`` is
+    ``None`` — the signal that no ``--returning`` was passed, so the caller
+    keeps its own default/brief projection untouched (``--returning`` is purely
+    additive). Otherwise returns ``{field: full[field]}`` in the requested
+    order. ``chunk_id`` and ``document_id`` are in every script's whitelist by
+    construction, so an id is always selectable.
+
+    Raises ``UNKNOWN_RETURNING_FIELD`` (naming the valid set in
+    ``valid_fields``) if any requested field isn't whitelisted — the JSON error
+    envelope the agent gets back, never argparse's exit-2. ``work()`` should also
+    call :func:`validate_returning` up front so this fires even on a zero-row
+    query.
+    """
+    if requested is None:
+        return None
+    validate_returning(requested, whitelist)
+    return {field: full[field] for field in requested}
+
+
+class CaptureSpec:
+    """A compiled ``/regex/`` plus the column names its capture groups project to.
+
+    The shared regex-capture primitive behind ``scan --extract`` and
+    ``scan --count-by '/regex/'`` (which is extract-then-group-and-count over the
+    same spec). Column naming is fixed once at parse time: a **named** group
+    ``(?P<name>...)`` projects to a column ``name``; a **bare** group ``(...)``
+    projects to a positional column ``g1``, ``g2``, ... numbered over *all*
+    groups (named or not) in pattern order. So ``/(?P<bill>\\d+)-(\\w+)/`` yields
+    columns ``["bill", "g2"]``. The numbering follows ``re``'s group indices so a
+    positional name never collides with a different group's slot.
+
+    Deliberately **not** a query engine: a spec extracts captured substrings into
+    a tidy row of columns; it never filters, joins, or aggregates (that is the
+    caller's job — see ``scan``'s #48/#10 boundary).
+    """
+
+    __slots__ = ("pattern", "raw", "columns")
+
+    def __init__(self, pattern: re.Pattern, raw: str):
+        self.pattern = pattern
+        self.raw = raw
+        # group index -> column name. Named groups keep their name; bare groups
+        # get the positional ``g<N>`` over re's 1-based group indices.
+        name_by_index = {idx: name for name, idx in pattern.groupindex.items()}
+        self.columns = [
+            name_by_index.get(i, f"g{i}") for i in range(1, pattern.groups + 1)
+        ]
+
+    def extract_first(self, text: str) -> dict[str, str | None]:
+        """Columns from the **first** match in ``text``, or all-``None`` if none.
+
+        The per-chunk ``--extract`` semantics: one row's worth of columns. A
+        non-matching pattern yields a cell of ``None`` per column without
+        dropping the row, so the caller can union several specs' columns onto one
+        chunk row. Within a match, a group that didn't participate
+        (``match.group(i)`` is ``None``) is likewise a null cell.
+        """
+        match = self.pattern.search(text)
+        return {
+            col: match.group(i) if match else None
+            for i, col in enumerate(self.columns, start=1)
+        }
+
+
+def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
+    """Parse a ``/regex/`` capture pattern into a :class:`CaptureSpec`.
+
+    The single ``/.../``-delimited, compile, require-a-capture-group parse shared
+    by ``--extract`` and ``--count-by``. ``flag`` names the originating flag so
+    the error envelope is specific. Raises (as the JSON error envelope, never a
+    traceback):
+
+    - ``INVALID_CAPTURE_REGEX`` — not ``/.../``-delimited, or doesn't compile.
+    - ``CAPTURE_NO_GROUP`` — compiles but carries no capture group (nothing to
+      project into a column).
+    """
+    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
+        raise SkillError(
+            "INVALID_CAPTURE_REGEX",
+            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
+        )
+    pattern_src = value[1:-1]
+    try:
+        compiled = re.compile(pattern_src)
+    except re.error as exc:
+        raise SkillError(
+            "INVALID_CAPTURE_REGEX",
+            f"{flag} regex {value!r} does not compile: {exc}.",
+        )
+    if compiled.groups < 1:
+        raise SkillError(
+            "CAPTURE_NO_GROUP",
+            f"{flag} regex {value!r} has no capture group; wrap the value to "
+            "capture in parentheses, e.g. '/H\\.R\\.\\s*(\\d+)/'.",
+        )
+    return CaptureSpec(compiled, value)
 
 
 def comma_int_list(label: str) -> Callable[[str], list[int]]:

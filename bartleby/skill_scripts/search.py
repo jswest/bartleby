@@ -6,6 +6,11 @@ Pass any of ``--documents`` / ``--summaries`` / ``--findings`` / ``--images``
 to override the default set. Opt into neighbor chunks with ``--add-context N``
 (0..5) — each step roughly multiplies output size by (1 + 2N).
 
+The full-text leg confines its MATCH to the chunk **body text** (column-qualified
+``{text} : (...)``), so a term appearing only in a chunk's ``section_heading``
+does not surface through the keyword leg. Heading-driven recall is the job of the
+semantic (vector) leg, which embeds the chunk text and is unaffected.
+
 ``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
 underlying document carries any of the given tags. ``--file-like <pattern>``
 (SQL ``LIKE``, repeatable for OR) restricts to chunks whose document's
@@ -57,6 +62,20 @@ With ``--brief`` each hit is trimmed to a triage projection — ``chunk_id``,
 even here (it's locator-grade) so brief hits stay triageable by time without a
 re-lookup. The envelope is unchanged; ``--add-context`` is ignored under
 ``--brief``.
+
+``--returning <field>,...`` projects each hit to exactly the named fields, in
+the order given, overriding both the default and ``--brief`` (the envelope is
+untouched). Selectable fields: ``chunk_id``, ``document_id``, ``source_kind``,
+``source_id``, ``source_name``, ``file_name``, ``page_number``,
+``authored_date``, ``chunk_index``, ``section_heading``, ``content_type``,
+``text``, ``rank``, ``score``, ``normalized_score``, ``image_id``,
+``image_file_path``. ``document_id`` is the originating document for a
+document-kind chunk and ``null`` otherwise (summaries/images/findings have no
+single document anchor); the ``image_*`` fields are ``null`` on non-image hits.
+The context arrays are *not* field-selectable (opt-in nested structure shaped by
+``--add-context``, not a flat field) — use the full default projection for them.
+An unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error naming the valid
+set.
 """
 
 from __future__ import annotations
@@ -70,11 +89,27 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_file_like_arg, apply_preview, chunk_locations, comma_int_list,
-    memory_enabled, positive_int, source_names,
+    add_file_like_arg, add_returning_arg, apply_preview, chunk_locations,
+    comma_int_list, memory_enabled, positive_int, project_row, source_names,
+    text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
+
+# --returning whitelist: the flat top-level fields of a hit. chunk_id +
+# document_id lead so a citable id is always selectable. document_id is the
+# originating document for a document-kind chunk and null otherwise (summaries
+# span one doc but aren't it; images can span many; findings have none) —
+# honest-null, never faked. The context arrays (context_before/after) and the
+# image locators stay reachable via the full default projection but aren't
+# field-selectable here: context is opt-in nested structure shaped by
+# --add-context, not a flat field.
+RESULT_FIELDS = [
+    "chunk_id", "document_id", "source_kind", "source_id", "source_name",
+    "file_name", "page_number", "authored_date", "chunk_index",
+    "section_heading", "content_type", "text", "rank", "score",
+    "normalized_score", "image_id", "image_file_path",
+]
 
 RRF_K = 60
 DEFAULT_CONTEXT = 0
@@ -135,6 +170,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
+    add_returning_arg(p, RESULT_FIELDS)
     p.add_argument(
         "--brief",
         action="store_true",
@@ -259,6 +295,8 @@ def _fts_search(
     if not fts_query:
         return []
     scope_sql, scope_params = _scope_clause(scope)
+    # Confine the FTS leg to the body text (``{text} : (...)``) so heading-only
+    # hits never enter results; deliberate heading recall lives in the vector leg.
     rows = conn.cursor().execute(
         f"SELECT chunks_fts.rowid "
         f"FROM chunks_fts "
@@ -266,7 +304,7 @@ def _fts_search(
         f"WHERE chunks_fts MATCH ? AND {scope_sql} "
         f"ORDER BY chunks_fts.rank "
         f"LIMIT ?",
-        [fts_query, *scope_params, limit],
+        [text_qualified_fts(fts_query), *scope_params, limit],
     )
     return [row[0] for row in rows]
 
@@ -367,6 +405,9 @@ def _fetch_context(
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
+    # Reject a typo'd --returning field up front, so a zero-hit search still
+    # returns UNKNOWN_RETURNING_FIELD rather than a silent empty result.
+    validate_returning(args.returning, RESULT_FIELDS)
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
@@ -437,15 +478,46 @@ def work(*, conn, args, session_id) -> dict:
     results = []
     for rank, (chunk_id, score) in enumerate(scored, start=1):
         _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
+        # Resolve the display name once. An unresolvable pair (source row deleted
+        # by a concurrent session between chunk fetch and name resolution) is
+        # absent from ``names`` — degrade to "" rather than KeyError-aborting the
+        # whole search (issue #465; matches read_chunks' "absent pair" contract).
+        source_name = names.get((source_kind, source_id), "")
         loc = locations.get(
             chunk_id,
             {"file_name": None, "page_number": None, "authored_date": None},
         )
+        if args.returning is not None:
+            # The full flat row, built once so --returning can project from it.
+            # document_id is honest-null off document-kind chunks; image
+            # locators are null on non-image hits (same null-not-absent posture
+            # the brief/default shapes take for fields they drop).
+            is_image = source_kind == "image"
+            results.append(project_row({
+                "chunk_id": chunk_id,
+                "document_id": source_id if source_kind == "document" else None,
+                "source_kind": source_kind,
+                "source_id": source_id,
+                "source_name": source_name,
+                "file_name": loc["file_name"],
+                "page_number": loc["page_number"],
+                "authored_date": loc["authored_date"],
+                "chunk_index": chunk_index,
+                "section_heading": section_heading,
+                "content_type": content_type,
+                "text": text,
+                "rank": rank,
+                "score": score,
+                "normalized_score": score / top_score,
+                "image_id": source_id if is_image else None,
+                "image_file_path": image_paths.get(source_id, "") if is_image else None,
+            }, args.returning, RESULT_FIELDS))
+            continue
         if args.brief:
             results.append({
                 "chunk_id": chunk_id,
                 "source_kind": source_kind,
-                "source_name": names[(source_kind, source_id)],
+                "source_name": source_name,
                 "page_number": loc["page_number"],
                 "authored_date": loc["authored_date"],
                 "rank": rank,
@@ -457,7 +529,7 @@ def work(*, conn, args, session_id) -> dict:
             "chunk_id": chunk_id,
             "source_kind": source_kind,
             "source_id": source_id,
-            "source_name": names[(source_kind, source_id)],
+            "source_name": source_name,
             "file_name": loc["file_name"],
             "page_number": loc["page_number"],
             "authored_date": loc["authored_date"],

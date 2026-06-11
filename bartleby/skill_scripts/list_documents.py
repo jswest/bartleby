@@ -53,6 +53,18 @@ name to ``{"value": str|null, "chunk_id": int|null}`` for the document — its
 value chip. A document with no extracted value for the tag maps to null entries.
 ``tag_values`` is omitted (not empty) on rows when no value-tag is among the
 filters and on ``--brief`` rows.
+
+``--returning <field>,...`` projects each document to exactly the named fields,
+in the order given, overriding the brief/default/verbose tier (the envelope —
+``total`` / pagination / ``filters`` — is untouched). Selectable fields:
+``document_id``, ``id``, ``file_name``, ``title``, ``description``,
+``authored_date``, ``created_at``, ``has_summary``, ``image_count``,
+``page_count``, ``token_count``, ``chunk_count``, ``tag_values``.
+``document_id`` is an alias of the default row's ``id`` (same value, so a
+citable id is always selectable); ``--returning`` can reach the verbose-tier
+columns without ``--verbose`` and ``tag_values`` is ``null`` when no value-tag
+is filtered. An unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error
+naming the valid set.
 """
 
 from __future__ import annotations
@@ -61,9 +73,22 @@ import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, add_file_like_arg, comma_int_list, nonneg_int,
-    pagination_hint, positive_int,
+    add_date_filter_args, add_file_like_arg, add_returning_arg, comma_int_list,
+    nonneg_int, pagination_hint, positive_int, project_row, validate_returning,
 )
+
+
+# --returning whitelist. document_id leads so the citable id is always
+# selectable (it's an alias of the default row's "id" — both carry the same
+# value; "id" stays selectable too so the default contract's own field name
+# works). The set is the union of the brief/default/verbose tiers plus the
+# value-tag chip. tag_values is null off a row when no value-tag is filtered
+# (same honest-null posture as the default, which omits it entirely).
+DOCUMENT_FIELDS = [
+    "document_id", "id", "file_name", "title", "description", "authored_date",
+    "created_at", "has_summary", "image_count", "page_count", "token_count",
+    "chunk_count", "tag_values",
+]
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -107,6 +132,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "newest-first by authored_date, undated last."
         ),
     )
+    add_returning_arg(p, DOCUMENT_FIELDS)
     return p.parse_args(argv)
 
 
@@ -156,6 +182,9 @@ def _value_tag_values(conn, tag_names, doc_ids):
 def work(*, conn, args, session_id) -> dict:
     from bartleby.skill_scripts._tags import resolve_scope
 
+    # Reject a typo'd --returning field up front, so a zero-document filter still
+    # returns UNKNOWN_RETURNING_FIELD rather than a silent empty result.
+    validate_returning(args.returning, DOCUMENT_FIELDS)
     cur = conn.cursor()
     scope = resolve_scope(
         conn,
@@ -203,6 +232,33 @@ def work(*, conn, args, session_id) -> dict:
         doc_id, file_name, page_count, token_count, created_at,
         title, description, authored_date, has_summary, chunk_count, image_count,
     ) in rows:
+        if args.returning is not None:
+            # The full whitelisted row, built once. tag_values is the doc's
+            # value chip when a value-tag is filtered, else null.
+            tag_values = None
+            if value_tag_values is not None:
+                tag_values = {
+                    name: value_tag_values[name].get(
+                        doc_id, {"value": None, "chunk_id": None}
+                    )
+                    for name in value_tag_values
+                }
+            documents.append(project_row({
+                "document_id": doc_id,
+                "id": doc_id,
+                "file_name": file_name,
+                "title": title,
+                "description": description,
+                "authored_date": authored_date,
+                "created_at": created_at,
+                "has_summary": bool(has_summary),
+                "image_count": image_count,
+                "page_count": page_count,
+                "token_count": token_count,
+                "chunk_count": chunk_count,
+                "tag_values": tag_values,
+            }, args.returning, DOCUMENT_FIELDS))
+            continue
         if args.brief:
             documents.append({"id": doc_id, "file_name": file_name, "title": title})
             continue

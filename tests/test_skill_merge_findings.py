@@ -305,6 +305,131 @@ def test_merge_rejects_citation_to_involved_finding_chunk(
         conn.close()
 
 
+def test_merge_rejects_malformed_citation(seeded_project, tmp_path, capsys):
+    """A merged body with bare ``[N]`` markers (missing the caret) is refused
+    upfront via load_finding_body's MALFORMED_CITATION guard; nothing mutates."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    target = _save(project, tmp_path, capsys, name="t", title="Target", cite=chunks[0])
+    src = _save(project, tmp_path, capsys, name="s", title="Source", cite=chunks[1])
+
+    merged_file = tmp_path / "m.md"
+    merged_file.write_text(
+        f"Real[^{chunks[0]}] but typoed[3] and again[42].", encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MALFORMED_CITATION"
+    assert out["malformed_markers"] == ["[3]", "[42]"]
+
+    # Both findings survive — the merge aborted before any deletion.
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
+            (target, src),
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_merge_rejects_unknown_citation(seeded_project, tmp_path, capsys):
+    """A merged body citing a chunk_id that doesn't exist is refused with
+    UNKNOWN_CITATIONS naming the offending id."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    target = _save(project, tmp_path, capsys, name="t", title="Target", cite=chunks[0])
+    src = _save(project, tmp_path, capsys, name="s", title="Source", cite=chunks[1])
+
+    merged_file = tmp_path / "m.md"
+    merged_file.write_text(f"Real[^{chunks[0]}] plus garbage[^999999].",
+                           encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_CITATIONS"
+    assert out["unknown_chunk_ids"] == [999999]
+
+
+def test_merge_rejects_empty_body(seeded_project, tmp_path, capsys):
+    """A whitespace-only body file is refused via load_finding_body's EMPTY_BODY
+    guard; nothing mutates."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    target = _save(project, tmp_path, capsys, name="t", title="Target", cite=chunks[0])
+    src = _save(project, tmp_path, capsys, name="s", title="Source", cite=chunks[1])
+
+    merged_file = tmp_path / "empty.md"
+    merged_file.write_text("   \n\n  ", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        merge_findings.main([
+            "--project", project,
+            "--from", str(src),
+            "--into", str(target),
+            "--body-file", str(merged_file),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_BODY"
+
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id IN (?, ?)",
+            (target, src),
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_merge_dedups_repeated_from_ids(seeded_project, tmp_path, capsys):
+    """A source id repeated in --from is deduped (first-appearance order): it is
+    folded in once and reported once in merged_from, not twice."""
+    project = seeded_project["project"]
+    chunks = _doc_chunk_ids(project, seeded_project["doc_a"])
+    c0, c1 = chunks[0], chunks[1]
+
+    target = _save(project, tmp_path, capsys, name="t", title="Keep", cite=c0)
+    src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
+
+    merged_file = tmp_path / "merged.md"
+    merged_file.write_text(f"# C\n\nTogether[^{c0}][^{c1}].", encoding="utf-8")
+
+    merge_findings.main([
+        "--project", project,
+        "--from", f"{src},{src}",
+        "--into", str(target),
+        "--body-file", str(merged_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["merged_from"] == [src]  # deduped, not [src, src]
+
+    # The source is folded in exactly once and gone.
+    conn = open_db(project)
+    try:
+        assert conn.cursor().execute(
+            "SELECT COUNT(*) FROM findings WHERE finding_id = ?", (src,),
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, capsys):
     """A memory-off session cannot consume a foreign session's finding, and the
     gate fires before any deletion — both findings survive."""

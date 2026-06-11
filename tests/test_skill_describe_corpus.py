@@ -7,7 +7,9 @@ import json
 from bartleby.db.connection import open_db
 from bartleby.skill_scripts import describe_corpus
 from tests._skill_fixtures import (  # noqa: F401
+    mock_embed,
     project_env,
+    seed_finding,
     seed_image,
     seeded_project,
 )
@@ -67,6 +69,42 @@ def test_describe_corpus_happy_path(seeded_project, capsys):
         "title": "Alpha", "token_count": 1000,
     }
     assert out["largest_documents"][1]["title"] is None  # beta has no summary
+
+
+def test_describe_corpus_excludes_summary_and_finding_chunks(seeded_project, capsys):
+    """chunk_count and content_mix count only document chunks. Adding more
+    summary chunks and a finding chunk leaves both aggregates at the baseline —
+    findings/summaries are polymorphic chunks but never corpus content."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        # Another summary, this one on beta, with its own chunk.
+        from bartleby.db.chunks import ChunkInput, insert_summary_chunks
+        from tests._skill_fixtures import _emb
+        cur.execute(
+            "INSERT INTO summaries (document_id, title, description, text, model) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (seeded_project["doc_b"], "Beta", "desc", "summary body", "test"),
+        )
+        summary_b = conn.last_insert_rowid()
+        insert_summary_chunks(conn, summary_b, [
+            ChunkInput(text="beta summary chunk zero", embedding=_emb(4.0),
+                       chunk_index=0),
+        ])
+        # A prior-session finding with a body chunk.
+        cur.execute("INSERT INTO sessions (name) VALUES (?)", ("prior",))
+        session_id = conn.last_insert_rowid()
+        seed_finding(conn, session_id, title="Prior finding",
+                     body="A finding note about the corpus.")
+    finally:
+        conn.close()
+
+    out = _run(project, capsys)
+    # Unchanged from test_describe_corpus_happy_path's baseline.
+    assert out["chunk_count"] == 6
+    mix = {row["content_type"]: row["chunk_count"] for row in out["content_mix"]}
+    assert mix == {"text": 4, None: 2}
 
 
 def test_describe_corpus_enriched(seeded_project, capsys):
@@ -222,6 +260,30 @@ def test_describe_corpus_date_bound_reports_excluded_nulls(seeded_project, capsy
     # beta is undated → dropped by the bound, surfaced honestly.
     assert out["filters"]["excluded_null_dated"] == 1
     assert out["filters"]["authored_after"] == "2024-01-01"
+
+
+def test_describe_corpus_date_bound_include_nulls_keeps_undated(seeded_project, capsys):
+    """--include-nulls keeps undated documents under a date bound: beta rides
+    along, both docs count, and nothing is reported as excluded."""
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET authored_date = '2024-03-01' WHERE document_id = ?",
+            (seeded_project["doc_a"],),
+        )
+    finally:
+        conn.close()
+
+    out = _run(project, capsys,
+               extra=["--authored-after", "2024-01-01", "--include-nulls"])
+    assert out["document_count"] == 2   # dated alpha + undated beta both survive
+    assert out["authored_date"] == {
+        "min": "2024-03-01", "max": "2024-03-01",
+        "dated_document_count": 1, "undated_document_count": 1,
+    }
+    assert out["filters"]["include_nulls"] is True
+    assert out["filters"]["excluded_null_dated"] == 0
 
 
 def test_describe_corpus_scoped_content_mix_reaches_images(seeded_project, capsys):

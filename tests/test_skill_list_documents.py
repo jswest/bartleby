@@ -380,3 +380,87 @@ def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):
     assert out["documents"] == []
     assert out["total"] == 0
     assert out["filters"]["excluded_null_dated"] == 1
+
+
+# ---------- --returning projection (issue #419) ----------
+
+
+def test_list_documents_returning_projects_exact_fields(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--returning", "document_id,file_name,title",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 2  # envelope unchanged
+    for d in out["documents"]:
+        assert list(d.keys()) == ["document_id", "file_name", "title"]
+    by_id = {d["document_id"]: d for d in out["documents"]}
+    assert by_id[seeded_project["doc_a"]]["file_name"] == "alpha.pdf"
+
+
+def test_list_documents_returning_document_id_aliases_id(seeded_project, capsys):
+    """document_id and id are both selectable and carry the same value."""
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--returning", "id,document_id",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    for d in out["documents"]:
+        assert d["id"] == d["document_id"]
+
+
+def test_list_documents_returning_overrides_brief(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--returning", "document_id", "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    for d in out["documents"]:
+        assert set(d) == {"document_id"}
+
+
+def test_list_documents_returning_can_pull_verbose_fields(seeded_project, capsys):
+    """--returning reaches verbose-tier columns without --verbose."""
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--returning", "document_id,chunk_count,token_count",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    by_id = {d["document_id"]: d for d in out["documents"]}
+    assert by_id[seeded_project["doc_a"]]["chunk_count"] == 4
+
+
+def test_list_documents_returning_unknown_field_errors(seeded_project, capsys):
+    code, captured = _run(capsys, [
+        "--project", seeded_project["project"],
+        "--returning", "document_id,bogus",
+    ])
+    assert code == 1
+    out = json.loads(captured.out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert "document_id" in out["valid_fields"]
+
+
+def test_list_documents_returning_unknown_field_errors_on_zero_documents(
+    seeded_project, capsys
+):
+    """A typo'd --returning must error even when the filter matches no documents,
+    rather than coming back as a silent empty list."""
+    code, captured = _run(capsys, [
+        "--project", seeded_project["project"],
+        "--file-like", "zzzznomatchzzz",
+        "--returning", "document_id,bogus",
+    ])
+    assert code == 1
+    out = json.loads(captured.out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
+def test_list_documents_default_projection_unchanged(seeded_project, capsys):
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    # No document_id leak into the default row.
+    assert set(out["documents"][0]) == {
+        "id", "file_name", "title", "description", "authored_date",
+        "created_at", "has_summary", "image_count",
+    }

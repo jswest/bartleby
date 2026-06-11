@@ -400,6 +400,35 @@ def test_fts_query_quotes_each_token():
     assert search_script._fts_query("   ") == ""
 
 
+def test_fts_leg_skips_heading_only_term(seeded_project, capsys):
+    """#464: the FTS leg is column-qualified to the body text, so a term that
+    lives only in a chunk's section_heading ('Methods') returns no FTS hit,
+    while a real body term ('equity') still does."""
+    conn = open_db(seeded_project["project"])
+    try:
+        scope = {"document": None}
+        # 'Methods' is the heading of doc_a chunk 1; it never appears in any body.
+        assert search_script._fts_search(conn, "Methods", scope, 20) == []
+        # Positive control: 'equity' is in that chunk's body text.
+        hits = search_script._fts_search(conn, "equity", scope, 20)
+        assert hits, "expected a body-text FTS hit for 'equity'"
+    finally:
+        conn.close()
+
+
+def test_search_heading_only_term_no_fts_result(seeded_project, capsys):
+    """End-to-end: a heading-only full-text query surfaces no body chunk whose
+    text lacks the term (the keyword leg no longer injects heading hits)."""
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "Methods",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["modes"] == ["full-text"]
+    # Full-text-only + a heading-only term ⇒ the keyword leg yields nothing.
+    assert out["results"] == []
+
+
 def test_search_results_have_rank_and_normalized_score(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
@@ -738,3 +767,120 @@ def test_search_image_source_name_notes_multiple_docs(seeded_project, capsys):
     name = image_hits[0]["source_name"]
     assert "image in alpha.pdf" in name
     assert "+1 other docs" in name
+
+
+# ---------- --returning projection (issue #419) ----------
+
+
+def test_search_returning_projects_exact_fields(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--returning", "chunk_id,document_id,rank",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"]
+    for r in out["results"]:
+        assert list(r.keys()) == ["chunk_id", "document_id", "rank"]
+
+
+def test_search_returning_document_id_is_honest_null_off_documents(seeded_project, capsys):
+    """document_id is the source_id for a document-kind chunk; null elsewhere."""
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--summaries", "--documents",
+        "--returning", "source_kind,source_id,document_id",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    by_kind = {}
+    for r in out["results"]:
+        by_kind.setdefault(r["source_kind"], []).append(r)
+    for r in by_kind.get("document", []):
+        assert r["document_id"] == r["source_id"]
+    for r in by_kind.get("summary", []):
+        assert r["document_id"] is None
+
+
+def test_search_returning_overrides_brief(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--returning", "chunk_id", "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    for r in out["results"]:
+        assert set(r) == {"chunk_id"}
+
+
+def test_search_returning_unknown_field_errors(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run([
+            "--project", seeded_project["project"], "--full-text", "alpha",
+            "--returning", "chunk_id,nope",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert "document_id" in out["valid_fields"]
+
+
+def test_search_returning_unknown_field_errors_on_zero_hits(seeded_project, capsys):
+    """A typo'd --returning must error even when the query matches nothing,
+    rather than coming back as a silent empty result set."""
+    with pytest.raises(SystemExit) as exc:
+        _run([
+            "--project", seeded_project["project"], "--full-text",
+            "zzzznomatchzzz", "--returning", "chunk_id,nope",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
+def test_search_completes_when_source_deleted_underneath(seeded_project, capsys):
+    """A chunk whose (source_kind, source_id) pair no longer resolves — its
+    source row deleted by a concurrent session between fetch and name resolution
+    — must degrade that one hit's source_name to "" rather than aborting the
+    whole search with KeyError → INTERNAL_ERROR (issue #465)."""
+    from bartleby.db.chunks import ChunkInput, insert_document_chunks
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, "
+            "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+            ("h-ghost", "ghost.txt", "/tmp/ghost.txt", None, 0),
+        )
+        ghost_doc = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_document_chunks(conn, ghost_doc, [
+            ChunkInput(text="ghostword chunk", embedding=emb, chunk_index=0),
+        ])
+        # Drop the document row out from under its still-indexed chunk, so the
+        # (document, ghost_doc) pair is absent from source_names' result.
+        cur.execute("DELETE FROM documents WHERE document_id = ?", (ghost_doc,))
+    finally:
+        conn.close()
+
+    # Default, brief, and --returning all read source_name — each must survive.
+    for extra in ([], ["--brief"], ["--returning", "chunk_id,source_name"]):
+        _run([
+            "--project", seeded_project["project"],
+            "--full-text", "ghostword", *extra,
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert "error" not in out, f"search aborted with {extra}: {out}"
+        hit = next(r for r in out["results"] if r["chunk_id"])
+        assert hit["source_name"] == ""
+
+
+def test_search_default_projection_unchanged_without_returning(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    hit = out["results"][0]
+    # The full default hit shape is preserved byte-for-byte (no document_id leak).
+    assert set(hit) == {
+        "chunk_id", "source_kind", "source_id", "source_name", "file_name",
+        "page_number", "authored_date", "chunk_index", "section_heading",
+        "content_type", "text", "rank", "score", "normalized_score",
+    }

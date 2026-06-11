@@ -1,5 +1,11 @@
 # `scan --count-by` groups by a regex capture — a fold primitive, deliberately not a query engine
 
+> **Superseded in part by #420 (v0.9.4):** when `scan --extract` began sharing
+> this capture machinery, the runaway-guard error codes were renamed
+> `INVALID_COUNT_BY_REGEX` → `INVALID_CAPTURE_REGEX` and `COUNT_BY_TIMEOUT` →
+> `CAPTURE_TIMEOUT` (now emitted by both `--count-by` and `--extract`). See
+> `GH-0420-scan-extract-capture-columns-0001.md`.
+
 Issue #248 (part of the v0.8.6 omnibus, #249). `scan` could find *which chunks
 match* and `--count-by document` could count *how many documents match*, but
 nothing sat between them: pulling the value out of a templated field and folding

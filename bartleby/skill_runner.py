@@ -14,7 +14,10 @@ and calls :func:`run`. The runner:
   session to attribute the call to, so it surfaces only in the error envelope;
   the DB connection is still closed on every path where it was opened.
 - Prints either the worker's dict result, or
-  ``{"error": ..., "code": ...}`` on failure, to stdout.
+  ``{"error": ..., "code": ...}`` on failure, to stdout. On failure the error
+  is *also* echoed as ``code: message`` to stderr (issue #421) so a stdout-only
+  consumer can distinguish a tool error from an empty result; the stdout JSON
+  envelope is unchanged.
 - Exits 0 on success and 1 on failure.
 
 A script that mutates the DB passes ``mutates=True`` to :func:`run`; the runner
@@ -84,6 +87,22 @@ def _print_json(payload: Any) -> None:
     sys.stdout.write("\n")
 
 
+def _emit_error(envelope: dict) -> None:
+    """Emit an error envelope on BOTH channels, then exit non-zero.
+
+    The stdout JSON envelope is the machine contract and stays byte-for-byte
+    unchanged. We *also* echo ``code: message`` to stderr (issue #421): today a
+    stdout-only consumer can't tell a tool error from an empty result, and an
+    error is prose — it belongs on stderr alongside the existing
+    progress/prose-to-stderr split. This is the single error-emission point so
+    the two channels never drift; individual scripts never write stderr
+    themselves.
+    """
+    _print_json(envelope)
+    sys.stderr.write(f"{envelope['code']}: {envelope['error']}\n")
+    sys.exit(1)
+
+
 def run(
     *,
     tool_name: str,
@@ -130,11 +149,10 @@ def run(
     except SystemExit as e:
         if not e.code:  # None or 0 → clean exit (e.g. --help); re-raise untouched
             raise
-        _print_json({
+        _emit_error({
             "error": "Invalid arguments. See --help for usage.",
             "code": "USAGE_ERROR",
         })
-        sys.exit(1)
 
     try:
         args_dict = {k: v for k, v in vars(args).items() if v is not None}
@@ -202,7 +220,6 @@ def run(
         conn.close()
 
     if error_envelope is not None:
-        _print_json(error_envelope)
-        sys.exit(1)
+        _emit_error(error_envelope)
 
     _print_json(result)

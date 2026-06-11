@@ -627,3 +627,109 @@ def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, ba
         ])
     assert exc.value.code == 1
     assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
+# ---------- --returning projection (issue #419) ----------
+
+
+def test_read_chunks_document_mode_returning(seeded_project, capsys):
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]),
+        "--returning", "chunk_id,document_id,source_name",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["mode"] == "document"  # envelope unchanged
+    assert out["chunks"]
+    for c in out["chunks"]:
+        assert list(c.keys()) == ["chunk_id", "document_id", "source_name"]
+        assert c["document_id"] == seeded_project["doc_a"]
+        assert c["source_name"] == "alpha.pdf"
+
+
+def test_read_chunks_document_default_projection_unchanged(seeded_project, capsys):
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_a"]),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    # Locator-light default row (no source_*/file_name/document_id leak).
+    assert set(out["chunks"][0]) == {
+        "chunk_id", "chunk_index", "section_heading", "page_number",
+        "content_type", "text", "text_length",
+    }
+
+
+def test_read_chunks_by_id_returning(seeded_project, capsys):
+    chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(chunk_id),
+        "--returning", "chunk_id,document_id",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == []  # envelope unchanged
+    assert out["chunks"] == [
+        {"chunk_id": chunk_id, "document_id": seeded_project["doc_a"]},
+    ]
+
+
+def test_read_chunks_by_id_default_projection_unchanged(seeded_project, capsys):
+    chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(chunk_id),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    # Pre-#419 --chunks row: document_id is NOT in the default contract.
+    assert set(out["chunks"][0]) == {
+        "chunk_id", "source_kind", "source_id", "source_name", "file_name",
+        "page_number", "chunk_index", "section_heading", "content_type",
+        "text", "text_length",
+    }
+
+
+def test_read_chunks_around_returning(seeded_project, capsys):
+    chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[1]
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--around-chunk", str(chunk_id), "--window", "1",
+        "--returning", "chunk_id,document_id,file_name",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["mode"] == "around"  # envelope unchanged
+    assert out["chunks"]
+    for c in out["chunks"]:
+        assert list(c.keys()) == ["chunk_id", "document_id", "file_name"]
+        assert c["document_id"] == seeded_project["doc_a"]
+        assert c["file_name"] == "alpha.pdf"
+
+
+def test_read_chunks_returning_unknown_field_errors(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]),
+            "--returning", "chunk_id,bogus",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert "document_id" in out["valid_fields"]
+
+
+def test_read_chunks_returning_unknown_field_errors_on_zero_rows(
+    seeded_project, capsys
+):
+    """A typo'd --returning must error even when the read resolves to no rows,
+    rather than coming back as a silent empty result. A non-existent document id
+    reaches work() (parse succeeds), so the up-front whitelist check fires."""
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", "999999",
+            "--returning", "chunk_id,bogus",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"

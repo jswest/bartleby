@@ -13,6 +13,16 @@ Scope:
   - ``--all``: every document with a summary.
   - ``--force``: re-classify even when relevant assignments already exist.
 
+``--force`` correction is asymmetric between the two modes:
+  - Single-tag: corrective *both ways*. The fresh verdict assigns the tag when
+    it applies and unassigns it when it does not, so a forced re-sweep can both
+    add and *remove* that tag.
+  - Full-vocab: *additive-only*. A forced re-sweep re-applies and extends the
+    classifier's set, but it never unassigns tags outside that set. It cannot
+    correct prior over-tagging — stale tags survive a full-vocab ``--force``.
+    To remove an over-applied tag, re-run in single-tag mode (``--tag <name>
+    --force``), which will unassign it where it no longer applies.
+
 Default skipping (no ``--force``):
   - Full-vocab: skip documents with *any* existing tag assignment.
   - Single-tag: skip documents already assigned that specific tag.
@@ -74,7 +84,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--force", action="store_true",
-        help="Re-classify even when relevant assignments already exist.",
+        help=(
+            "Re-classify even when relevant assignments already exist. "
+            "Corrective both ways in single-tag mode (can add or remove the "
+            "tag); additive-only in full-vocab mode (re-applies/extends tags "
+            "but never removes prior over-tags)."
+        ),
     )
     return p.parse_args(argv)
 
