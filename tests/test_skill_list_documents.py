@@ -47,10 +47,12 @@ def test_list_documents_brief_projects_three_fields(seeded_project, capsys):
 
 
 def test_list_documents_brief_and_verbose_are_mutually_exclusive(seeded_project, capsys):
-    code, _ = _run(capsys, [
+    code, captured = _run(capsys, [
         "--project", seeded_project["project"], "--brief", "--verbose",
     ])
-    assert code == 2  # argparse mutually-exclusive-group error
+    # argparse mutually-exclusive-group error → JSON usage envelope (issue #402).
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
 
 
 def test_list_documents_verbose_includes_chunk_count(seeded_project, capsys):
@@ -311,10 +313,12 @@ def test_list_documents_sort_date_puts_undated_last(seeded_project, capsys):
 
 
 def test_list_documents_sort_rejects_unknown_value(seeded_project, capsys):
-    code, _ = _run(capsys, [
+    code, captured = _run(capsys, [
         "--project", seeded_project["project"], "--sort", "bogus",
     ])
-    assert code == 2  # argparse choices error
+    # argparse choices error → JSON usage envelope (issue #402).
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
 
 
 def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):

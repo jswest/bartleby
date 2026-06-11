@@ -99,15 +99,22 @@ def run(
         pass
 
     start = time.perf_counter()
-    args = parse_args(argv)
-    args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
     conn = None
     session_id: int | None = None
     result: dict | None = None
     error_envelope: dict | None = None
+    args_dict: dict[str, Any] = {}
 
     try:
+        # parse_args lives inside the try so an argparse usage error
+        # (a non-zero ``SystemExit`` from ``ArgumentParser.error()``) becomes
+        # the JSON envelope every other failure already emits, rather than
+        # argparse's raw stderr usage dump — agents parse one shape (issue
+        # #402). ``--help`` exits 0 and is re-raised untouched below.
+        args = parse_args(argv)
+        args_dict = {k: v for k, v in vars(args).items() if v is not None}
+
         project = args.project or get_active_project()
         if not project:
             raise SkillError(
@@ -140,6 +147,17 @@ def run(
                 result = work(conn=conn, args=args, session_id=session_id)
         else:
             result = work(conn=conn, args=args, session_id=session_id)
+    except SystemExit as e:
+        # argparse raises SystemExit: code 0 for ``--help``/``-h`` (let it
+        # through unchanged), non-zero for a usage/argument error (turn it into
+        # the envelope). parse_args fails before open_db, so there's no
+        # conn/session to log — this falls through to the shared emit path below.
+        if not e.code:  # None or 0 → clean exit (e.g. --help)
+            raise
+        error_envelope = {
+            "error": "Invalid arguments. See --help for usage.",
+            "code": "USAGE_ERROR",
+        }
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
     except Exception as e:  # noqa: BLE001 — catch-all by design
