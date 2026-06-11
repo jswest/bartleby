@@ -71,7 +71,6 @@ from bartleby.skill_scripts._tags import resolve_scope
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("describe_corpus", __doc__)
-    p.add_argument("--project", type=str, default=None)
     p.add_argument(
         "--top-n", type=positive_int, default=5, dest="top_n",
         help="How many largest-by-token documents to list (default 5).",

@@ -133,7 +133,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="Truncate each chunk's text to the first N chars (append '…' if trimmed).",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
@@ -155,13 +154,7 @@ def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
 def _read_by_chunk_ids(
     conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int
 ) -> dict:
-    # De-dupe while preserving the agent's requested order.
-    seen: set[int] = set()
-    ordered: list[int] = []
-    for cid in chunk_ids:
-        if cid not in seen:
-            seen.add(cid)
-            ordered.append(cid)
+    ordered = list(dict.fromkeys(chunk_ids))  # dedup, preserve order
 
     placeholders = ",".join("?" * len(ordered))
     rows = {

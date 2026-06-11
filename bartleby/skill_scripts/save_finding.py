@@ -51,7 +51,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

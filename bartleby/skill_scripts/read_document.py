@@ -40,7 +40,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument("--summary", action="store_true")
     mode.add_argument("--full", action="store_true")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
