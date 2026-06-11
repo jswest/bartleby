@@ -43,7 +43,7 @@ export function getFinding(findingId) {
 function getCitations(findingId) {
   const { db } = getDb();
   const rows = db.prepare(`
-    SELECT fc.chunk_id, c.source_kind, c.source_id, c.page_number, c.text
+    SELECT fc.chunk_id, c.source_kind, c.source_id, c.page_number
     FROM finding_citations fc
     JOIN chunks c USING (chunk_id)
     WHERE fc.finding_id = ?
@@ -53,8 +53,6 @@ function getCitations(findingId) {
   const resolved = resolveSources(rows);
   return rows.map((r, i) => ({
     chunk_id: r.chunk_id,
-    source_kind: r.source_kind,
-    text: r.text,
     ...resolved[i]
   }));
 }
@@ -308,17 +306,11 @@ function withTags(row) {
   return { ...rest, tags: JSON.parse(tags_json) };
 }
 
-// Tag vocabulary, with the document count for each — used to populate the
-// search filter. Tags with no documents are dropped (nothing to filter to).
+// Tag vocabulary for the search/documents filter — the listAllTags() rows that
+// carry at least one document (nothing to filter to otherwise). Same ordering;
+// the filter forms read only name + document_count.
 export function listTags() {
-  const { db } = getDb();
-  return db.prepare(`
-    SELECT t.name, COUNT(dt.document_id) AS document_count
-    FROM tags t
-    JOIN document_tags dt USING (tag_id)
-    GROUP BY t.tag_id
-    ORDER BY t.name COLLATE NOCASE
-  `).all();
+  return listAllTags().filter((t) => t.document_count > 0);
 }
 
 // The full tag vocabulary for the /tags index — includes the description and,

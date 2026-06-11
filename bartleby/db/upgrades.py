@@ -14,14 +14,8 @@ the latter, existing DBs walk the former. The regression gate that keeps
 them in sync is `tests/test_project.py::test_upgrade_chain_walks_*`, which
 strips and re-applies the chain end-to-end.
 
-Authoring rule for `_upgrade_v8_to_v9`: it is written against **released
-v0.8.x DBs**, which already carry the full v8 shape — the `ingests` table and
-the `ingest_run_id` columns (`_upgrade_v7_to_v8` creates them; see #212). So a
-v8→v9 step must NOT re-create those, and must be **additive-only** (new tables,
-indexes, or nullable columns with NULL truthful on pre-upgrade rows). The
-#164–#171 window cohort (v8 in `meta` but missing `ingests`/`ingest_run_id`,
-see `db/schema.py`) is out of scope — it is re-ingest-only and never a target
-of this step.
+The #164–#171 window cohort (v8 in `meta` but missing `ingests`/`ingest_run_id`)
+is re-ingest-only and never a target of this chain — see `docs/decisions/GH-0352`.
 """
 
 from __future__ import annotations
@@ -118,11 +112,6 @@ def _upgrade_v8_to_v9(conn: apsw.Connection) -> None:
     # (an ordinary boolean tag leaves them all NULL), so existing corpora run
     # `bartleby project upgrade` rather than re-ingest. Keep this DDL in
     # lockstep with db/schema.py.
-    #
-    # DORMANT while SCHEMA_VERSION == 8: the upgrade loop walks v < 8 only, so
-    # this step never fires until the v0.9.0 assembly commit bumps to 9 and
-    # removes the held-at-8 xfail on the chain-walk test. #254 appends its own
-    # ALTERs to THIS function (same v8→v9 step), so they ship as one bump.
     cur = conn.cursor()
     # tags: the value-tag method. value_type is the discriminator (NULL = an
     # ordinary boolean category tag); pattern is the extraction regex.
