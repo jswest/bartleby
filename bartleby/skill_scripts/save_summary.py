@@ -6,6 +6,12 @@ Output:
 
 Title and description are required so summaries written by the agent show up
 in ``list_documents`` the same way ingest-time summaries do.
+
+Replacing an existing summary without passing ``--authored-date`` carries the
+prior row's ``authored_date`` forward rather than nulling it, so a re-save
+doesn't silently drop the document out of every authored-date scope. A brand-new
+save with no prior row and no arg stays NULL; an explicit ``--authored-date``
+always overwrites.
 """
 
 from __future__ import annotations
@@ -29,7 +35,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--text", type=str, required=True)
     p.add_argument(
         "--authored-date", type=str, default=None, dest="authored_date",
-        help="ISO 8601 YYYY-MM-DD. Silently stored as NULL if malformed.",
+        help=(
+            "ISO 8601 YYYY-MM-DD. Silently stored as NULL if malformed. "
+            "On replace, omitting this carries the prior summary's "
+            "authored_date forward; on a brand-new save it stays NULL."
+        ),
     )
     return p.parse_args(argv)
 
@@ -56,9 +66,19 @@ def work(*, conn, args, session_id) -> dict:
         )
 
     prior = cur.execute(
-        "SELECT summary_id FROM summaries WHERE document_id = ?",
+        "SELECT summary_id, authored_date FROM summaries WHERE document_id = ?",
         (args.document_id,),
     ).fetchone()
+
+    # On replace, omit --authored-date to carry the prior row's date forward
+    # rather than nulling it: a full-row REPLACE would otherwise silently drop
+    # the doc out of every authored-date scope (issue #467). A brand-new save
+    # with no prior row and no arg stays NULL; an explicit --authored-date
+    # always overwrites.
+    if args.authored_date is None and prior:
+        authored_date = prior[1]
+    else:
+        authored_date = normalize_authored_date(args.authored_date)
 
     # Embed BEFORE the first write (the prior-summary delete below) so the
     # transaction's write lock doesn't span the lazy model load (issue #340 —
@@ -76,7 +96,7 @@ def work(*, conn, args, session_id) -> dict:
         "(document_id, title, description, text, model, authored_date) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (args.document_id, args.title, args.description, args.text,
-         _AUTHOR_MODEL, normalize_authored_date(args.authored_date)),
+         _AUTHOR_MODEL, authored_date),
     )
     summary_id = conn.last_insert_rowid()
 
