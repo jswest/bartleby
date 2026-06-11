@@ -294,20 +294,6 @@ def write_finding_chunks(
     return insert_finding_chunks(conn, finding_id, chunk_inputs)
 
 
-def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
-    """Embed ``body`` then replace this finding's chunks (embed + write in one).
-
-    The original single-call helper, now a thin composition of
-    :func:`embed_body_chunks` and :func:`write_finding_chunks`. ``save_finding``
-    and ``edit_finding`` call the two phases separately so the embed runs *before*
-    their first write (issue #340 — keeping the model load out of the txn's
-    write-lock window). ``merge_findings`` still calls this combined form: it
-    already holds a write txn across embedding by its own design, so the hoist
-    buys it nothing and that script is owned elsewhere.
-    """
-    return write_finding_chunks(conn, finding_id, embed_body_chunks(body))
-
-
 def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> None:
     """Atomically swap ``finding_citations`` rows for this finding."""
     cur = conn.cursor()
