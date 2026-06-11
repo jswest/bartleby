@@ -118,6 +118,25 @@ class _StubVisionProvider:
         return self.description
 
 
+class _StubPhase:
+    """Records the _Phase calls the caption/summarize passes make, so a test can
+    assert the total was revealed once and the tally advanced per work item."""
+
+    def __init__(self):
+        self.started: list[int] = []
+        self.advances = 0
+        self.lanes: list[tuple[object, str, str]] = []
+
+    def start(self, total: int) -> None:
+        self.started.append(total)
+
+    def advance(self, n: int = 1) -> None:
+        self.advances += n
+
+    def lane(self, key: object, item: str, stage: str) -> None:
+        self.lanes.append((key, item, stage))
+
+
 def _png_bytes(width=100, height=100, color=(20, 200, 50)) -> bytes:
     im = Image.new("RGB", (width, height), color=color)
     buf = io.BytesIO()
@@ -892,7 +911,8 @@ def test_resolve_summarize_workers_tracks_provider_override():
 def test_summarize_all_progress_callback_fires_per_document(
     isolated_project, tmp_path, mock_embed
 ):
-    """The summarize pass invokes on_progress(0, N) then once per document."""
+    """The summarize pass reveals the total once via phase.start, then advances
+    the tally once per document."""
     from bartleby.commands import scribe as scribe_module
 
     txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
@@ -908,27 +928,26 @@ def test_summarize_all_progress_callback_fires_per_document(
         writer.persist_parse(parsed)
 
         pending = writer.documents_needing_summary()
-        seen: list[tuple[int, int]] = []
+        phase = _StubPhase()
         owed, _times = summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
             summarize_workers=1, timings=False,
-            on_progress=lambda done, total: seen.append((done, total)),
+            phase=phase,
         )
     finally:
         conn.close()
 
-    assert seen, "expected at least one progress callback for one document"
-    assert seen[0] == (0, 1)
-    assert seen[-1] == (1, 1)
+    assert phase.started == [1]          # total revealed once
+    assert phase.advances == 1           # advanced once for the one document
     assert owed == 0
 
 
 def test_summarize_all_lane_callback_reports_document(
     isolated_project, tmp_path, mock_embed
 ):
-    """on_lane fires per summarized document with its file name and stage."""
+    """phase.lane fires per summarized document with its file name and stage."""
     from bartleby.commands import scribe as scribe_module
 
     txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
@@ -944,19 +963,18 @@ def test_summarize_all_lane_callback_reports_document(
         writer.persist_parse(parsed)
 
         pending = writer.documents_needing_summary()
-        lanes: list[tuple[object, str, str]] = []
+        phase = _StubPhase()
         summary._summarize_all(
             writer, pending,
             llm_provider=_StubProvider(), llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
             summarize_workers=1, timings=False,
-            on_progress=None,
-            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+            phase=phase,
         )
     finally:
         conn.close()
 
-    assert lanes == [(lanes[0][0], "doc.txt", "summarizing")]
+    assert phase.lanes == [(phase.lanes[0][0], "doc.txt", "summarizing")]
 
 
 def test_summarize_all_skips_capped_document(
@@ -987,7 +1005,7 @@ def test_summarize_all_skips_capped_document(
             writer, writer.documents_needing_summary(),
             llm_provider=stub, llm_model="m",
             temperature=0.0, max_summarize_tokens=1000,
-            summarize_workers=2, timings=False, on_progress=None,
+            summarize_workers=2, timings=False,
         )
     finally:
         conn.close()
@@ -1242,7 +1260,8 @@ def test_parse_document_threads_on_warn_to_the_leaf(
 def test_caption_all_progress_callback_fires_per_image(
     isolated_project, tmp_path, mock_embed
 ):
-    """The caption phase invokes on_progress(0, N) then once per image."""
+    """The caption pass reveals the total once via phase.start, then advances the
+    tally once per image."""
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
 
@@ -1260,26 +1279,25 @@ def test_caption_all_progress_callback_fires_per_image(
         )
         document_id = writer.persist_parse(parsed)
 
-        seen: list[tuple[int, int]] = []
+        phase = _StubPhase()
         caption._caption_all(
             writer,
             [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
-            on_progress=lambda done, total: seen.append((done, total)),
+            phase=phase,
         )
     finally:
         conn.close()
 
-    assert seen, "expected at least one progress callback for one embedded image"
-    assert seen[0] == (0, 1)
-    assert seen[-1] == (1, 1)
+    assert phase.started == [1]          # total revealed once
+    assert phase.advances == 1           # advanced once for the one image
 
 
 def test_caption_all_lane_callback_reports_owning_document(
     isolated_project, tmp_path, mock_embed
 ):
-    """on_lane fires per analyzed image with the owning file and a stage label,
+    """phase.lane fires per analyzed image with the owning file and a stage label,
     so the renderer can show which worker is captioning what."""
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
@@ -1298,20 +1316,21 @@ def test_caption_all_lane_callback_reports_owning_document(
         )
         document_id = writer.persist_parse(parsed)
 
-        lanes: list[tuple[object, str, str]] = []
+        phase = _StubPhase()
         caption._caption_all(
             writer,
             [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
             vision_enabled=True, caption_workers=1, timings=False,
-            on_progress=None,
-            on_lane=lambda key, item, stage: lanes.append((key, item, stage)),
+            phase=phase,
         )
     finally:
         conn.close()
 
-    assert lanes, "expected a lane update for the one embedded image"
-    assert all(item == "img.pdf" and stage == "captioning" for _, item, stage in lanes)
+    assert phase.lanes, "expected a lane update for the one embedded image"
+    assert all(
+        item == "img.pdf" and stage == "captioning" for _, item, stage in phase.lanes
+    )
 
 
 def test_document_id_for_returns_parsed_document(

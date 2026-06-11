@@ -12,11 +12,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable
 
 from bartleby.ingest import images as image_pipeline
 from bartleby.ingest.parse import DocUnit
-from bartleby.ingest.progress import _ProgressTally
+from bartleby.ingest.progress import _Phase
 from bartleby.ingest.writer import (
     MAX_INGEST_ATTEMPTS,
     ImageCaption,
@@ -75,8 +74,7 @@ def _caption_all(
     vision_enabled: bool,
     caption_workers: int,
     timings: bool,
-    on_progress: Callable[[int, int], None] | None,
-    on_lane: Callable[[object, str, str], None] | None = None,
+    phase: _Phase | None = None,
 ) -> None:
     """Phase 2: caption every still-uncaptioned image across all parsed units.
 
@@ -113,7 +111,8 @@ def _caption_all(
         )
         return
 
-    progress = _ProgressTally(len(pending), on_progress)
+    if phase is not None:
+        phase.start(len(pending))
 
     # Capped rows (failed MAX_INGEST_ATTEMPTS× already) are skipped, not retried.
     to_caption: dict[int, PendingImage] = {}
@@ -123,7 +122,8 @@ def _caption_all(
                 f"{owner[image_id].file_name}: skipping image — failed "
                 f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
             )
-            progress.advance()
+            if phase is not None:
+                phase.advance()
         else:
             to_caption[image_id] = pi
 
@@ -141,8 +141,8 @@ def _caption_all(
     def _analyze(image_id: int, pi: PendingImage) -> image_pipeline.ImageAnalysis:
         # Claim this thread's lane for the owning document, then run the analysis.
         # Keyed by thread id, so the pool's N threads map to N sticky lanes.
-        if on_lane is not None:
-            on_lane(threading.get_ident(), owner[image_id].file_name, "captioning")
+        if phase is not None:
+            phase.lane(threading.get_ident(), owner[image_id].file_name, "captioning")
         return _analyze_image(
             pi, vision_provider=vision_provider, vision_model=vision_model,
         )
@@ -161,7 +161,8 @@ def _caption_all(
                 unit.stages["caption"] = (
                     unit.stages.get("caption", 0.0) + (time.perf_counter() - t0)
                 )
-            progress.advance()
+            if phase is not None:
+                phase.advance()
         return
 
     with ThreadPoolExecutor(max_workers=caption_workers) as pool:
@@ -175,4 +176,5 @@ def _caption_all(
                 _persist(image_id, fut.result())
             except Exception as e:
                 _fail(image_id, e)
-            progress.advance()
+            if phase is not None:
+                phase.advance()
