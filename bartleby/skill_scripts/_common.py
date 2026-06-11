@@ -737,8 +737,8 @@ def chunk_locations(
     underlying document's summary row (the same value list_documents and the date
     filters use); it is resolved in the same per-kind join that fetches
     ``file_name``, so it costs no extra query:
-      - document chunks: file_name from the document; page_number parsed from
-        ``section_heading`` (the 'page N' convention pdfplumber writes);
+      - document chunks: file_name from the document; page_number read from the
+        chunk's first-class ``page_number`` column (the page recorded at ingest);
         authored_date from the document's summary (NULL if undated / no summary).
       - summary chunks: file_name from the underlying document; page_number is
         always None (summaries aren't paginated); authored_date off the summary

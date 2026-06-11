@@ -1,4 +1,4 @@
-"""Shared lifecycle for ``skill/scripts/`` executables.
+"""Shared lifecycle for the ``bartleby/skill_scripts/`` executables.
 
 Each script defines ``parse_args(argv)`` and ``work(*, conn, args, session_id)``
 and calls :func:`run`. The runner:
@@ -66,7 +66,7 @@ def build_arg_parser(
     arguments *and* the response shape. Agents read SKILL.md and ``--help``;
     the JSON contract otherwise lives only in docstrings they never see (issue
     #47). The raw formatter must travel with the docstring, so it lives here
-    rather than at each of the ~18 call sites.
+    rather than at each of the ~two-dozen skill-script call sites.
 
     ``--project`` is declared here too: ``run()`` unconditionally reads
     ``args.project`` to resolve the corpus, so it is part of the runner's

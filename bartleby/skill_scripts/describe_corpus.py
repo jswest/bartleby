@@ -24,10 +24,11 @@ on anything that isn't a clean ``YYYY-MM-DD``, so it's frequently absent. The
 date range is reported *alongside* ``undated_document_count`` — a range without
 the null count would imply more temporal coverage than the slice has.
 
-Scope: the same flags ``search`` / ``scan`` / ``list_documents`` accept —
-``--tag`` (repeatable, OR), ``--in-documents``, and the inclusive ``YYYY-MM-DD``
-``--authored-after`` / ``--authored-before`` bounds (``--include-nulls`` keeps
-undated docs). With any of them active, *every* aggregate is computed over that
+Scope: ``--tag`` (repeatable, OR), ``--in-documents``, and the inclusive
+``YYYY-MM-DD`` ``--authored-after`` / ``--authored-before`` bounds
+(``--include-nulls`` keeps undated docs) — the scope flags ``scan`` and
+``list_documents`` also take. (``search`` shares ``--tag`` / ``--in-documents``
+but *not* the date bounds.) With any of them active, *every* aggregate is computed over that
 filtered subset instead of the whole corpus, and a ``filters`` object echoes the
 scope (``{tags, in_documents, authored_after, authored_before, include_nulls,
 excluded_null_dated}``) so the numbers are self-describing. The ``tags`` facet

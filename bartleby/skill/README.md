@@ -44,7 +44,7 @@ The main [README](../../README.md#install-the-skill) covers refreshing after an 
 
 ## What the skill exposes
 
-The skill ships a `scripts/` directory containing small Python scripts that the agent calls. Each takes arguments, prints JSON to stdout, and exits non-zero on error.
+The agent calls these scripts via `bartleby skill <name>`. They're package-internal (under `bartleby/skill_scripts/`), dispatched by the CLI — the installed bundle itself ships only `SKILL.md` + `README.md`, not a `scripts/` directory. Each script takes arguments, prints JSON to stdout, and exits non-zero on error.
 
 | Script | Purpose |
 | --- | --- |
@@ -60,8 +60,19 @@ The skill ships a `scripts/` directory containing small Python scripts that the 
 | `delete_finding` | Retract a finding outright — its row, body chunks, and citations. Cited document chunks (evidence) are untouched. The curation counterpart to `delete_tag`. |
 | `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count. Paginated. The enumeration counterpart to `search --findings`. |
 | `read_finding` | Read one whole finding by id — full body, the finding's chunks, and resolved citations. Same shape as `save_finding`. |
+| `edit_finding` | Update an existing finding's title, description, and/or body. Memory-gated like the other finding reads/writes. |
+| `save_date` | Backfill or correct a document's `authored_date` (the date-only counterpart to re-saving a summary; supports `--clear`). |
+| `extract` | Run a value-tag's stored regex over a set of chunks, storing the per-document values it captures. |
+| `read_tags` | List the controlled tag vocabulary — names, descriptions, and document counts. |
+| `add_tag` | Create a new tag in the controlled vocabulary (optionally a value-tag with a `value_type` + regex `pattern`). |
+| `rename_tag` | Rename a tag; assignments preserved. |
+| `delete_tag` | Remove a tag from the vocabulary. The curation counterpart to `delete_finding`. |
+| `merge_tags` | Move all assignments from one tag (`--from`) onto another (`--into`), then delete the source. The tag counterpart to `merge_findings`. |
+| `tag` | Classify documents against the controlled vocabulary (LLM-assisted) — runs the configured summarizer model once per document; `tag --all` requires explicit human confirmation. |
+| `assign_tag` | Attach one tag to one or more documents directly, bypassing the classifier. |
+| `unassign_tag` | Detach one tag from one or more documents. |
 
-The scripts wrap a shared Python library that owns all writes to the chunks table. Source-kind discipline (`document` vs. `summary` vs. `finding`) is enforced both by a `CHECK` constraint at the SQL layer and by typed insert helpers in the library, so agents can't accidentally mislabel chunks.
+The scripts wrap a shared Python library that owns all writes to the chunks table. Source-kind discipline (`document` vs. `summary` vs. `finding` vs. `image`) is enforced both by a `CHECK` constraint at the SQL layer and by typed insert helpers in the library, so agents can't accidentally mislabel chunks.
 
 For full argument-level contracts, see [`SKILL.md`](./SKILL.md) and the script docstrings.
 
@@ -118,11 +129,13 @@ Findings also have a curation path so memory can be tended rather than only grow
 Everything queryable lives in the project's `bartleby.db`:
 
 - `documents` — one row per ingested file
-- `chunks` — polymorphic: documents, summaries, and findings all chunk into here, tagged with `source_kind` and `source_id`
+- `chunks` — polymorphic: documents, summaries, findings, and images all chunk into here, tagged with `source_kind` (`document` / `summary` / `finding` / `image`) and `source_id`
 - `summaries` — one row per document (single-shot, whole-document)
 - `sessions` — one row per agent session
 - `findings` — one row per saved finding, with markdown text
 - `finding_citations` — join table from findings to the chunks they cite
+- `tags` — the controlled tag vocabulary: name, description, and (for value-tags) a `value_type` + capture `pattern`
+- `document_tags` — join table assigning tags to documents (with the captured `value` and source `chunk_id` for value-tags)
 - `audit_logs` — every tool call the agent made, append-only, never read by the agent
 
 No sidecar files. If you want to export a finding to disk, ask the agent to write it.

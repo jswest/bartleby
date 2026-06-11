@@ -1,6 +1,10 @@
 """wsjpt provider — routes through WSJ's parsing toolkit (Pydantic-AI under the hood).
 
-Optional install: ``pip install bartleby[wsjpt]``. The provider talks to
+Out-of-band install: there is **no** ``bartleby[wsjpt]`` extra — the git source
+is WSJ-internal and unreachable outside WSJ, so it can't live in the locked
+deps. Inject it into the installed tool's environment with
+``uv tool install '.[...]' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force``
+(see the README install section). The provider talks to
 Gemini via wsjpt's ``ModelConfig(provider="google", model=<alias>)`` so model
 aliases (``fast`` / ``smart`` / ``smartest``) resolve centrally and bartleby
 doesn't have to track concrete model names. Anthropic/OpenAI/Bedrock are also

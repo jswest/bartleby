@@ -2,8 +2,8 @@
 
 Bartleby is two surfaces over one SQLite database:
 
-1. **The CLI (`bartleby ...`)** — ingestion (`scribe`), config (`ready`), projects, sessions, embedding, audit logs.
-2. **The skill (`skill/`)** — six Python scripts the agent calls: `list_documents`, `search`, `read_chunks`, `read_document`, `save_summary`, `save_finding`.
+1. **The CLI (`bartleby ...`)** — ingestion (`scribe`), config (the `config` wizard; `ready` installs/refreshes the skill into a harness), `serve`, projects, sessions, embedding, audit logs.
+2. **The skill** — the agent-facing scripts, dispatched via `bartleby skill <name>`. The dispatcher (`bartleby/commands/skill.py`) derives its script set dynamically from the non-underscore modules of `bartleby/skill_scripts/` (about two dozen: `search`, `read_document`, `save_finding`, the tag ops, `extract`, …), so a new script is callable on drop-in. The shipped `skill/` folder holds only `SKILL.md` + `README.md` (the agent-facing guide); the scripts themselves are package-internal.
 
 The database is the contract between them. The CLI writes; the skill reads and writes findings back. Both import from one Python package (`bartleby/`).
 
@@ -41,7 +41,7 @@ Image chunks carry one of two `content_type` values: `image_ocr` (verbatim trans
 
 ### Summarizer structured-output contract
 
-The summarizer is structured-output only across all three providers (Anthropic / OpenAI / Ollama). Even though we control the prompt, JSON enforcement keeps open-source models from drifting into "Here is your summary:" preambles, thinking tags, or stray markdown fences. The schema is rendered from a Pydantic model (`DocumentSummary`); all three providers consume `model_json_schema()`, so adding fields means one place to change.
+The summarizer is structured-output only across all four providers (Anthropic / OpenAI / Ollama / wsjpt). Even though we control the prompt, JSON enforcement keeps open-source models from drifting into "Here is your summary:" preambles, thinking tags, or stray markdown fences. The schema is a Pydantic model (`DocumentSummary`); the three first-party providers consume its `model_json_schema()` and wsjpt takes the model class directly, so adding fields means one place to change.
 
 Validation failures raise. Don't insert malformed summaries silently.
 
@@ -57,8 +57,8 @@ When a document exceeds `max_summarize_tokens`, the summary's `text` field gets 
 
 - Skill scripts print one JSON object to stdout, exit non-zero on error with `{"error", "code"}`. Prose/progress goes to stderr only.
 - Embedding model: `BAAI/bge-base-en-v1.5` (768 dims, 512 token max). FTS5 tokenizer: `unicode61 remove_diacritics 2`.
-- LLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`.
-- VLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`.
+- LLM provider defaults (`ALLOWED_PROVIDERS` — four): anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`, wsjpt `fast`.
+- VLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`, wsjpt `fast`.
 - PDF converter (config `pdf_converter`, CLI `--pdf-converter`): `pdfplumber` (default — fast text + page-render image extraction) and `docling` (opt-in — better structural extraction at higher cost).
 - HTML converter (config `html_converter`, CLI `--html-converter`): `docling` (default) and `sec2md` (opt-in — routes iXBRL EDGAR filings to sec2md by sniff, non-iXBRL HTML falls back to docling). MD always goes through docling. If you have an HTML/MD corpus, `docling` must be installed; if you set `html_converter=sec2md`, the `sec2md` extra must also be installed.
 - Dependency management: `uv` (not pip/venv). Run with `uv run python`.
