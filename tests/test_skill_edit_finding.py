@@ -480,3 +480,16 @@ def test_edit_finding_rejects_empty_title(seeded_project, tmp_path, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "EMPTY_TITLE"
+
+
+def test_edit_finding_rejects_empty_description(seeded_project, tmp_path, capsys):
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    with pytest.raises(SystemExit) as exc:
+        edit_finding.main([
+            "--project", seeded_project["project"],
+            "--finding", str(saved["finding_id"]),
+            "--description", "   ",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_DESCRIPTION"

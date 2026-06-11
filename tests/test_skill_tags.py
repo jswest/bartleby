@@ -219,6 +219,16 @@ def test_delete_tag_cascades_assignments(seeded_project, capsys):
     assert out["removed_assignments"] == 1
 
 
+def test_delete_tag_unknown_tag(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        delete_tag.main([
+            "--project", seeded_project["project"], "--tag", "nonexistent",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "TAG_NOT_FOUND"
+
+
 def test_rename_tag_renames_and_preserves_assignment(seeded_project, capsys):
     # The happy path: a fresh-named target renames in place. The tag_id and the
     # document_tags row both survive (rename only touches tags.name), and the
@@ -452,6 +462,31 @@ def test_merge_tags_full_overlap_reports_none_inserted(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["inserted"] == 0
     assert out["already_present"] == 2
+
+
+def test_merge_tags_self_merge_rejected(seeded_project, capsys):
+    # --from == --into is refused before any tag lookup or mutation.
+    with pytest.raises(SystemExit) as exc:
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "a", "--into", "a",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "SELF_MERGE"
+
+
+def test_merge_tags_unknown_source_tag(seeded_project, capsys):
+    # The destination exists but the source doesn't → TAG_NOT_FOUND.
+    _seed_tag(seeded_project["project"], name="dst", description="d")
+    with pytest.raises(SystemExit) as exc:
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "nope", "--into", "dst",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "TAG_NOT_FOUND"
 
 
 def _fail_on_sql(monkeypatch, needle: str) -> None:

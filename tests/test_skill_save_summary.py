@@ -253,3 +253,46 @@ def test_save_summary_unknown_document(seeded_project, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "DOCUMENT_NOT_FOUND"
+
+
+def test_save_summary_rejects_empty_title(seeded_project, capsys):
+    # A whitespace-only title is refused before any document lookup or write.
+    with pytest.raises(SystemExit) as exc:
+        save_summary.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_b"]),
+            "--title", "   ",
+            "--description", "A real description.",
+            "--text", "A real body.",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_TITLE"
+
+
+def test_save_summary_rejects_empty_description(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        save_summary.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_b"]),
+            "--title", "A real title",
+            "--description", "   ",
+            "--text", "A real body.",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_DESCRIPTION"
+
+
+def test_save_summary_rejects_empty_text(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        save_summary.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_b"]),
+            "--title", "A real title",
+            "--description", "A real description.",
+            "--text", "   ",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_TEXT"
