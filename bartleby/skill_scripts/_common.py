@@ -22,6 +22,22 @@ _CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
 _MALFORMED_MARKER = re.compile(r"\[(\d+)\]")
 
 
+def text_qualified_fts(fts_expr: str) -> str:
+    """Column-qualify an FTS5 MATCH expression to the ``text`` column.
+
+    ``chunks_fts`` indexes both ``text`` and ``section_heading``, so a bare
+    ``MATCH (<expr>)`` also fires on heading-only hits — a chunk whose snippet
+    never contains the term. Wrapping as ``{text} : (<expr>)`` confines matching
+    to the body text, keeping scan and search a strict text-grep. Deliberate
+    heading recall stays reachable via scan's ``--heading-like`` and search's
+    vector leg. Returns the expression unchanged when empty, so an empty token
+    set never becomes a malformed ``{text} : ()``.
+    """
+    if not fts_expr:
+        return fts_expr
+    return f"{{text}} : ({fts_expr})"
+
+
 def extract_citations(body: str) -> list[int]:
     """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
     seen: dict[int, None] = {}

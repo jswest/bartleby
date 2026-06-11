@@ -6,6 +6,11 @@ Pass any of ``--documents`` / ``--summaries`` / ``--findings`` / ``--images``
 to override the default set. Opt into neighbor chunks with ``--add-context N``
 (0..5) — each step roughly multiplies output size by (1 + 2N).
 
+The full-text leg confines its MATCH to the chunk **body text** (column-qualified
+``{text} : (...)``), so a term appearing only in a chunk's ``section_heading``
+does not surface through the keyword leg. Heading-driven recall is the job of the
+semantic (vector) leg, which embeds the chunk text and is unaffected.
+
 ``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
 underlying document carries any of the given tags. ``--file-like <pattern>``
 (SQL ``LIKE``, repeatable for OR) restricts to chunks whose document's
@@ -86,6 +91,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_file_like_arg, add_returning_arg, apply_preview, chunk_locations,
     comma_int_list, memory_enabled, positive_int, project_row, source_names,
+    text_qualified_fts,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -289,6 +295,8 @@ def _fts_search(
     if not fts_query:
         return []
     scope_sql, scope_params = _scope_clause(scope)
+    # Confine the FTS leg to the body text (``{text} : (...)``) so heading-only
+    # hits never enter results; deliberate heading recall lives in the vector leg.
     rows = conn.cursor().execute(
         f"SELECT chunks_fts.rowid "
         f"FROM chunks_fts "
@@ -296,7 +304,7 @@ def _fts_search(
         f"WHERE chunks_fts MATCH ? AND {scope_sql} "
         f"ORDER BY chunks_fts.rank "
         f"LIMIT ?",
-        [fts_query, *scope_params, limit],
+        [text_qualified_fts(fts_query), *scope_params, limit],
     )
     return [row[0] for row in rows]
 
