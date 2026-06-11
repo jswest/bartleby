@@ -219,6 +219,54 @@ def test_delete_tag_cascades_assignments(seeded_project, capsys):
     assert out["removed_assignments"] == 1
 
 
+def test_rename_tag_renames_and_preserves_assignment(seeded_project, capsys):
+    # The happy path: a fresh-named target renames in place. The tag_id and the
+    # document_tags row both survive (rename only touches tags.name), and the
+    # envelope reports the new name alongside the preserved old one.
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('ch', 'd1')")
+        tag_id = conn.last_insert_rowid()
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+            (seeded_project["doc_a"], tag_id),
+        )
+    finally:
+        conn.close()
+
+    rename_tag.main([
+        "--project", seeded_project["project"],
+        "--old", "ch", "--new", "central-hudson",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out == {
+        "status": "renamed",
+        "tag_id": tag_id,
+        "old_name": "ch",
+        "new_name": "central-hudson",
+    }
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # The UPDATE landed under the same tag_id — no new row created.
+        assert cur.execute(
+            "SELECT name FROM tags WHERE tag_id = ?", (tag_id,)
+        ).fetchone()[0] == "central-hudson"
+        assert cur.execute(
+            "SELECT COUNT(*) FROM tags WHERE name = 'ch'"
+        ).fetchone()[0] == 0
+        # The assignment rides along untouched — same tag_id, same document.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_tags "
+            "WHERE document_id = ? AND tag_id = ?",
+            (seeded_project["doc_a"], tag_id),
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_rename_tag_refuses_existing_target(seeded_project, capsys):
     conn = open_db(seeded_project["project"])
     try:
