@@ -52,9 +52,22 @@ def _print_help(stream=sys.stderr) -> None:
 
 
 def dispatch(argv: list[str]) -> None:
-    if not argv or argv[0] in ("-h", "--help"):
+    if argv and argv[0] in ("-h", "--help"):
         _print_help(sys.stdout)
         return
+
+    if not argv:
+        # No script named: emit the JSON error envelope (like every other
+        # skill error path) and send the usage help to stderr only.
+        _print_help(sys.stderr)
+        payload = {
+            "error": f"No skill script given. "
+                     f"Available: {', '.join(SCRIPTS)}.",
+            "code": "MISSING_SKILL",
+        }
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        sys.exit(1)
 
     name, *rest = argv
     if name not in SCRIPTS:
