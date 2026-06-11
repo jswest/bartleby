@@ -61,8 +61,7 @@ def dispatch(argv: list[str]) -> None:
         # skill error path) and send the usage help to stderr only.
         _print_help(sys.stderr)
         payload = {
-            "error": f"No skill script given. "
-                     f"Available: {', '.join(SCRIPTS)}.",
+            "error": f"No skill script given. Available: {', '.join(SCRIPTS)}.",
             "code": "MISSING_SKILL",
         }
         json.dump(payload, sys.stdout, separators=(",", ":"))
