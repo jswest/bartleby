@@ -9,7 +9,7 @@ import pytest
 from bartleby.db.chunks import ChunkInput, insert_document_chunks, insert_summary_chunks
 from bartleby.db.connection import open_db
 from bartleby.skill_scripts import scan
-from tests._skill_fixtures import _emb, project_env  # noqa: F401
+from tests._skill_fixtures import _emb, mock_embed, project_env, seed_finding  # noqa: F401
 
 
 MARKER = "I will divest my interests in"
@@ -77,6 +77,23 @@ def scan_corpus(project_env):  # noqa: F811
             ChunkInput(text="Summary: " + MARKER + " ACME CORP.", embedding=_emb(3.0),
                        chunk_index=0),
         ])
+
+        # A finding chunk that also contains the marker — scan is docs-only, so
+        # this prior-session finding must never surface as a scan match either.
+        cur.execute("INSERT INTO sessions (name) VALUES (?)", ("prior",))
+        session_id = conn.last_insert_rowid()
+        _, finding_chunk_ids = seed_finding(
+            conn, session_id,
+            title="Prior finding",
+            body="Finding note: " + MARKER + " ACME CORP per the record.",
+        )
+
+        # A tag carried by d2 alone, so --tag can prove it narrows the slice.
+        cur.execute("INSERT INTO tags (name, description) VALUES (?, ?)",
+                    ("senate", "senate filings"))
+        tag_id = conn.last_insert_rowid()
+        cur.execute("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                    (d2, tag_id))
     finally:
         conn.close()
 
@@ -86,6 +103,7 @@ def scan_corpus(project_env):  # noqa: F811
         "long_chunk_id": d1_ids[1],
         "distractor_chunk_id": d2_ids[1],
         "summary_chunk_id": summary_ids[0],
+        "finding_chunk_id": finding_chunk_ids[0],
     }
 
 
@@ -173,6 +191,15 @@ def test_scan_in_documents_scope(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d2"])])
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["in_documents"] == [scan_corpus["d2"]]
+    assert out["total"] == 1
+    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+
+
+def test_scan_tag_scope(scan_corpus, capsys):
+    # Only d2 carries the 'senate' tag, so --tag narrows the slice to its hit.
+    _run(scan_corpus, [MARKER, "--tag", "senate"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["tags"] == ["senate"]
     assert out["total"] == 1
     assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
 
@@ -388,6 +415,16 @@ def test_scan_excludes_summary_chunks(scan_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     ids = {m["chunk_id"] for m in out["matches"]}
     assert scan_corpus["summary_chunk_id"] not in ids
+    assert out["total"] == 3
+
+
+def test_scan_excludes_finding_chunks(scan_corpus, capsys):
+    """A prior-session finding chunk carries the marker, but scan is docs-only:
+    its chunk never rides along and the total stays at the 3 document hits."""
+    _run(scan_corpus, [MARKER])
+    out = json.loads(capsys.readouterr().out)
+    ids = {m["chunk_id"] for m in out["matches"]}
+    assert scan_corpus["finding_chunk_id"] not in ids
     assert out["total"] == 3
 
 
