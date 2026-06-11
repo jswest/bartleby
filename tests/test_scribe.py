@@ -30,6 +30,18 @@ def _emb(seed: float, n: int) -> list[list[float]]:
     ]
 
 
+def _parse_config(archive_root, *, vision_enabled=False, vision_min_dimension=32):
+    """A ParseConfig with the per-format helpers' run-wide defaults — the scalar
+    block these tests used to thread by hand. Only the fields that actually vary
+    across call sites are overridable."""
+    return parsers.ParseConfig(
+        pdf_converter="pdfplumber", html_converter="docling",
+        sparse_text_threshold=100, ocr_min_confidence=30,
+        vision_enabled=vision_enabled, vision_max_dimension=1024,
+        vision_min_dimension=vision_min_dimension, archive_root=archive_root,
+    )
+
+
 class _StubProvider:
     name = "stub"
 
@@ -217,11 +229,8 @@ def test_persist_parse_reuses_existing_file_hash(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            txt, ".txt", file_hash="dup", file_name="doc.txt",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            txt, ".txt", _parse_config(archive_root),
+            file_hash="dup", file_name="doc.txt",
         )
         first = writer.persist_parse(parsed)
         second = writer.persist_parse(parsed)
@@ -245,11 +254,8 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     archive_root.mkdir()
     with pytest.raises(NotAPdfError) as exc:
         parsers._parse_document(
-            src, ".pdf", file_hash="h", file_name="ViewDoc.pdf",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            src, ".pdf", _parse_config(archive_root),
+            file_hash="h", file_name="ViewDoc.pdf",
         )
     assert "HTML page" in str(exc.value)
     assert "No /Root object" not in str(exc.value)
@@ -878,11 +884,8 @@ def test_summarize_all_progress_callback_fires_per_document(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            txt, ".txt", file_hash="h", file_name="doc.txt",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            txt, ".txt", _parse_config(archive_root),
+            file_hash="h", file_name="doc.txt",
         )
         writer.persist_parse(parsed)
 
@@ -917,11 +920,8 @@ def test_summarize_all_lane_callback_reports_document(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            txt, ".txt", file_hash="h", file_name="doc.txt",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            txt, ".txt", _parse_config(archive_root),
+            file_hash="h", file_name="doc.txt",
         )
         writer.persist_parse(parsed)
 
@@ -956,11 +956,8 @@ def test_summarize_all_skips_capped_document(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            txt, ".txt", file_hash="caphash", file_name="doc.txt",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            txt, ".txt", _parse_config(archive_root),
+            file_hash="caphash", file_name="doc.txt",
         )
         writer.persist_parse(parsed)
         # Cap the summary stage so the pass must skip rather than retry.
@@ -1143,11 +1140,8 @@ def test_parse_document_stage_callback_fires_extract_then_embed(
 
     stages: list[str] = []
     parsers._parse_document(
-        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
-        pdf_converter="pdfplumber", html_converter="docling",
-        sparse_text_threshold=100, ocr_min_confidence=30,
-        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-        archive_root=tmp_path / "archive",
+        pdf, ".pdf", _parse_config(tmp_path / "archive"),
+        file_hash="h", file_name="doc.pdf",
         on_stage=stages.append,
     )
 
@@ -1164,11 +1158,8 @@ def test_parse_document_reports_page_count(
     _text_pdf(pdf)
 
     parsed = parsers._parse_document(
-        pdf, ".pdf", file_hash="h", file_name="doc.pdf",
-        pdf_converter="pdfplumber", html_converter="docling",
-        sparse_text_threshold=100, ocr_min_confidence=30,
-        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=32,
-        archive_root=tmp_path / "archive",
+        pdf, ".pdf", _parse_config(tmp_path / "archive"),
+        file_hash="h", file_name="doc.pdf",
     )
 
     assert parsed.page_count == 1
@@ -1197,8 +1188,8 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
         bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
     )
     images = parsers._parse_image_routes(
-        [route], archive_root=tmp_path / "archive", vision_enabled=True,
-        vision_max_dimension=1024, vision_min_dimension=128,
+        [route],
+        _parse_config(tmp_path / "archive", vision_enabled=True, vision_min_dimension=128),
         on_warn=warnings.append,
     )
 
@@ -1221,11 +1212,9 @@ def test_parse_document_threads_on_warn_to_the_leaf(
 
     warnings: list[str] = []
     parsers._parse_document(
-        img, ".png", file_hash="h", file_name="pic.png",
-        pdf_converter="pdfplumber", html_converter="docling",
-        sparse_text_threshold=100, ocr_min_confidence=30,
-        vision_enabled=False, vision_max_dimension=1024, vision_min_dimension=128,
-        archive_root=tmp_path / "archive",
+        img, ".png",
+        _parse_config(tmp_path / "archive", vision_min_dimension=128),
+        file_hash="h", file_name="pic.png",
         on_warn=warnings.append,
     )
 
@@ -1248,11 +1237,8 @@ def test_caption_all_progress_callback_fires_per_image(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            pdf, ".pdf", file_hash="h", file_name="img.pdf",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            pdf, ".pdf", _parse_config(archive_root, vision_enabled=True),
+            file_hash="h", file_name="img.pdf",
         )
         document_id = writer.persist_parse(parsed)
 
@@ -1289,11 +1275,8 @@ def test_caption_all_lane_callback_reports_owning_document(
     try:
         writer = scribe_module.Writer(conn)
         parsed = parsers._parse_document(
-            pdf, ".pdf", file_hash="h", file_name="img.pdf",
-            pdf_converter="pdfplumber", html_converter="docling",
-            sparse_text_threshold=100, ocr_min_confidence=30,
-            vision_enabled=True, vision_max_dimension=1024, vision_min_dimension=32,
-            archive_root=archive_root,
+            pdf, ".pdf", _parse_config(archive_root, vision_enabled=True),
+            file_hash="h", file_name="img.pdf",
         )
         document_id = writer.persist_parse(parsed)
 
