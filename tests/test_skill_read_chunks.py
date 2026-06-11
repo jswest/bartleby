@@ -66,6 +66,7 @@ def test_read_chunks_pagination(seeded_project, capsys):
 
 
 def test_read_chunks_unknown_document(seeded_project, capsys):
+    """An id that's unknown in *both* namespaces: structured error, no hint."""
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
@@ -73,7 +74,97 @@ def test_read_chunks_unknown_document(seeded_project, capsys):
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "DOCUMENT_NOT_FOUND"
+    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert "hint" not in out
+
+
+def _max_chunk_id(project: str) -> int:
+    conn = open_db(project)
+    try:
+        return conn.cursor().execute(
+            "SELECT MAX(chunk_id) FROM chunks"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _document_id_only(project: str) -> int:
+    """Return a document_id that is *not* also a live chunk_id.
+
+    Document and chunk ids share an integer space but autoincrement
+    independently, so freshly-inserted (chunkless) documents collide with
+    existing chunk_ids until the document counter climbs past max(chunk_id).
+    Insert until that holds, so the id is unambiguously document-only.
+    """
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        max_chunk = cur.execute("SELECT MAX(chunk_id) FROM chunks").fetchone()[0]
+        doc_id = 0
+        i = 0
+        while doc_id <= max_chunk:
+            cur.execute(
+                "INSERT INTO documents (file_hash, file_name, file_path, "
+                "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+                (f"hg{i}", f"gamma{i}.pdf", f"/tmp/gamma{i}.pdf", 1, 10),
+            )
+            doc_id = conn.last_insert_rowid()
+            i += 1
+        return doc_id
+    finally:
+        conn.close()
+
+
+def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys):
+    """--document with a live chunk_id errors with a 'did you mean --chunks' hint.
+
+    Use the highest chunk_id, which lies above max(document_id) here, so it is a
+    chunk_id but not a document_id.
+    """
+    chunk_id = _max_chunk_id(seeded_project["project"])
+    assert chunk_id not in {seeded_project["doc_a"], seeded_project["doc_b"]}
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", str(chunk_id),
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert out["hint"] == (
+        f"{chunk_id} is a chunk_id — did you mean --chunks {chunk_id}?"
+    )
+
+
+def test_read_chunks_by_id_hints_when_missing_is_a_document_id(seeded_project, capsys):
+    """A --chunks miss that is a live document_id gets a 'did you mean --document' hint."""
+    # A document-only id (no matching chunk_id) misses the chunk lookup, so the
+    # cross-namespace hint fires.
+    doc_id = _document_id_only(seeded_project["project"])
+
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(doc_id),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == [doc_id]
+    assert out["chunks"] == []
+    assert out["hints"] == {
+        str(doc_id): f"{doc_id} is a document_id — did you mean --document {doc_id}?"
+    }
+
+
+def test_read_chunks_by_id_no_hint_for_valid_id(seeded_project, capsys):
+    """A valid chunk_id lookup carries no hints field — silent on success."""
+    chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", str(chunk_id),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == []
+    assert [c["chunk_id"] for c in out["chunks"]] == [chunk_id]
+    assert "hints" not in out
 
 
 def _doc_chunk_ids(project: str, document_id: int) -> list[int]:
@@ -344,6 +435,45 @@ def test_read_chunks_around_memory_off_foreign_finding_walled(seeded_project, ca
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "MEMORY_OFF"
+
+
+def test_read_chunks_no_hint_for_walled_finding_chunk_colliding_with_document(
+    seeded_project, capsys,
+):
+    """A walled finding chunk whose id collides with a live document_id: no hint.
+
+    Regression: the cross-namespace hint fires for a ``missing`` id that is a
+    live document_id. A memory-walled foreign finding chunk lands in ``missing``
+    too, and its chunk_id can collide with a real document_id (the two id spaces
+    overlap freely). The hint must NOT fire there — the id is genuinely a chunk
+    in this corpus, just walled — only when the id is not a chunk here at all.
+    """
+    project = seeded_project["project"]
+    conn = open_db(project)
+    try:
+        author = _other_session(conn)
+        foreign = _seed_finding_chunk(conn, session_id=author, body="walled body")
+        # Force a document_id that equals the walled finding chunk_id, so the
+        # collision the hint keys off of is present.
+        conn.cursor().execute(
+            "INSERT INTO documents "
+            "(document_id, file_hash, file_name, file_path) "
+            "VALUES (?, ?, ?, ?)",
+            (foreign, f"hash-{foreign}", "collider.pdf", "/x/collider.pdf"),
+        )
+    finally:
+        conn.close()
+
+    start_session(project, memory_enabled=False)
+
+    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    out = json.loads(capsys.readouterr().out)
+    # The walled chunk is missing (no leak)...
+    assert out["missing"] == [foreign]
+    assert out["chunks"] == []
+    # ...and despite the document_id collision, no misleading hint fires.
+    assert "hints" not in out
+    assert "walled body" not in json.dumps(out)
 
 
 def test_read_chunks_around_memory_off_own_finding_allowed(seeded_project, capsys):

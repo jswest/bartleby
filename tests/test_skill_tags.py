@@ -113,6 +113,7 @@ def test_read_tags_reports_doc_count(seeded_project, capsys):
     assert out["tags"] == [{
         "tag_id": tag_id, "name": "ch",
         "description": "Central Hudson rate-case filings", "doc_count": 1,
+        "value_type": None, "pattern": None,
     }]
 
 
@@ -786,6 +787,7 @@ def test_assign_tag_creates_assignment(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out == {
         "tag_id": tag_id, "tag": "bad_ocr",
+        "value": None, "chunk_id": None,
         "assigned": [
             {"document_id": seeded_project["doc_a"], "file_name": "alpha.pdf"},
         ],
@@ -965,3 +967,264 @@ def test_unassign_tag_unknown_tag(seeded_project, capsys):
         ])
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "TAG_NOT_FOUND"
+
+
+# ---------- value-bearing tags ----------
+
+
+def _seed_value_tag(
+    project, name="revenue", value_type="number",
+    pattern=r"(?P<value>\d+)", description="revenue figure",
+) -> int:
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO tags (name, description, value_type, pattern) "
+            "VALUES (?, ?, ?, ?)",
+            (name, description, value_type, pattern),
+        )
+        return conn.last_insert_rowid()
+    finally:
+        conn.close()
+
+
+def _doc_value(project, document_id, tag_id):
+    conn = open_db(project)
+    try:
+        return conn.cursor().execute(
+            "SELECT value, chunk_id FROM document_tags "
+            "WHERE document_id = ? AND tag_id = ?",
+            (document_id, tag_id),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def test_add_tag_creates_value_tag(seeded_project, capsys):
+    add_tag.main([
+        "--project", seeded_project["project"],
+        "--name", "amount", "--description", "a dollar amount",
+        "--value-type", "number", "--pattern", r"\$(?P<value>[\d,]+)",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "created"
+    assert out["tag"]["value_type"] == "number"
+    assert out["tag"]["pattern"] == r"\$(?P<value>[\d,]+)"
+
+
+def test_read_tags_surfaces_and_scopes_value_tags(seeded_project, capsys):
+    _seed_tag(seeded_project["project"], name="boolcat", description="a category")
+    _seed_value_tag(seeded_project["project"])
+
+    read_tags.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    by_name = {t["name"]: t for t in out["tags"]}
+    assert by_name["boolcat"]["value_type"] is None
+    assert by_name["revenue"]["value_type"] == "number"
+    assert by_name["revenue"]["pattern"] == r"(?P<value>\d+)"
+
+    read_tags.main(["--project", seeded_project["project"], "--boolean-only"])
+    out = json.loads(capsys.readouterr().out)
+    names = {t["name"] for t in out["tags"]}
+    assert "boolcat" in names and "revenue" not in names
+
+
+def test_assign_tag_manual_value_casts_and_stores(seeded_project, capsys):
+    tag_id = _seed_value_tag(seeded_project["project"])
+    assign_tag.main([
+        "--project", seeded_project["project"],
+        "--documents", str(seeded_project["doc_a"]), "--tag", "revenue",
+        "--value", "$1,234",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["value"] == "1234"  # normalized
+    assert out["chunk_id"] is None
+    assert _doc_value(seeded_project["project"], seeded_project["doc_a"], tag_id) == (
+        "1234", None,
+    )
+
+
+def test_assign_tag_value_rejected_on_boolean_tag(seeded_project, capsys):
+    _seed_tag(seeded_project["project"])
+    with pytest.raises(SystemExit):
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--documents", str(seeded_project["doc_a"]), "--tag", "bad_ocr",
+            "--value", "x",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "NOT_A_VALUE_TAG"
+
+
+def test_assign_tag_chunk_requires_value(seeded_project, capsys):
+    _seed_value_tag(seeded_project["project"])
+    with pytest.raises(SystemExit):
+        assign_tag.main([
+            "--project", seeded_project["project"],
+            "--documents", str(seeded_project["doc_a"]), "--tag", "revenue",
+            "--chunk", "1",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CHUNK_WITHOUT_VALUE"
+
+
+def test_merge_value_tags_keeps_target_reports_dropped(seeded_project, capsys):
+    src = _seed_value_tag(
+        seeded_project["project"], name="rev_src", pattern=r"(?P<value>\d+)",
+    )
+    dst = _seed_value_tag(
+        seeded_project["project"], name="rev_dst", pattern=r"(?P<value>\d+)",
+    )
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Overlap doc: both carry a distinct value (target kept, source dropped).
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value) VALUES (?, ?, ?)",
+            (seeded_project["doc_a"], dst, "100"),
+        )
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value) VALUES (?, ?, ?)",
+            (seeded_project["doc_a"], src, "999"),
+        )
+        # Source-only doc: its value rides along.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value) VALUES (?, ?, ?)",
+            (seeded_project["doc_b"], src, "200"),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"],
+        "--from", "rev_src", "--into", "rev_dst",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["value_collisions"] == [
+        {"document_id": seeded_project["doc_a"], "kept": "100", "dropped": "999"},
+    ]
+    # Target kept its value on the overlap doc.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_a"], dst,
+    ) == ("100", None)
+    # Source-only value carried over to the target.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_b"], dst,
+    ) == ("200", None)
+
+
+def test_merge_value_tags_carries_value_onto_null_destination(
+    seeded_project, capsys,
+):
+    """A plain (value-NULL) destination row absorbs the source's value+anchor.
+
+    Regression: the destination had a value-tag assignment with no extracted
+    value while the source held one for the same doc. The old INSERT OR IGNORE
+    kept the NULL destination row and then deleted the source — losing the
+    value silently. The merge must carry the source value onto the destination.
+    """
+    src = _seed_value_tag(
+        seeded_project["project"], name="rev_src", pattern=r"(?P<value>\d+)",
+    )
+    dst = _seed_value_tag(
+        seeded_project["project"], name="rev_dst", pattern=r"(?P<value>\d+)",
+    )
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        # Destination: a plain assignment (value NULL, no chunk anchor).
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value) VALUES (?, ?, ?)",
+            (seeded_project["doc_a"], dst, None),
+        )
+        # Source: holds an extracted value + chunk anchor for the same doc.
+        cur.execute(
+            "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_a"], src, "777", 1),
+        )
+    finally:
+        conn.close()
+
+    merge_tags.main([
+        "--project", seeded_project["project"],
+        "--from", "rev_src", "--into", "rev_dst",
+    ])
+    out = json.loads(capsys.readouterr().out)
+
+    # Not a kept/dropped collision — the destination had no competing value.
+    assert out["value_collisions"] == []
+    # The source's value + anchor were carried onto the destination, not lost.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_a"], dst,
+    ) == ("777", 1)
+
+
+def test_merge_value_tag_into_boolean_tag_refused(seeded_project, capsys):
+    """value-tag → boolean tag is refused before any mutation (MIXED_TYPE_MERGE)."""
+    src = _seed_value_tag(
+        seeded_project["project"], name="rev_src", pattern=r"(?P<value>\d+)",
+    )
+    _seed_tag(seeded_project["project"], name="boolcat", description="a category")
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_a"], src, "500", 1),
+        )
+    finally:
+        conn.close()
+
+    with pytest.raises(SystemExit):
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "rev_src", "--into", "boolcat",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MIXED_TYPE_MERGE"
+    # Nothing mutated: source tag and its value row both survive.
+    assert _doc_value(
+        seeded_project["project"], seeded_project["doc_a"], src,
+    ) == ("500", 1)
+    conn = open_db(seeded_project["project"])
+    try:
+        assert tags_helpers.get_tag_by_name(conn, "rev_src") is not None
+    finally:
+        conn.close()
+
+
+def test_merge_boolean_tag_into_value_tag_refused(seeded_project, capsys):
+    """boolean tag → value-tag is refused too (MIXED_TYPE_MERGE)."""
+    _seed_tag(seeded_project["project"], name="boolcat", description="a category")
+    _seed_value_tag(
+        seeded_project["project"], name="rev_dst", pattern=r"(?P<value>\d+)",
+    )
+    with pytest.raises(SystemExit):
+        merge_tags.main([
+            "--project", seeded_project["project"],
+            "--from", "boolcat", "--into", "rev_dst",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MIXED_TYPE_MERGE"
+
+
+def test_list_documents_surfaces_value_chip(seeded_project, capsys):
+    tag_id = _seed_value_tag(seeded_project["project"])
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+            "VALUES (?, ?, ?, ?)",
+            (seeded_project["doc_a"], tag_id, "4242", None),
+        )
+    finally:
+        conn.close()
+
+    list_documents.main([
+        "--project", seeded_project["project"], "--tag", "revenue",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    doc = next(d for d in out["documents"] if d["id"] == seeded_project["doc_a"])
+    assert doc["tag_values"]["revenue"] == {"value": "4242", "chunk_id": None}

@@ -176,6 +176,52 @@ def test_list_documents_include_nulls_keeps_undated(seeded_project, capsys):
     assert out["filters"]["excluded_null_dated"] == 0
 
 
+def test_list_documents_file_like_single_pattern(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"], "--file-like", "alpha%",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
+    assert out["total"] == 1
+    assert out["filters"]["file_like"] == ["alpha%"]
+
+
+def test_list_documents_file_like_repeated_ors(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--file-like", "alpha%", "--file-like", "%.txt",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert {d["file_name"] for d in out["documents"]} == {"alpha.pdf", "beta.txt"}
+    assert out["total"] == 2
+    assert out["filters"]["file_like"] == ["alpha%", "%.txt"]
+
+
+def test_list_documents_file_like_ands_with_date_bound(seeded_project, capsys):
+    # alpha is dated and matches alpha%; beta matches the pattern's sibling but
+    # the date bound + pattern both have to hold, so only alpha survives.
+    _set_authored_date(seeded_project["project"], seeded_project["doc_a"],
+                       "2024-03-15")
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--file-like", "%.pdf", "--authored-after", "2024-01-01",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["file_name"] for d in out["documents"]] == ["alpha.pdf"]
+    assert out["total"] == 1
+    assert out["filters"]["file_like"] == ["%.pdf"]
+
+
+def test_list_documents_file_like_no_match_empties(seeded_project, capsys):
+    list_documents.main([
+        "--project", seeded_project["project"], "--file-like", "zzz%",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["documents"] == []
+    assert out["total"] == 0
+    assert out["filters"]["file_like"] == ["zzz%"]
+
+
 def test_list_documents_no_filter_omits_filters_echo(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)

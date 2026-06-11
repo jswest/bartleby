@@ -105,7 +105,7 @@ def test_search_default_context_omits_keys(seeded_project, capsys):
 
 
 BRIEF_SEARCH_KEYS = {
-    "chunk_id", "source_kind", "source_name", "page_number",
+    "chunk_id", "source_kind", "source_name", "page_number", "authored_date",
     "rank", "normalized_score", "text",
 }
 
@@ -121,6 +121,70 @@ def test_search_brief_projection(seeded_project, capsys):
     for hit in out["results"]:
         assert set(hit) == BRIEF_SEARCH_KEYS
     assert out["modes"] == ["full-text"]  # envelope untouched
+
+
+def _stamp_authored_date(seeded_project, document_id, value):
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "UPDATE summaries SET authored_date = ? WHERE document_id = ?",
+            (value, document_id),
+        )
+    finally:
+        conn.close()
+
+
+def test_search_hit_carries_authored_date(seeded_project, capsys):
+    """authored_date rides every hit (default + brief): the date when the doc is
+    dated, null when undated. doc_a (alpha) gets a summary date; doc_b (beta) has
+    no summary at all → undated."""
+    _stamp_authored_date(seeded_project, seeded_project["doc_a"], "2024-05-09")
+    # query → expected (term, source_name, authored_date)
+    for term, name, expected in [
+        ("pm25", "alpha.pdf", "2024-05-09"),  # dated doc_a
+        ("hello", "beta.txt", None),          # undated doc_b
+    ]:
+        for extra in ([], ["--brief"]):
+            _run([
+                "--project", seeded_project["project"],
+                "--full-text", term, *extra,
+            ])
+            out = json.loads(capsys.readouterr().out)
+            hit = next(r for r in out["results"] if r["source_name"] == name)
+            assert "authored_date" in hit  # present in every mode
+            assert hit["authored_date"] == expected
+
+
+def test_search_finding_authored_date_is_null(seeded_project, capsys):
+    """Findings have no document anchor → authored_date is null, not missing."""
+    from bartleby.session import start_session
+    active = start_session(seeded_project["project"], memory_enabled=True)
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO findings (session_id, title, description, body) "
+            "VALUES (?, ?, ?, ?)",
+            (active["session_id"], "test", "a one-line description",
+             "body about pm25"),
+        )
+        finding_id = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        insert_finding_chunks(conn, finding_id, [
+            ChunkInput(text="finding body about pm25", embedding=emb,
+                       chunk_index=0),
+        ])
+    finally:
+        conn.close()
+
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text", "--findings", "pm25",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    finding_hit = next(r for r in out["results"] if r["source_kind"] == "finding")
+    assert finding_hit["authored_date"] is None
 
 
 def test_search_brief_ignores_add_context(seeded_project, capsys):
@@ -425,6 +489,63 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["in_documents"] == [99999]
+    assert out["results"] == []
+
+
+def test_search_file_like_single_pattern(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "alpha%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["alpha%"]
+    assert out["results"]
+    for r in out["results"]:
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
+def test_search_file_like_excludes_nonmatching_doc(seeded_project, capsys):
+    # "alpha" lives in doc_a (alpha.pdf), but we slice to beta.txt → no hits.
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["beta%"]
+    assert out["results"] == []
+
+
+def test_search_file_like_repeated_ors(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--file-like", "alpha%", "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["alpha%", "beta%"]
+    # The OR group admits both docs; "alpha" still only hits doc_a's chunks.
+    assert out["results"]
+    for r in out["results"]:
+        assert r["source_id"] == seeded_project["doc_a"]
+
+
+def test_search_file_like_ands_with_in_documents(seeded_project, capsys):
+    # in-documents=doc_a AND file_like=beta% → empty intersection → no hits.
+    _run([
+        "--project", seeded_project["project"],
+        "--full-text",
+        "--in-documents", str(seeded_project["doc_a"]),
+        "--file-like", "beta%",
+        "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["file_like"] == ["beta%"]
     assert out["results"] == []
 
 

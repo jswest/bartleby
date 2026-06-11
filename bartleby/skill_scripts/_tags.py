@@ -62,18 +62,27 @@ class TagRow:
     tag_id: int
     name: str
     description: str
+    value_type: str | None = None
+    pattern: str | None = None
+
+    @property
+    def is_value_tag(self) -> bool:
+        """A value-tag carries a method (value_type set); else a boolean tag."""
+        return self.value_type is not None
 
 
 def fetch_vocabulary(conn) -> list[TagRow]:
     rows = conn.cursor().execute(
-        "SELECT tag_id, name, description FROM tags ORDER BY name"
+        "SELECT tag_id, name, description, value_type, pattern "
+        "FROM tags ORDER BY name"
     ).fetchall()
     return [TagRow(*row) for row in rows]
 
 
 def get_tag_by_name(conn, name: str) -> TagRow | None:
     row = conn.cursor().execute(
-        "SELECT tag_id, name, description FROM tags WHERE name = ?",
+        "SELECT tag_id, name, description, value_type, pattern "
+        "FROM tags WHERE name = ?",
         (name,),
     ).fetchone()
     return TagRow(*row) if row else None
@@ -148,6 +157,42 @@ def documents_with_any_tag(conn, tag_ids: list[int]) -> list[int]:
     ]
 
 
+def documents_matching_file_like(conn, patterns: list[str]) -> list[int]:
+    """Distinct document_ids whose ``file_name`` matches any of ``patterns``.
+
+    SQL ``LIKE`` semantics, OR across patterns, pushed down to SQLite as a
+    parameterized predicate (the user's pattern never reaches the SQL text).
+    Returns ``[]`` for an empty pattern list.
+    """
+    if not patterns:
+        return []
+    clause = " OR ".join("file_name LIKE ?" for _ in patterns)
+    return [
+        row[0] for row in conn.cursor().execute(
+            f"SELECT document_id FROM documents WHERE {clause}",
+            patterns,
+        )
+    ]
+
+
+def intersect_file_like_filter(
+    conn, base_ids: list[int] | None, file_like: list[str] | None,
+) -> list[int] | None:
+    """Fold ``--file-like`` into ``base_ids`` as an intersection.
+
+    Without patterns, ``base_ids`` passes through unchanged. With patterns, the
+    result is the intersection of the existing scope (if any) and the documents
+    whose ``file_name`` matches any pattern. An empty intersection yields ``[]``
+    so the caller short-circuits to zero hits.
+    """
+    if not file_like:
+        return base_ids
+    matched = documents_matching_file_like(conn, file_like)
+    if base_ids is None:
+        return matched
+    return sorted(set(base_ids) & set(matched))
+
+
 def intersect_tag_filter(
     conn, in_documents: list[int] | None, tag_names: list[str] | None,
 ) -> tuple[list[int] | None, list[str] | None]:
@@ -205,6 +250,7 @@ class Scope:
     document_ids: list[int] | None
     in_documents: list[int] | None      # echo: as requested (pre-resolution)
     tags: list[str] | None              # echo: requested tag names
+    file_like: list[str] | None         # echo: requested LIKE patterns (OR group)
     authored_after: str | None
     authored_before: str | None
     include_nulls: bool
@@ -216,10 +262,11 @@ class Scope:
 
     @property
     def active(self) -> bool:
-        """True if any scope filter was requested (tags, in_documents, or a date bound)."""
+        """True if any scope filter was requested (tags, in_documents, file_like, or a date bound)."""
         return (
             self.in_documents is not None
             or self.tags is not None
+            or self.file_like is not None
             or self.date_active
         )
 
@@ -235,6 +282,7 @@ class Scope:
         return {
             "tags": self.tags,
             "in_documents": self.in_documents,
+            "file_like": self.file_like,
             "authored_after": self.authored_after,
             "authored_before": self.authored_before,
             "include_nulls": self.include_nulls,
@@ -329,28 +377,32 @@ def resolve_scope(
     conn, *,
     in_documents: list[int] | None = None,
     tags: list[str] | None = None,
+    file_like: list[str] | None = None,
     authored_after: str | None = None,
     authored_before: str | None = None,
     include_nulls: bool = False,
 ) -> Scope:
-    """Fold ``--tag`` ∩ ``--in-documents`` ∩ date bounds into one ``Scope``.
+    """Fold ``--tag`` ∩ ``--in-documents`` ∩ ``--file-like`` ∩ date bounds into one ``Scope``.
 
-    The single scope resolver for ``list_documents``, ``scan``, and
+    The single scope resolver for ``list_documents``, ``scan``, ``search``, and
     ``describe_corpus``. Tags and ``in_documents`` intersect via
-    ``intersect_tag_filter``; an active date bound then narrows that set (and
-    accounts for the undated docs it drops). Unknown tags raise ``TAG_NOT_FOUND``
-    and malformed bounds raise ``INVALID_DATE``.
+    ``intersect_tag_filter``; ``--file-like`` (LIKE patterns OR'd together) then
+    intersects that set via ``intersect_file_like_filter``; an active date bound
+    finally narrows the result (and accounts for the undated docs it drops).
+    Unknown tags raise ``TAG_NOT_FOUND`` and malformed bounds raise ``INVALID_DATE``.
     """
     after = validate_date_bound("--authored-after", authored_after)
     before = validate_date_bound("--authored-before", authored_before)
 
     scoped_docs, tag_names = intersect_tag_filter(conn, in_documents, tags)
+    scoped_docs = intersect_file_like_filter(conn, scoped_docs, file_like)
     date_active = after is not None or before is not None
 
     if not date_active:
         document_ids, excluded = scoped_docs, 0
     elif scoped_docs is not None and not scoped_docs:
-        # Tag/in-documents scope already empty — the bound can't add anything.
+        # The tag/in-documents/file-like scope is already empty — the bound
+        # can't add anything.
         document_ids, excluded = [], 0
     else:
         document_ids, excluded = _apply_date_bound(
@@ -362,6 +414,7 @@ def resolve_scope(
         document_ids=document_ids,
         in_documents=in_documents,
         tags=tag_names,
+        file_like=file_like,
         authored_after=after,
         authored_before=before,
         include_nulls=include_nulls,
@@ -507,4 +560,137 @@ def unassign(conn, document_id: int, tag_id: int) -> None:
     conn.cursor().execute(
         "DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?",
         (document_id, tag_id),
+    )
+
+
+# ---------- value-bearing tags ----------
+
+
+# The three casts a value-tag may declare. ``value_type`` is also the
+# discriminator: NULL = an ordinary boolean tag, non-NULL = a value-tag.
+VALUE_TYPES = ("number", "string", "date")
+
+# A value-tag's pattern MUST expose the captured substring through a named
+# group ``(?P<value>…)`` so extraction is unambiguous about which span to
+# store. (re2 supports named groups identically to stock ``re``.)
+_VALUE_GROUP = "value"
+# Minimal ISO-date shape we require when ``value_type == "date"``: YYYY-MM-DD.
+# The pattern isolates a date substring; the cast just validates its shape so
+# stored dates sort and compare like the summarizer's ``authored_date``.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def validate_value_type(raw: str | None) -> str | None:
+    """Return a validated ``value_type`` (or None for a boolean tag).
+
+    Raises ``INVALID_VALUE_TYPE`` on anything outside :data:`VALUE_TYPES`.
+    """
+    if raw is None:
+        return None
+    if raw not in VALUE_TYPES:
+        raise SkillError(
+            "INVALID_VALUE_TYPE",
+            f"--value-type must be one of {', '.join(VALUE_TYPES)}; got {raw!r}.",
+        )
+    return raw
+
+
+def compile_pattern(pattern: str):
+    """Compile a value-tag pattern with re2, requiring a ``(?P<value>…)`` group.
+
+    re2 (google-re2) guarantees linear-time matching, so agent-authored
+    patterns run across many chunks can't trigger catastrophic backtracking
+    the way stock ``re`` can. Raises ``INVALID_PATTERN`` on a malformed regex
+    or a pattern missing the named ``value`` capture group.
+    """
+    import re2
+
+    try:
+        compiled = re2.compile(pattern)
+    except Exception as e:  # re2 raises its own error types on bad syntax
+        raise SkillError(
+            "INVALID_PATTERN", f"Pattern is not a valid regex: {e}",
+        ) from None
+    if _VALUE_GROUP not in (compiled.groupindex or {}):
+        raise SkillError(
+            "INVALID_PATTERN",
+            "Pattern must contain a named capture group "
+            "(?P<value>…) marking the substring to extract.",
+        )
+    return compiled
+
+
+def normalize_number(raw: str) -> str:
+    """Strip ``$ , %`` and read ``(…)`` as negative, then validate as a number.
+
+    The regex only has to *isolate* a numeric substring; this normalizer cleans
+    common accounting formatting before the cast so patterns stay simple. The
+    canonical stored form is the cleaned numeric string (e.g. ``"(1,234.5)"`` →
+    ``"-1234.5"``). Raises ``INVALID_VALUE`` if the result isn't a number.
+    """
+    s = raw.strip()
+    negative = s.startswith("(") and s.endswith(")")
+    if negative:
+        s = s[1:-1].strip()
+    s = s.replace("$", "").replace(",", "").replace("%", "").strip()
+    if negative and s and not s.startswith("-"):
+        s = "-" + s
+    try:
+        float(s)
+    except ValueError:
+        raise SkillError(
+            "INVALID_VALUE",
+            f"Captured {raw!r} does not normalize to a number.",
+        ) from None
+    return s
+
+
+def cast_value(value_type: str, captured: str) -> str:
+    """Cast a captured substring per ``value_type``, returning canonical text.
+
+    - ``number``: normalized via :func:`normalize_number`.
+    - ``date``: must already be ``YYYY-MM-DD`` (the pattern isolates it).
+    - ``string``: stored verbatim (stripped).
+
+    Stored canonically as text in every case (cast on read by the consumer).
+    Raises ``INVALID_VALUE`` when the captured span can't satisfy the type.
+    """
+    if value_type == "number":
+        return normalize_number(captured)
+    if value_type == "date":
+        s = captured.strip()
+        if not _DATE_RE.match(s):
+            raise SkillError(
+                "INVALID_VALUE",
+                f"Captured {captured!r} is not a YYYY-MM-DD date.",
+            )
+        return s
+    return captured.strip()
+
+
+def require_value_tag(tag: TagRow) -> None:
+    """Raise ``NOT_A_VALUE_TAG`` unless ``tag`` carries a value method."""
+    if not tag.is_value_tag:
+        raise SkillError(
+            "NOT_A_VALUE_TAG",
+            f"Tag {tag.name!r} is a boolean tag (no value_type/pattern); "
+            "create it with --value-type/--pattern to extract values.",
+        )
+
+
+def upsert_value(
+    conn, document_id: int, tag_id: int, value: str, chunk_id: int | None,
+) -> None:
+    """Write a document's value for a tag, anchored to ``chunk_id``.
+
+    One value per ``(tag, document)`` by the table's PK: an existing row is
+    overwritten (ON CONFLICT), so a re-extraction replaces the prior value and
+    its anchor rather than erroring or duplicating.
+    """
+    conn.cursor().execute(
+        "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (document_id, tag_id) DO UPDATE SET "
+        "value = excluded.value, chunk_id = excluded.chunk_id",
+        (document_id, tag_id, value, chunk_id),
     )

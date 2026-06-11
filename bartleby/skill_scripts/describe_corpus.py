@@ -239,6 +239,24 @@ def work(*, conn, args, session_id) -> dict:
         f"SELECT COUNT(*) FROM summaries{w}", wp
     ).fetchone()[0]
 
+    # Anchor-split containers (#254) own zero chunks and so owe no summary — they
+    # are the provenance anchor for their section children, not a summarizable
+    # unit. Excluding them from the unsummarized tally keeps a fully-summarized
+    # split filing from reading as forever-incomplete. A container is any row
+    # another row points at via parent_document_id. Only count containers that
+    # have NO summary row, though: ``summarized`` already counts any container an
+    # agent happened to summarize, and double-subtracting it here would undercount
+    # the unsummarized tally (possibly negative).
+    w, wp = doc_where("document_id")
+    container_count = cur.execute(
+        f"SELECT COUNT(*) FROM documents{w}"
+        f"{' AND' if w else ' WHERE'} document_id IN "
+        f"(SELECT parent_document_id FROM documents "
+        f"WHERE parent_document_id IS NOT NULL) "
+        f"AND document_id NOT IN (SELECT document_id FROM summaries)",
+        wp,
+    ).fetchone()[0]
+
     w, wp = doc_where("d.document_id")
     largest_rows = cur.execute(
         f"SELECT d.document_id, d.file_name, s.title, d.token_count "
@@ -266,7 +284,7 @@ def work(*, conn, args, session_id) -> dict:
         "tags": tags,
         "summary_coverage": {
             "summarized": summarized,
-            "unsummarized": document_count - summarized,
+            "unsummarized": document_count - summarized - container_count,
         },
         "content_mix": content_mix,
         "chunk_length": chunk_length,

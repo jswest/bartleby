@@ -215,6 +215,13 @@ work most:
 - **Schema bumps mean re-ingest.** A non-additive schema change bumps `SCHEMA_VERSION`
   and tells users to re-ingest; there's no automatic migration for those. (This is also
   why the release version's *minor* number is the schema version — see the README.)
+- **The disposition is binary, and the label is reserved.** Every schema change bumps
+  the minor (= `SCHEMA_VERSION`; `check_drift` in `scripts/release.py` refuses to tag a
+  DDL change that forgot the bump) and is either *additive* (ships a chain entry → users
+  run `bartleby project upgrade`) or *breaking* (no chain entry → re-ingest). The
+  `breaking-schema` label is reserved for the re-ingest-required case; additive bumps
+  aren't labelled breaking. The full policy is
+  [the schema-change versioning-policy decision](./docs/decisions/GH-0362-schema-change-versioning-policy-0001.md).
 
 ## Running the tests
 

@@ -55,15 +55,18 @@ Output (compact by default):
         "page_number": int | null,
         "section_heading": str | null,
         "content_type": str | null,
+        "authored_date": str | null,   # summarizer-inferred; null for undated docs
         "text": str,          # snippet, truncated to `preview`
         "text_length": int,   # pre-truncation length
       }, ...]
     }
 
 With ``--brief`` each match keeps only locators — ``document_id``,
-``file_name``, ``chunk_id``, ``page_number`` — dropping ``chunk_index``,
-``section_heading``, ``content_type``, ``text``, and ``text_length`` (so
-``--preview`` has no effect). Pairs with the always-present ``total`` for pure
+``file_name``, ``chunk_id``, ``page_number``, ``authored_date`` — dropping
+``chunk_index``, ``section_heading``, ``content_type``, ``text``, and
+``text_length`` (so ``--preview`` has no effect). ``authored_date`` rides along
+even here (it's locator-grade), so brief matches stay sortable/triageable by
+time without a re-lookup. Pairs with the always-present ``total`` for pure
 "where does this phrase occur" enumeration. The envelope is unchanged.
 
 Count-by aggregate (``--count-by document``):
@@ -123,12 +126,18 @@ Count-by capture (``--count-by '/regex/'``):
 
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
-intersect. ``--authored-after`` / ``--authored-before`` add inclusive
+intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
+only documents whose ``file_name`` matches a pattern and ANDs with the other
+scopes. ``--heading-like <pattern>`` (SQL ``LIKE``, repeatable for OR) is the
+*chunk*-level analogue: it keeps only chunks whose ``section_heading`` matches a
+pattern (chunks with no heading never match) and ANDs with the rest.
+``--authored-after`` / ``--authored-before`` add inclusive
 ``YYYY-MM-DD`` date bounds — because ``authored_date`` is summarizer-inferred
 and often NULL, a bound excludes undated documents by default (``--include-nulls``
 keeps them). Whenever any scope filter is active the response carries a
-``filters`` object echoing it — ``{tags, in_documents, authored_after,
-authored_before, include_nulls, excluded_null_dated}`` — so the counts are
+``filters`` object echoing it — ``{tags, in_documents, file_like, heading_like,
+authored_after, authored_before, include_nulls, excluded_null_dated}`` (with
+``heading_like`` present only when that flag is) — so the counts are
 self-describing; it is absent on an unfiltered scan.
 """
 
@@ -141,7 +150,8 @@ from collections import Counter
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, apply_preview, comma_int_list, nonneg_int, positive_int,
+    add_date_filter_args, add_file_like_arg, apply_preview, comma_int_list,
+    nonneg_int, positive_int,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -181,6 +191,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--tag", action="append", default=None, dest="tags",
         help="Restrict to documents carrying this tag. Repeat for OR semantics.",
     )
+    add_file_like_arg(p)
+    p.add_argument(
+        "--heading-like",
+        action="append", default=None, dest="heading_like", metavar="PATTERN",
+        help=(
+            "Keep only chunks whose section_heading matches this SQL LIKE "
+            "pattern (%% = any run, _ = one char), e.g. '2023 Q%%'. Repeat for "
+            "OR; the group ANDs with --tag / --in-documents / --file-like / "
+            "date bounds. Chunks with no heading never match."
+        ),
+    )
     p.add_argument(
         "--count-by",
         default=None,
@@ -201,8 +222,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--brief",
         action="store_true",
-        help="Locators only (document_id, file_name, chunk_id, page_number); "
-             "drops the text snippet and text_length. Ignores --preview.",
+        help="Locators only (document_id, file_name, chunk_id, page_number, "
+             "authored_date); drops the text snippet and text_length. Ignores "
+             "--preview.",
     )
     p.add_argument(
         "--sort",
@@ -335,6 +357,7 @@ def work(*, conn, args, session_id) -> dict:
         conn,
         in_documents=args.in_documents,
         tags=args.tags,
+        file_like=args.file_like,
         authored_after=args.authored_after,
         authored_before=args.authored_before,
         include_nulls=args.include_nulls,
@@ -342,7 +365,13 @@ def work(*, conn, args, session_id) -> dict:
     restrict = scope.document_ids  # None = whole corpus, [] = empty, else a set
 
     def _envelope(extra: dict) -> dict:
-        return scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        env = scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        if args.heading_like:
+            # --heading-like is a chunk-level filter, so it lives outside Scope's
+            # document-level echo; fold it into the same filters object (creating
+            # one if the scope alone was unfiltered).
+            env.setdefault("filters", {})["heading_like"] = args.heading_like
+        return env
 
     fts_query = _build_fts_query(args.query, match_mode)
     # Nothing can match: an empty token set, or a scope that resolved to no
@@ -355,6 +384,12 @@ def work(*, conn, args, session_id) -> dict:
         placeholders = ",".join("?" * len(restrict))
         where += f" AND c.source_id IN ({placeholders})"
         params.extend(restrict)
+    if args.heading_like:
+        # OR the patterns within the group; the group ANDs with the rest. Pushed
+        # down parameterized — the agent's pattern never reaches the SQL text.
+        like_clause = " OR ".join("c.section_heading LIKE ?" for _ in args.heading_like)
+        where += f" AND ({like_clause})"
+        params.extend(args.heading_like)
 
     cur = conn.cursor()
 
@@ -429,9 +464,14 @@ def work(*, conn, args, session_id) -> dict:
         params,
     ).fetchone()[0]
 
+    # authored_date rides the summaries LEFT JOIN that --sort date already needs —
+    # the canonical summarizer-inferred date that list_documents and the date
+    # filters use — so it costs no extra query and is NULL for undated docs (no
+    # summary, or a summary with no inferred date).
     rows = cur.execute(
         f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
-        f"       c.page_number, c.content_type, c.text, d.file_name "
+        f"       c.page_number, c.content_type, c.text, d.file_name, "
+        f"       s.authored_date "
         f"FROM chunks_fts "
         f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
         f"JOIN documents d ON d.document_id = c.source_id "
@@ -449,9 +489,11 @@ def work(*, conn, args, session_id) -> dict:
                 "file_name": file_name,
                 "chunk_id": chunk_id,
                 "page_number": page_number,
+                "authored_date": authored_date,
             }
             for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name) in rows
+                 page_number, content_type, text, file_name,
+                 authored_date) in rows
         ]
     else:
         matches = [
@@ -463,11 +505,13 @@ def work(*, conn, args, session_id) -> dict:
                 "page_number": page_number,
                 "section_heading": section_heading,
                 "content_type": content_type,
+                "authored_date": authored_date,
                 "text": apply_preview(text, preview),
                 "text_length": len(text),
             }
             for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name) in rows
+                 page_number, content_type, text, file_name,
+                 authored_date) in rows
         ]
     return _envelope({
         "offset": args.offset, "limit": args.limit, "total": total,

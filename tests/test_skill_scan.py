@@ -139,7 +139,10 @@ def test_scan_brief_keeps_only_locators(scan_corpus, capsys):
     assert out["matches"]
     assert out["total"] == 3  # envelope/total unchanged
     for m in out["matches"]:
-        assert set(m) == {"document_id", "file_name", "chunk_id", "page_number"}
+        assert set(m) == {
+            "document_id", "file_name", "chunk_id", "page_number",
+            "authored_date",
+        }
 
 
 def test_scan_brief_ignores_preview(scan_corpus, capsys):
@@ -172,6 +175,152 @@ def test_scan_in_documents_scope(scan_corpus, capsys):
     assert out["filters"]["in_documents"] == [scan_corpus["d2"]]
     assert out["total"] == 1
     assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+
+
+def test_scan_file_like_single_pattern(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "filing_a%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_a%"]
+    assert out["total"] == 2  # the two marker chunks in filing_a.txt
+    assert all(m["document_id"] == scan_corpus["d1"] for m in out["matches"])
+
+
+def test_scan_file_like_repeated_ors(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "filing_a%", "--file-like", "filing_b%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_a%", "filing_b%"]
+    # filing_a (2 markers) OR filing_b (1 marker); filing_c has none.
+    assert out["total"] == 3
+    assert {m["document_id"] for m in out["matches"]} == {
+        scan_corpus["d1"], scan_corpus["d2"],
+    }
+
+
+def test_scan_file_like_ands_with_in_documents(scan_corpus, capsys):
+    # in-documents={d1,d2} AND file_like=filing_b% → only d2 survives.
+    _run(scan_corpus, [
+        MARKER,
+        "--in-documents", f"{scan_corpus['d1']},{scan_corpus['d2']}",
+        "--file-like", "filing_b%",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["filing_b%"]
+    assert out["total"] == 1
+    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+
+
+def test_scan_file_like_no_match_empties(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--file-like", "nonexistent%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []
+    assert out["filters"]["file_like"] == ["nonexistent%"]
+
+
+# ---------- --heading-like (chunk-level section_heading filter) ----------
+
+
+@pytest.fixture
+def heading_corpus(project_env):  # noqa: F811
+    """One doc whose marker chunks each sit under a distinct section_heading,
+    plus a marker chunk with no heading — so --heading-like can prove it keeps
+    only matching headings and never the NULL-heading chunk."""
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("hh", "report.txt", "/tmp/report.txt", 3, 100),
+        )
+        doc = conn.last_insert_rowid()
+        ids = insert_document_chunks(conn, doc, [
+            ChunkInput(text=MARKER + " under Q1.", embedding=_emb(0.0),
+                       chunk_index=0, section_heading="2023 Q1", page_number=1),
+            ChunkInput(text=MARKER + " under Q2.", embedding=_emb(0.1),
+                       chunk_index=1, section_heading="2023 Q2", page_number=2),
+            ChunkInput(text=MARKER + " with no heading.", embedding=_emb(0.2),
+                       chunk_index=2, page_number=3),
+        ])
+    finally:
+        conn.close()
+    return {"project": project_env, "doc": doc,
+            "q1_id": ids[0], "q2_id": ids[1], "no_heading_id": ids[2]}
+
+
+def test_scan_default_match_carries_section_heading(heading_corpus, capsys):
+    _run(heading_corpus, [MARKER])
+    out = json.loads(capsys.readouterr().out)
+    headings = {m["chunk_id"]: m["section_heading"] for m in out["matches"]}
+    assert headings[heading_corpus["q1_id"]] == "2023 Q1"
+    assert headings[heading_corpus["no_heading_id"]] is None
+
+
+def test_scan_brief_drops_section_heading(heading_corpus, capsys):
+    _run(heading_corpus, [MARKER, "--brief"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["matches"]
+    for m in out["matches"]:
+        assert "section_heading" not in m
+
+
+def test_scan_heading_like_single_pattern(heading_corpus, capsys):
+    _run(heading_corpus, [MARKER, "--heading-like", "2023 Q1"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["heading_like"] == ["2023 Q1"]
+    assert out["total"] == 1
+    assert [m["chunk_id"] for m in out["matches"]] == [heading_corpus["q1_id"]]
+    # The NULL-heading marker chunk never rides along.
+    assert heading_corpus["no_heading_id"] not in {m["chunk_id"] for m in out["matches"]}
+
+
+def test_scan_heading_like_repeated_ors(heading_corpus, capsys):
+    _run(heading_corpus, [MARKER, "--heading-like", "2023 Q1", "--heading-like", "2023 Q2"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["heading_like"] == ["2023 Q1", "2023 Q2"]
+    assert out["total"] == 2
+    assert {m["chunk_id"] for m in out["matches"]} == {
+        heading_corpus["q1_id"], heading_corpus["q2_id"],
+    }
+
+
+def test_scan_heading_like_wildcard_ands_with_file_like(heading_corpus, capsys):
+    # file_like matches the doc; heading_like '2023 Q%' keeps only the two
+    # quarter chunks (AND drops the NULL-heading one).
+    _run(heading_corpus, [MARKER, "--file-like", "report%", "--heading-like", "2023 Q%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["filters"]["file_like"] == ["report%"]
+    assert out["filters"]["heading_like"] == ["2023 Q%"]
+    assert out["total"] == 2
+    assert {m["chunk_id"] for m in out["matches"]} == {
+        heading_corpus["q1_id"], heading_corpus["q2_id"],
+    }
+
+
+def test_scan_heading_like_no_match_empties(heading_corpus, capsys):
+    _run(heading_corpus, [MARKER, "--heading-like", "1999 Q%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []
+    assert out["filters"]["heading_like"] == ["1999 Q%"]
+
+
+def test_scan_heading_like_echoed_when_no_other_scope(heading_corpus, capsys):
+    """--heading-like alone is enough to surface a filters object (it isn't a
+    Scope field, so the echo must create one)."""
+    _run(heading_corpus, [MARKER, "--heading-like", "2023 Q1"])
+    out = json.loads(capsys.readouterr().out)
+    assert "filters" in out
+    assert out["filters"] == {"heading_like": ["2023 Q1"]}
+
+
+def test_scan_heading_like_count_by_document(heading_corpus, capsys):
+    """--heading-like composes with --count-by document (chunk-level pushdown)."""
+    _run(heading_corpus, [MARKER, "--count-by", "document", "--heading-like", "2023 Q%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_document_count"] == 1
+    assert out["total_chunk_count"] == 2  # only the two headed chunks
+    assert out["filters"]["heading_like"] == ["2023 Q%"]
 
 
 def test_scan_unfiltered_omits_filters_object(scan_corpus, capsys):
@@ -209,7 +358,8 @@ def test_scan_output_shape(scan_corpus, capsys):
     m = out["matches"][0]
     assert set(m.keys()) == {
         "document_id", "file_name", "chunk_id", "chunk_index",
-        "page_number", "section_heading", "content_type", "text", "text_length",
+        "page_number", "section_heading", "content_type", "authored_date",
+        "text", "text_length",
     }
     assert m["file_name"] == "filing_a.txt"
     assert m["document_id"] == scan_corpus["d1"]
@@ -441,6 +591,20 @@ def test_scan_date_bound_includes_nulls(scan_corpus, capsys):
     assert out["total"] == 3
     assert out["filters"]["include_nulls"] is True
     assert out["filters"]["excluded_null_dated"] == 0
+
+
+def test_scan_match_carries_authored_date(scan_corpus, capsys):
+    """authored_date rides every match (default + brief), null for undated docs."""
+    _date_d1(scan_corpus)  # d1 dated 2024-03-01; d2/d3 stay undated.
+    for extra in ([], ["--brief"]):
+        _run(scan_corpus, [MARKER, *extra])
+        out = json.loads(capsys.readouterr().out)
+        by_doc = {}
+        for m in out["matches"]:
+            assert "authored_date" in m  # present in every mode
+            by_doc[m["document_id"]] = m["authored_date"]
+        assert by_doc[scan_corpus["d1"]] == "2024-03-01"
+        assert by_doc[scan_corpus["d2"]] is None  # undated → null
 
 
 def test_scan_count_by_carries_date_filter(scan_corpus, capsys):

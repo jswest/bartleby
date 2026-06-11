@@ -147,8 +147,8 @@ def upgrade(*, name: str) -> None:
 
         try:
             upgrades_mod.upgrade(conn, current)
-        except RuntimeError as e:
-            _console.print(f"[red]{e}[/red]")
+        except (RuntimeError, apsw.Error) as e:
+            _console.print(f"[red]Upgrade failed: {e}[/red]")
             sys.exit(1)
     finally:
         conn.close()

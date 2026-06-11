@@ -5,13 +5,19 @@ The DDL string here is the canonical schema; run it via ``init_db`` in
 invariant and the rest of the project's load-bearing rules.
 """
 
-# Held at 8 across the #169 concurrent-ingestion omnibus. The `ingests` table
-# and the `ingest_run_id` columns below are additive work landing under that
-# omnibus (issue #171); the single v8→v9 bump + a consolidated
-# `_upgrade_v8_to_v9` ships once when #169 releases, rather than each sub-issue
-# bumping in turn. Until then fresh DBs carry these structures at v8 and an
-# existing v8 corpus must re-ingest to gain them.
-SCHEMA_VERSION = 8
+# v8 == the with-`ingests` shape: the `ingests` table and the `ingest_run_id`
+# columns below are part of v8, not deferred to a later bump. The #169
+# concurrent-ingestion omnibus shipped (released as v0.8.x) *staying at* v8 —
+# the once-promised consolidated `_upgrade_v8_to_v9` never materialized; instead
+# `_upgrade_v7_to_v8` was completed to create `ingests`/`ingest_run_id`
+# additively (issue #212), so a v7 corpus reaches the full v8 shape via
+# `project upgrade`, no re-ingest. Caveat — the #164–#171 window cohort: a DB
+# created from `main` between #164 (stamped v8 with only `failed_ingests`) and
+# #171 (folded `ingests`/`ingest_run_id` into v8, still v8) carries v8 in `meta`
+# without those structures. That cohort is RE-INGEST-ONLY — it shares a version
+# number with released v8 but not its DDL, so no upgrade step can repair it in
+# place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
+SCHEMA_VERSION = 9
 
 EMBEDDING_DIM = 768
 
@@ -40,7 +46,15 @@ CREATE TABLE documents (
     page_count INTEGER,
     token_count INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ingest_run_id INTEGER REFERENCES ingests(run_id)
+    ingest_run_id INTEGER REFERENCES ingests(run_id),
+    -- #254 anchor-splitting (additive, NULL = an ordinary whole-file document):
+    -- a TOC-anchored EDGAR filing splits into a zero-chunk container row (these
+    -- four NULL, holds the original file_hash) plus N section rows that point
+    -- parent_document_id at it and carry the TOC anchor / link-text / order.
+    parent_document_id INTEGER REFERENCES documents(document_id),
+    anchor_id TEXT,
+    section_title TEXT,
+    section_order INTEGER
 );
 
 CREATE TABLE summaries (
@@ -133,12 +147,16 @@ CREATE TABLE tags (
     tag_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
+    value_type TEXT CHECK (value_type IN ('number', 'string', 'date')),
+    pattern TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE document_tags (
     document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+    value TEXT,
+    chunk_id INTEGER REFERENCES chunks(chunk_id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (document_id, tag_id)
 );

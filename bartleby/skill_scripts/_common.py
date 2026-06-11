@@ -413,6 +413,26 @@ def add_date_filter_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_file_like_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--file-like`` filename filter (consumed by ``scan``,
+    ``search``, and ``list_documents``).
+
+    Repeatable; the patterns OR together and the group ANDs with the other
+    scope filters (``--tag`` / ``--in-documents`` / date bounds). Resolution
+    (the parameterized ``file_name LIKE`` pushdown) happens in
+    ``_tags.resolve_scope``; this is the canonical help wording.
+    """
+    parser.add_argument(
+        "--file-like",
+        action="append", default=None, dest="file_like", metavar="PATTERN",
+        help=(
+            "Restrict to documents whose file_name matches this SQL LIKE "
+            "pattern (%% = any run, _ = one char), e.g. 'J000304__%%'. Repeat "
+            "for OR; the group ANDs with --tag / --in-documents / date bounds."
+        ),
+    )
+
+
 def apply_preview(text: str, preview: int | None) -> str:
     """Truncate ``text`` to ``preview`` chars (appending ``…``); pass through
     unchanged when ``preview`` is ``None`` or the text already fits."""
@@ -535,16 +555,24 @@ def source_names(
 def chunk_locations(
     conn, chunk_ids: list[int]
 ) -> dict[int, dict]:
-    """Resolve {source_kind, source_id, file_name, page_number} per chunk_id.
+    """Resolve {source_kind, source_id, file_name, page_number, authored_date}
+    per chunk_id.
 
-    ``file_name`` / ``page_number`` may be ``None`` when not applicable:
+    ``file_name`` / ``page_number`` / ``authored_date`` may be ``None`` when not
+    applicable. ``authored_date`` is the summarizer-inferred date carried on the
+    underlying document's summary row (the same value list_documents and the date
+    filters use); it is resolved in the same per-kind join that fetches
+    ``file_name``, so it costs no extra query:
       - document chunks: file_name from the document; page_number parsed from
-        ``section_heading`` (the 'page N' convention pdfplumber writes).
+        ``section_heading`` (the 'page N' convention pdfplumber writes);
+        authored_date from the document's summary (NULL if undated / no summary).
       - summary chunks: file_name from the underlying document; page_number is
-        always None (summaries aren't paginated).
+        always None (summaries aren't paginated); authored_date off the summary
+        row itself.
       - image chunks: file_name from the primary document the image is linked
-        to; page_number from that ``document_images`` join row.
-      - finding chunks: file_name + page_number both None.
+        to; page_number from that ``document_images`` join row; authored_date
+        from that primary document's summary.
+      - finding chunks: file_name + page_number + authored_date all None.
 
     Chunks whose row was deleted between query and resolution are absent from
     the result entirely.
@@ -565,37 +593,39 @@ def chunk_locations(
         out[cid] = {
             "source_kind": kind, "source_id": sid,
             "file_name": None, "page_number": page_number,
+            "authored_date": None,
         }
         by_kind.setdefault(kind, []).append(cid)
 
-    # Resolve file_name per source_kind. page_number is already on the row
-    # except for image chunks, where the source-of-truth is the
+    # Resolve file_name + authored_date per source_kind. page_number is already
+    # on the row except for image chunks, where the source-of-truth is the
     # document_images join (an image can live on different pages in different
     # documents).
     for kind, cids in by_kind.items():
         sids = list({out[cid]["source_id"] for cid in cids})
         sid_ph = ",".join("?" * len(sids))
-        if kind == "document":
-            names = {
-                did: fname for did, fname in cur.execute(
-                    f"SELECT document_id, file_name FROM documents "
-                    f"WHERE document_id IN ({sid_ph})",
-                    sids,
+        if kind in ("document", "summary"):
+            if kind == "document":
+                query = (
+                    f"SELECT d.document_id, d.file_name, s.authored_date "
+                    f"FROM documents d "
+                    f"LEFT JOIN summaries s USING (document_id) "
+                    f"WHERE d.document_id IN ({sid_ph})"
                 )
-            }
-            for cid in cids:
-                out[cid]["file_name"] = names.get(out[cid]["source_id"])
-        elif kind == "summary":
-            names = {
-                sid: fname for sid, fname in cur.execute(
-                    f"SELECT s.summary_id, d.file_name "
+            else:
+                query = (
+                    f"SELECT s.summary_id, d.file_name, s.authored_date "
                     f"FROM summaries s JOIN documents d USING (document_id) "
-                    f"WHERE s.summary_id IN ({sid_ph})",
-                    sids,
+                    f"WHERE s.summary_id IN ({sid_ph})"
                 )
+            meta = {
+                key: (fname, authored_date)
+                for key, fname, authored_date in cur.execute(query, sids)
             }
             for cid in cids:
-                out[cid]["file_name"] = names.get(out[cid]["source_id"])
+                row = meta.get(out[cid]["source_id"])
+                if row:
+                    out[cid]["file_name"], out[cid]["authored_date"] = row
         elif kind == "image":
             anchors = _image_anchors(cur, sids)
             for cid in cids:
@@ -603,40 +633,49 @@ def chunk_locations(
                 if anchor:
                     out[cid]["file_name"] = anchor["file_name"]
                     out[cid]["page_number"] = anchor["page_number"]
-        # 'finding' falls through with file_name=None (and page_number from
-        # the column, which is None for finding chunks).
+                    out[cid]["authored_date"] = anchor.get("authored_date")
+        # 'finding' falls through with file_name/authored_date=None (and
+        # page_number from the column, which is None for finding chunks).
     return out
 
 
 def _image_anchors(cur, image_ids: list[int]) -> dict[int, dict]:
     """Per-image primary anchor + count of additional documents using it.
 
-    Returns ``{image_id: {file_name, page_number, other_doc_count}}``. The
-    'primary' anchor is the lowest ``(document_id, page_number)`` join row,
-    matching the existing source_name formatting rule.
+    Returns ``{image_id: {file_name, page_number, authored_date,
+    other_doc_count}}``. The 'primary' anchor is the lowest
+    ``(document_id, page_number)`` join row, matching the existing source_name
+    formatting rule; ``authored_date`` is that primary document's
+    summarizer-inferred date (NULL if undated / no summary), folded into the
+    same join so it costs no extra query.
     """
     if not image_ids:
         return {}
     ph = ",".join("?" * len(image_ids))
     rows = list(cur.execute(
-        f"SELECT di.image_id, di.document_id, di.page_number, d.file_name "
+        f"SELECT di.image_id, di.document_id, di.page_number, d.file_name, "
+        f"       s.authored_date "
         f"FROM document_images di "
         f"JOIN documents d ON d.document_id = di.document_id "
+        f"LEFT JOIN summaries s ON s.document_id = di.document_id "
         f"WHERE di.image_id IN ({ph}) "
         f"ORDER BY di.image_id, di.document_id, di.page_number",
         image_ids,
     ))
-    by_image: dict[int, list[tuple[int, int | None, str]]] = {}
-    for image_id, doc_id, page_number, file_name in rows:
-        by_image.setdefault(image_id, []).append((doc_id, page_number, file_name))
+    by_image: dict[int, list[tuple[int, int | None, str, str | None]]] = {}
+    for image_id, doc_id, page_number, file_name, authored_date in rows:
+        by_image.setdefault(image_id, []).append(
+            (doc_id, page_number, file_name, authored_date)
+        )
 
     out: dict[int, dict] = {}
     for image_id, occurrences in by_image.items():
-        primary_doc, primary_page, primary_name = occurrences[0]
+        primary_doc, primary_page, primary_name, primary_date = occurrences[0]
         out[image_id] = {
             "file_name": primary_name,
             "page_number": primary_page,
-            "other_doc_count": len({d for d, _, _ in occurrences}) - 1,
+            "authored_date": primary_date,
+            "other_doc_count": len({d for d, _, _, _ in occurrences}) - 1,
         }
     return out
 

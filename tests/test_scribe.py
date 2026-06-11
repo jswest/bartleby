@@ -1929,6 +1929,85 @@ def test_scribe_unwraps_edgar_full_submission(
         conn.close()
 
 
+_ANCHORED_IXBRL = """\
+<?xml version="1.0"?>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<div>
+<a href="#sec_business">Business</a>
+<a href="#sec_risk">Risk Factors</a>
+<a href="#sec_glossary">Glossary of Terms</a>
+</div>
+<h2 id="sec_business">Business</h2>
+<p>We build rockets and launch them into orbit for customers worldwide today.</p>
+<h2 id="sec_risk">Risk Factors</h2>
+<p>Rockets are dangerous and may explode on the launch pad without any warning.</p>
+<h2 id="sec_glossary">Glossary of Terms</h2>
+<p>Apogee is the highest point in an orbit reached by a spacecraft during flight.</p>
+</body>
+</html>
+"""
+
+
+def test_scribe_splits_anchored_edgar_filing_end_to_end(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A TOC-anchored iXBRL filing ingested with html_converter=sec2md splits into
+    a zero-chunk container + N section documents, each with its own summary; the
+    container owes no summary (#254)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {
+            "summary_depth": "one-shot", "html_converter": "sec2md",
+            "provider": "anthropic", "model": "test-model",
+            "temperature": 0.0, "max_summarize_tokens": 50_000,
+        },
+    )
+    stub = _StubProvider(text="## Section summary\n\nKey points.")
+    monkeypatch.setattr(
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.ingest.summary.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+    src = _write_txt(tmp_path / "filing.htm", _ANCHORED_IXBRL)
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        cur = conn.cursor()
+        # One container + three sections.
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 4
+        container = cur.execute(
+            "SELECT document_id FROM documents WHERE parent_document_id IS NULL "
+            "AND anchor_id IS NULL"
+        ).fetchone()[0]
+        # Container owns no chunks and no summary.
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind='document' "
+            "AND source_id = ?", (container,),
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM summaries WHERE document_id = ?", (container,),
+        ).fetchone()[0] == 0
+        # Each section summarized (3 sections → 3 summaries, 3 provider calls).
+        assert stub.calls == 3
+        assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 3
+        # Sections carry the TOC anchor metadata.
+        anchors = {
+            r[0] for r in cur.execute(
+                "SELECT anchor_id FROM documents WHERE parent_document_id = ?",
+                (container,),
+            )
+        }
+        assert anchors == {"sec_business", "sec_risk", "sec_glossary"}
+    finally:
+        conn.close()
+
+
 # -------------------- content-sniffed file-type resolution --------------------
 
 
@@ -2734,5 +2813,51 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
         assert conn.cursor().execute(
             "SELECT attempts FROM failed_ingests"
         ).fetchone()[0] == MAX_INGEST_ATTEMPTS               # not bumped past cap
+    finally:
+        conn.close()
+
+
+def test_persist_parse_rolls_back_on_mid_unit_failure(isolated_project, tmp_path):
+    """persist_parse is one transaction: a failure *after* the documents INSERT
+    leaves no trace in documents/chunks/images.
+
+    The "atomic parse" invariant — a documents row implies a finished parse, so
+    resume only re-runs missing units — rides entirely on persist_parse's single
+    ``with self.conn`` (writer.py). This test forces a failure mid-unit (a
+    wrong-sized embedding on the second document chunk, which _validate rejects
+    after the documents row is already inserted) and asserts the whole unit
+    rolled back. A refactor that split that transaction would pass the rest of
+    the suite while silently committing a partial parse that reads as complete
+    (load-bearing under #254, which writes N+1 documents rows per file).
+    """
+    from bartleby.db.chunks import ChunkInput
+    from bartleby.ingest.writer import ParsedDocument, ParsedImage, Writer
+
+    good, bad = _emb(0.0, 1)[0], [0.1] * (EMBEDDING_DIM + 1)
+    parsed = ParsedDocument(
+        file_hash="atomic", file_name="atomic.pdf",
+        archive_path=tmp_path / "atomic.pdf", page_count=1, token_count=2,
+        document_chunks=[
+            ChunkInput(text="First chunk lands fine.", embedding=good, chunk_index=0),
+            # Second chunk's embedding is one dim too long: insert_document_chunks
+            # validates the batch and raises *after* the documents INSERT.
+            ChunkInput(text="Second chunk is poison.", embedding=bad, chunk_index=1),
+        ],
+        images=[ParsedImage(
+            hash="atomic-img", archive_path=tmp_path / "i.jpg",
+            width=10, height=10, page_number=1, image_index_on_page=1,
+        )],
+    )
+
+    conn = open_db("test_proj")
+    try:
+        writer = Writer(conn)
+        with pytest.raises(ValueError, match="dims"):
+            writer.persist_parse(parsed)
+
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
     finally:
         conn.close()

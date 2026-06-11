@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import bartleby.config
@@ -18,6 +20,60 @@ from bartleby.db.schema import EMBEDDING_DIM, SCHEMA_VERSION
 
 def _emb(seed: float = 0.0) -> list[float]:
     return [seed + i * 0.001 for i in range(EMBEDDING_DIM)]
+
+
+def _strip_db_to_v4(db_path) -> None:
+    """Undo every additive step since v4 on the DB at ``db_path``, stamping it
+    back to schema v4 so the upgrade chain can be re-walked end-to-end.
+
+    Used by both upgrade-chain tests. Opens a raw connection (FK enforcement
+    OFF, so dropping FK-referenced tables/columns is legal) and reverses the
+    chain newest-first.
+    """
+    import apsw
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        # v9 value-bearing-tags (#114) + anchor-splitting (#254) columns: strip
+        # them first so the re-walked v8→v9 step can re-ALTER them without a
+        # `duplicate column name` (flagged by #355).
+        cur.execute("ALTER TABLE tags DROP COLUMN value_type")
+        cur.execute("ALTER TABLE tags DROP COLUMN pattern")
+        cur.execute("ALTER TABLE document_tags DROP COLUMN value")
+        cur.execute("ALTER TABLE document_tags DROP COLUMN chunk_id")
+        # `documents` can't be reduced with DROP COLUMN here: schema.py annotates
+        # the #254 columns with a multi-line `--` comment block, and SQLite's
+        # DROP COLUMN re-parses the residual CREATE — once the annotated columns
+        # are gone the dangling comment yields `incomplete input`. FK enforcement
+        # is OFF on this raw connection and the table is empty, so rebuild it
+        # straight to its v4 shape (no ingest_run_id, no #254 columns) instead.
+        cur.execute("DROP TABLE documents")
+        cur.execute(
+            "CREATE TABLE documents ("
+            "  document_id INTEGER PRIMARY KEY, "
+            "  file_hash TEXT NOT NULL UNIQUE, "
+            "  file_name TEXT NOT NULL, "
+            "  file_path TEXT NOT NULL, "
+            "  page_count INTEGER, "
+            "  token_count INTEGER, "
+            "  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        # v8 provenance (drop the FK-bearing columns before the table).
+        for table in ("summaries", "chunks"):
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
+        cur.execute("DROP TABLE ingests")
+        cur.execute("DROP TABLE failed_ingests")
+        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
+        cur.execute("ALTER TABLE sessions DROP COLUMN model")
+        cur.execute("DROP INDEX idx_document_tags_tag")
+        cur.execute("DROP TABLE document_tags")
+        cur.execute("DROP TABLE tags")
+        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
+        cur.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+    finally:
+        conn.close()
 
 
 @pytest.fixture
@@ -181,34 +237,21 @@ def test_list_projects_marks_active(projects_root):
 
 
 def test_upgrade_chain_walks_from_v4_through_current(projects_root):
-    """Upgrading a v4 DB walks v4→v5→v6→v7→v8, leaving all new shapes present."""
-    import apsw
+    """Upgrading a v4 DB walks v4→v5→v6→v7→v8→v9, leaving all new shapes present.
 
+    The v0.9.0 assembly bumped SCHEMA_VERSION to 9, activating the additive
+    `_upgrade_v8_to_v9` step (#114 value-bearing-tags + #254 anchor-splitting
+    columns). The chain strips a fresh DB back to v4 — including the eight v9
+    columns — then re-walks the whole chain and asserts the upgraded DB is
+    byte-identical in DDL to a freshly-created one.
+    """
     from bartleby.commands import project as project_cmd
     from bartleby.db.connection import project_db_path
 
     bartleby.project.create_project("alpha")
     # Simulate a v4 DB by undoing every additive step since.
     db_path = project_db_path("alpha")
-    conn = apsw.Connection(str(db_path))
-    try:
-        cur = conn.cursor()
-        # v8 provenance (drop the FK-bearing columns before the table).
-        for table in ("documents", "summaries", "chunks"):
-            cur.execute(f"ALTER TABLE {table} DROP COLUMN ingest_run_id")
-        cur.execute("DROP TABLE ingests")
-        cur.execute("DROP TABLE failed_ingests")
-        cur.execute("ALTER TABLE sessions DROP COLUMN harness")
-        cur.execute("ALTER TABLE sessions DROP COLUMN model")
-        cur.execute("DROP INDEX idx_document_tags_tag")
-        cur.execute("DROP TABLE document_tags")
-        cur.execute("DROP TABLE tags")
-        cur.execute("ALTER TABLE summaries DROP COLUMN authored_date")
-        cur.execute(
-            "UPDATE meta SET value = '4' WHERE key = 'schema_version'"
-        )
-    finally:
-        conn.close()
+    _strip_db_to_v4(db_path)
 
     project_cmd.upgrade(name="alpha")
 
@@ -246,22 +289,68 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
     finally:
         conn.close()
 
-    # The upgraded DB must be schema-equivalent to a freshly-created v8: same
-    # tables, same columns per table. This is the regression gate that keeps
-    # the upgrade chain in lockstep with db/schema.py.
+    # The upgraded DB must be schema-equivalent to a freshly-created DB down to
+    # the full DDL: same tables AND indexes, with identical column types,
+    # NOT NULL / DEFAULT / CHECK constraints, and FK clauses. This is the
+    # regression gate that keeps the upgrade chain in lockstep with
+    # db/schema.py — comparing only table+column names (the old check) let
+    # dropped indexes, type drift, and constraint/FK drift slip through.
     bartleby.project.create_project("beta")
 
+    def _top_level_defs(body: str) -> tuple[str, ...]:
+        """Split a CREATE TABLE body on its top-level commas, normalized + sorted.
+
+        Each piece is one column or table-constraint definition (carrying its
+        type, ``NOT NULL`` / ``DEFAULT`` / ``CHECK``, and ``REFERENCES`` FK
+        clause). Splitting only at paren-depth 0 keeps a ``CHECK (... IN (...))``
+        or a multi-column ``PRIMARY KEY (a, b)`` intact. Sorting makes the set
+        order-independent: the chain's ``ALTER TABLE ADD COLUMN`` appends, so a
+        chain-built table lists the same columns in a different order than
+        schema.py — equivalent schemas we must not flag.
+        """
+        parts, depth, current = [], 0, ""
+        for ch in body:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append(current)
+                current = ""
+            else:
+                current += ch
+        parts.append(current)
+        return tuple(sorted(" ".join(p.split()) for p in parts if p.strip()))
+
+    def _normalize(sql: str):
+        # Strip `--` line comments (schema.py annotates columns; the chain's
+        # hand-built CREATEs don't — pure layout, not structural drift) and
+        # collapse whitespace, so only real DDL differences survive.
+        sql = re.sub(r"--[^\n]*", "", sql)
+        sql = " ".join(sql.split())
+        if sql.upper().startswith("CREATE TABLE"):
+            open_paren, close_paren = sql.find("("), sql.rfind(")")
+            head = sql[:open_paren].strip().upper()
+            return (head, _top_level_defs(sql[open_paren + 1 : close_paren]))
+        # Indexes (and any non-plain-table CREATE) compare whole: a dropped or
+        # altered index changes this normalized string outright.
+        return (sql.upper(),)
+
     def _schema(conn):
-        tables = [
-            row[0] for row in conn.cursor().execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        ]
+        # Compare the full DDL of every table and index — column types,
+        # NOT NULL / DEFAULT / CHECK constraints, FK clauses, and index
+        # definitions — between the chain-upgraded DB and a fresh one, after
+        # normalizing away whitespace, comments, and (within a table) column
+        # order so pure formatting never false-positives. Rows with NULL sql
+        # (autoindexes, the FTS5 / vec0 shadow internals) carry no
+        # author-written DDL to diff and are skipped; both DBs build those
+        # identically from the same CREATEs.
         return {
-            t: sorted(
-                r[1] for r in conn.cursor().execute(f"PRAGMA table_info({t})")
+            (kind, name): _normalize(sql)
+            for kind, name, sql in conn.cursor().execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE type IN ('table', 'index') AND sql IS NOT NULL"
             )
-            for t in tables
         }
 
     upgraded, fresh = open_db("alpha"), open_db("beta")
@@ -284,3 +373,196 @@ def test_upgrade_chain_walks_from_v4_through_current(projects_root):
         assert count == 1
     finally:
         conn.close()
+
+
+def test_upgrade_resumes_after_mid_chain_crash(projects_root, monkeypatch):
+    """A crash mid-chain leaves the DB at the last completed step; a re-run finishes.
+
+    Each `_upgrade_vN_to_vN+1` now stamps `meta.schema_version` inside its own
+    `with conn:`, so a step that raises after earlier steps committed leaves the
+    DB at an intermediate version (not a structural-vs-meta mismatch). A re-run
+    resumes from there and completes to SCHEMA_VERSION with no double-application
+    (re-walking a committed step would raise "table already exists").
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    # Simulate a v4 DB by undoing every additive step since.
+    db_path = project_db_path("alpha")
+    _strip_db_to_v4(db_path)
+
+    # Kill the chain at the v6→v7 step: v4→v5 and v5→v6 commit first, then this
+    # raises. The DB must come to rest at v6 (the last completed step), with the
+    # v5/v6 shapes present and the v7 shape absent.
+    real_v6_to_v7 = upgrades_mod._UPGRADES[6]
+    crashed = {"hit": False}
+
+    def boom(_conn):
+        crashed["hit"] = True
+        raise apsw.SQLError("simulated mid-chain crash")
+
+    monkeypatch.setitem(upgrades_mod._UPGRADES, 6, boom)
+
+    with pytest.raises(apsw.Error):
+        upgrades_mod.upgrade(apsw.Connection(str(db_path)), 4)
+    assert crashed["hit"]
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        cur = conn.cursor()
+        meta = dict(cur.execute("SELECT key, value FROM meta"))
+        # Stamped to the last completed step, not the original v4 or the target.
+        assert meta["schema_version"] == "6"
+        names = {
+            row[0] for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "tags" in names and "document_tags" in names  # v6 landed
+        scols = [r[1] for r in cur.execute("PRAGMA table_info(sessions)")]
+        assert "model" not in scols  # v7 did NOT land
+    finally:
+        conn.close()
+
+    # Re-run with the real step restored: it must resume from v6 (never
+    # re-applying v5/v6 — that would raise "table already exists") and complete.
+    monkeypatch.setitem(upgrades_mod._UPGRADES, 6, real_v6_to_v7)
+    project_cmd.upgrade(name="alpha")
+
+    conn = open_db("alpha")
+    try:
+        cur = conn.cursor()
+        meta = dict(cur.execute("SELECT key, value FROM meta"))
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+        scols = [r[1] for r in cur.execute("PRAGMA table_info(sessions)")]
+        assert "model" in scols and "harness" in scols  # v7 now landed
+        names = {
+            row[0] for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "ingests" in names and "failed_ingests" in names  # v8 landed
+    finally:
+        conn.close()
+
+
+def test_upgrade_refuses_below_chain_first_step_without_mutation(
+    projects_root, monkeypatch
+):
+    """A DB below the chain's first entry is refused, leaving the DB unchanged.
+
+    The chain's first step is keyed at v4 (`_upgrade_v4_to_v5`), so a DB stamped
+    at v3 has no step to walk from: `upgrade()`'s loop hits `_UPGRADES.get(3) is
+    None` and raises ("non-additive bump; re-ingest is required"), and the CLI
+    wrapper surfaces that as exit 1. This pins the refusal property the
+    per-step-commit structure makes load-bearing — a refused upgrade must not
+    persist any DDL or move the version stamp. We assert both the full
+    `sqlite_master` DDL and the `schema_version` stamp are byte-identical
+    before and after.
+    """
+    import io
+
+    import apsw
+    from rich.console import Console
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    db_path = project_db_path("alpha")
+
+    # Stamp the DB at v3 — one below the chain's first entry (v4). No code
+    # branches on schema version, so the stale stamp alone reproduces the
+    # "below the chain" condition; the structural DDL stays at the fresh shape.
+    below_first = min(upgrades_mod._UPGRADES) - 1
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+            (str(below_first),),
+        )
+    finally:
+        conn.close()
+
+    def _snapshot():
+        conn = apsw.Connection(str(db_path))
+        try:
+            cur = conn.cursor()
+            master = cur.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                "ORDER BY type, name"
+            ).fetchall()
+            stamp = cur.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            return master, stamp
+        finally:
+            conn.close()
+
+    before = _snapshot()
+    assert before[1] == str(below_first)
+
+    # CLI: refuses with exit 1 and the re-ingest guidance.
+    buf = io.StringIO()
+    monkeypatch.setattr(project_cmd, "_console", Console(file=buf, width=200))
+    with pytest.raises(SystemExit) as exc:
+        project_cmd.upgrade(name="alpha")
+    assert exc.value.code == 1
+    assert "re-ingest" in buf.getvalue().lower()
+
+    # The refusal mutated nothing: full DDL and the version stamp are identical.
+    after = _snapshot()
+    assert after == before
+
+
+def test_upgrade_refuses_db_newer_than_code(projects_root):
+    """A DB stamped newer than the code is refused without mutation.
+
+    With `current_version > SCHEMA_VERSION` the chain loop never runs, so the
+    unconditional `upgraded_at` write at the tail used to rewrite a newer DB's
+    `schema_version` *down* to the code's — silently corrupting the version
+    contract. `upgrade()` must raise before touching anything, and the CLI
+    wrapper must surface that as exit 1 ("Update the code, not the DB").
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db import upgrades as upgrades_mod
+    from bartleby.db.connection import project_db_path
+
+    bartleby.project.create_project("alpha")
+    db_path = project_db_path("alpha")
+
+    # Stamp the DB one version ahead of the code.
+    newer = SCHEMA_VERSION + 1
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(newer),)
+        )
+        before = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+    finally:
+        conn.close()
+
+    # Library: raises, and stamps/mutates nothing.
+    with pytest.raises(RuntimeError, match="newer than this code"):
+        upgrades_mod.upgrade(apsw.Connection(str(db_path)), newer)
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        after = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert after["schema_version"] == str(newer)  # not rewritten down
+        assert "upgraded_at" not in after  # tail write never ran
+        assert after == before  # nothing mutated at all
+    finally:
+        conn.close()
+
+    # CLI: refuses with exit 1.
+    with pytest.raises(SystemExit) as exc:
+        project_cmd.upgrade(name="alpha")
+    assert exc.value.code == 1

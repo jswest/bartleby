@@ -7,16 +7,19 @@ to override the default set. Opt into neighbor chunks with ``--add-context N``
 (0..5) — each step roughly multiplies output size by (1 + 2N).
 
 ``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
-underlying document carries any of the given tags. Combines naturally with
-``--in-documents`` (intersection: the document must be in both sets) and
-drops findings the same way (findings have no document anchor).
+underlying document carries any of the given tags. ``--file-like <pattern>``
+(SQL ``LIKE``, repeatable for OR) restricts to chunks whose document's
+``file_name`` matches a pattern. Both combine naturally with ``--in-documents``
+(intersection: the document must be in every active set) and drop findings the
+same way (findings have no document anchor).
 
-Whenever a scope filter (``--in-documents`` / ``--tag``) is active the response
-carries a nested ``filters`` object echoing it — ``{tags, in_documents,
-authored_after, authored_before, include_nulls, excluded_null_dated}`` — the
-same contract ``scan`` / ``list_documents`` / ``describe_corpus`` emit (search
-takes no date bounds, so those keys are null/0). It is absent on an unfiltered
-search; the query terms themselves always stay top-level under ``query``.
+Whenever a scope filter (``--in-documents`` / ``--tag`` / ``--file-like``) is
+active the response carries a nested ``filters`` object echoing it — ``{tags,
+in_documents, file_like, authored_after, authored_before, include_nulls,
+excluded_null_dated}`` — the same contract ``scan`` / ``list_documents`` /
+``describe_corpus`` emit (search takes no date bounds, so those keys are
+null/0). It is absent on an unfiltered search; the query terms themselves always
+stay top-level under ``query``.
 
 Output:
     {
@@ -30,6 +33,7 @@ Output:
         "source_name": str,
         "file_name": str|null,        # the originating doc (None for findings)
         "page_number": int|null,      # first-class column; populated for pdfplumber + image chunks
+        "authored_date": str|null,    # summarizer-inferred date of the originating doc (null when undated / for findings)
         "chunk_index": int,
         "section_heading": str|null, "content_type": str|null,
         "text": str,
@@ -46,11 +50,13 @@ Output:
     }
 
 With ``--brief`` each hit is trimmed to a triage projection — ``chunk_id``,
-``source_kind``, ``source_name``, ``page_number``, ``rank``,
+``source_kind``, ``source_name``, ``page_number``, ``authored_date``, ``rank``,
 ``normalized_score``, and a truncated ``text`` preview — dropping ``source_id``,
 ``chunk_index``, ``section_heading``, ``content_type``, ``score``, the full
-``text``, the context arrays, and the image locators. The envelope is unchanged;
-``--add-context`` is ignored under ``--brief``.
+``text``, the context arrays, and the image locators. ``authored_date`` is kept
+even here (it's locator-grade) so brief hits stay triageable by time without a
+re-lookup. The envelope is unchanged; ``--add-context`` is ignored under
+``--brief``.
 """
 
 from __future__ import annotations
@@ -64,8 +70,8 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, chunk_locations, comma_int_list, memory_enabled,
-    positive_int, source_names,
+    add_file_like_arg, apply_preview, chunk_locations, comma_int_list,
+    memory_enabled, positive_int, source_names,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -116,6 +122,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "as an intersection."
         ),
     )
+    add_file_like_arg(p)
     p.add_argument(
         "--add-context",
         type=_context_value,
@@ -133,10 +140,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Skinny per-hit projection for triage: chunk_id, source_kind, "
-            "source_name, page_number, rank, normalized_score, and a truncated "
-            f"text preview ({BRIEF_PREVIEW_CHARS} chars). Drops source_id, "
-            "chunk_index, section_heading, content_type, full text, the context "
-            "arrays, and image locators. --add-context is ignored under --brief."
+            "source_name, page_number, authored_date, rank, normalized_score, "
+            f"and a truncated text preview ({BRIEF_PREVIEW_CHARS} chars). Drops "
+            "source_id, chunk_index, section_heading, content_type, full text, "
+            "the context arrays, and image locators. --add-context is ignored "
+            "under --brief."
         ),
     )
     p.add_argument("--project", type=str, default=None)
@@ -365,7 +373,10 @@ def work(*, conn, args, session_id) -> dict:
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)
-    scope = resolve_scope(conn, in_documents=args.in_documents, tags=args.tags)
+    scope = resolve_scope(
+        conn, in_documents=args.in_documents, tags=args.tags,
+        file_like=args.file_like,
+    )
     # None = whole corpus, [] = a filter matched nothing, else the resolved slice.
     restrict = scope.document_ids
 
@@ -429,13 +440,17 @@ def work(*, conn, args, session_id) -> dict:
     results = []
     for rank, (chunk_id, score) in enumerate(scored, start=1):
         _, source_kind, source_id, chunk_index, section_heading, content_type, text = rows[chunk_id]
-        loc = locations.get(chunk_id, {"file_name": None, "page_number": None})
+        loc = locations.get(
+            chunk_id,
+            {"file_name": None, "page_number": None, "authored_date": None},
+        )
         if args.brief:
             results.append({
                 "chunk_id": chunk_id,
                 "source_kind": source_kind,
                 "source_name": names[(source_kind, source_id)],
                 "page_number": loc["page_number"],
+                "authored_date": loc["authored_date"],
                 "rank": rank,
                 "normalized_score": score / top_score,
                 "text": apply_preview(text, BRIEF_PREVIEW_CHARS),
@@ -448,6 +463,7 @@ def work(*, conn, args, session_id) -> dict:
             "source_name": names[(source_kind, source_id)],
             "file_name": loc["file_name"],
             "page_number": loc["page_number"],
+            "authored_date": loc["authored_date"],
             "chunk_index": chunk_index,
             "section_heading": section_heading,
             "content_type": content_type,
