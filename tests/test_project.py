@@ -7,7 +7,6 @@ import re
 import pytest
 
 import bartleby.config
-import bartleby.db.connection
 import bartleby.project
 from bartleby.db.chunks import (
     ChunkInput,
@@ -77,17 +76,10 @@ def _strip_db_to_v4(db_path) -> None:
 
 
 @pytest.fixture
-def projects_root(tmp_path, monkeypatch):
-    """Point every PROJECTS_DIR reference at a fresh tmp dir + isolate config."""
-    projects = tmp_path / "projects"
-    projects.mkdir()
-
-    config_path = tmp_path / "config.yaml"
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+def projects_root():
+    """The per-test projects dir (isolated via conftest's _isolate_bartleby_home)."""
+    projects = bartleby.config.projects_dir()
+    projects.mkdir(parents=True, exist_ok=True)
     yield projects
 
 

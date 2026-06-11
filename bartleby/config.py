@@ -9,9 +9,30 @@ from typing import Any
 import yaml
 
 
-BARTLEBY_DIR = Path.home() / ".bartleby"
-PROJECTS_DIR = BARTLEBY_DIR / "projects"
-CONFIG_PATH = BARTLEBY_DIR / "config.yaml"
+def bartleby_dir() -> Path:
+    """Root of Bartleby's on-disk state — ``~/.bartleby`` by default.
+
+    Honors the ``BARTLEBY_HOME`` env override so a test, CI run, or a coding
+    agent working in an isolated worktree can point the *entire* state tree —
+    ``projects/``, ``config.yaml``, scratch, the served UI — at a throwaway
+    directory instead of the user's live corpora.
+
+    Resolved **lazily on every call**, not as a module constant: an eager read
+    at import time freezes the path, so a ``BARTLEBY_HOME`` set *after* import
+    (the in-process pattern an isolating caller naturally reaches for) would be
+    a silent no-op and writes would still land in the live namespace. Call-time
+    resolution is the load-bearing detail here. See GH-0393.
+    """
+    env = os.environ.get("BARTLEBY_HOME")
+    return Path(env).expanduser() if env else Path.home() / ".bartleby"
+
+
+def projects_dir() -> Path:
+    return bartleby_dir() / "projects"
+
+
+def config_path() -> Path:
+    return bartleby_dir() / "config.yaml"
 
 
 def scratch_dir() -> Path:
@@ -21,7 +42,7 @@ def scratch_dir() -> Path:
     than world-readable ``/tmp`` — in-progress research notes shouldn't leak to
     other local users on shared machines.
     """
-    return BARTLEBY_DIR / "tmp"
+    return bartleby_dir() / "tmp"
 
 
 def ensure_scratch_dir() -> Path:
@@ -38,9 +59,10 @@ def ensure_scratch_dir() -> Path:
 
 
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
+    path = config_path()
+    if not path.exists():
         return {}
-    return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 # Substrings that mark a config key as secret. Match by name so a newly-added
@@ -83,15 +105,16 @@ def config_drift(prior: dict | None, current: dict) -> list[str]:
 
 
 def save_config(config: dict) -> None:
-    BARTLEBY_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(
+    bartleby_dir().mkdir(parents=True, exist_ok=True)
+    path = config_path()
+    path.write_text(
         yaml.safe_dump(config, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
     # The config holds provider API keys; keep it owner-only. ``write_text``
     # leaves an existing file's mode untouched and a fresh file at the umask
     # default (typically 0644), so set the bits explicitly on every save.
-    CONFIG_PATH.chmod(0o600)
+    path.chmod(0o600)
 
 
 def save_config_field(key: str, value: Any) -> None:

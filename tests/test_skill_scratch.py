@@ -13,16 +13,14 @@ def _mode(path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def test_ensure_scratch_dir_creates_mode_700(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "BARTLEBY_DIR", tmp_path)
+def test_ensure_scratch_dir_creates_mode_700(tmp_path):
     d = config.ensure_scratch_dir()
     assert d == tmp_path / "tmp"
     assert d.is_dir()
     assert _mode(d) == 0o700
 
 
-def test_ensure_scratch_dir_idempotent_and_tightens_perms(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "BARTLEBY_DIR", tmp_path)
+def test_ensure_scratch_dir_idempotent_and_tightens_perms(tmp_path):
     loose = tmp_path / "tmp"
     loose.mkdir()
     loose.chmod(0o777)  # simulate a pre-existing world-readable dir

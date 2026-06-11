@@ -11,12 +11,9 @@ from bartleby.config import config_drift, redact_config, save_config
 
 
 @pytest.fixture
-def isolated_config(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(config, "CONFIG_PATH", config_path)
-    yield config_path
+def isolated_config():
+    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
+    yield bartleby.config.config_path()
 
 
 def _scripted_inputs(monkeypatch, answers: list[str]):

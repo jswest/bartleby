@@ -9,7 +9,7 @@ import re
 import shutil
 from pathlib import Path
 
-from bartleby.config import PROJECTS_DIR, load_config, save_config_field
+from bartleby.config import load_config, projects_dir, save_config_field
 from bartleby.db.connection import init_db, open_db, project_db_path
 from bartleby.db.schema import ALLOWED_SOURCE_KINDS
 
@@ -26,7 +26,7 @@ def validate_project_name(name: str):
 
 
 def get_project_dir(name: str) -> Path:
-    return PROJECTS_DIR / name
+    return projects_dir() / name
 
 
 def get_active_project() -> str | None:
@@ -72,12 +72,13 @@ def delete_project(name: str):
 
 
 def list_projects() -> list[dict]:
-    if not PROJECTS_DIR.exists():
+    root = projects_dir()
+    if not root.exists():
         return []
 
     active = get_active_project()
     projects = []
-    for entry in sorted(PROJECTS_DIR.iterdir()):
+    for entry in sorted(root.iterdir()):
         if entry.is_dir():
             db_path = entry / "bartleby.db"
             projects.append({

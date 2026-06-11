@@ -30,12 +30,10 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
-from bartleby.config import BARTLEBY_DIR
+from bartleby.config import bartleby_dir
 from bartleby.db.connection import project_db_path
 from bartleby.lib import console
 
-
-SERVE_DIR = BARTLEBY_DIR / "serve"
 
 # The SvelteKit UI is packaged as data inside the ``bartleby`` package, so it
 # resolves the same way from a checkout or an installed wheel. ``files()``
@@ -124,15 +122,17 @@ def main(project: str | None = None) -> None:
     if project is not None:
         _override_project(project)
     console.splash()
+    # Resolved here (not at import) so ``BARTLEBY_HOME`` set before launch wins.
+    serve_dir = bartleby_dir() / "serve"
     checkout = _is_source_checkout()
-    console.info(f"Syncing UI from {WEB_SRC} → {SERVE_DIR}…")
-    _sync_web(WEB_SRC, SERVE_DIR, symlink_src=checkout)
+    console.info(f"Syncing UI from {WEB_SRC} → {serve_dir}…")
+    _sync_web(WEB_SRC, serve_dir, symlink_src=checkout)
 
-    if _needs_install(SERVE_DIR):
+    if _needs_install(serve_dir):
         console.info("Installing npm dependencies (one-time)…")
-        subprocess.run(["npm", "install"], cwd=SERVE_DIR, check=True)
+        subprocess.run(["npm", "install"], cwd=serve_dir, check=True)
 
     console.big("Starting Bartleby UI (vite will print the URL below)…")
-    os.chdir(SERVE_DIR)
+    os.chdir(serve_dir)
     # Replace this process so Ctrl-C goes straight to npm/vite.
     os.execvp("npm", ["npm", "run", "dev"])
