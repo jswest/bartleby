@@ -53,11 +53,13 @@ from bartleby.lib import timing
 from bartleby.lib.consts import (
     ALLOWED_HTML_CONVERTERS,
     ALLOWED_PDF_CONVERTERS,
+    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_MAX_SUMMARIZE_TOKENS,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_TEMPERATURE,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
@@ -242,9 +244,15 @@ def main(
         max_workers = (
             resolve._resolve_max_workers(config, timings=timings) if to_parse else 1
         )
-        caption_workers = resolve._resolve_caption_workers(config, timings=timings)
-        summarize_workers = resolve._resolve_summarize_workers(
-            config, effective_provider=effective_provider, timings=timings
+        caption_workers = resolve._resolve_io_workers(
+            config, key="caption_workers", default=DEFAULT_CAPTION_WORKERS,
+            provider=config.get("vision_provider"),
+            verb="captions", unit="captioning one image", timings=timings,
+        )
+        summarize_workers = resolve._resolve_io_workers(
+            config, key="summarize_workers", default=DEFAULT_SUMMARIZE_WORKERS,
+            provider=effective_provider,
+            verb="summarizes", unit="summarizing one document", timings=timings,
         )
         if len(to_parse) > 1 and max_workers > 1:
             console.info(

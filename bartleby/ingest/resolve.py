@@ -91,76 +91,47 @@ def _resolve_max_workers(config: dict, *, timings: bool) -> int:
     return n
 
 
-def _resolve_caption_workers(config: dict, *, timings: bool) -> int:
-    """Resolve how many images caption concurrently in the post-parse stage.
-
-    Unlike parse workers (RAM-bound, auto-sized), captioning is network/IO-bound,
-    so this is a plain configured count defaulting to ``DEFAULT_CAPTION_WORKERS``.
-    ``--timings`` forces 1: the per-stage breakdown is a sequential baseline,
-    meaningless once captions overlap (same rationale as ``max_workers``).
-
-    A local Ollama vision provider clamps to 1 regardless (#243): Ollama's
-    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
-    and parallel workers only queue. An explicit ``caption_workers`` > 1 is
-    ignored (with a warning) rather than honored — the clamp is the point.
-    """
-    configured = int(config.get("caption_workers") or DEFAULT_CAPTION_WORKERS)
-    if timings:
-        if configured > 1:
-            console.warn(
-                "--timings captions sequentially (caption_workers=1) for a "
-                "clean baseline."
-            )
-        return 1
-    if config.get("vision_provider") == "ollama":
-        # Re-read the raw value (not `configured`, which has the default folded
-        # in) so the warning fires only on an explicit count, not the default.
-        if int(config.get("caption_workers") or 0) > 1:
-            console.warn(
-                "caption_workers > 1 ignored — Ollama serializes requests "
-                "(OLLAMA_NUM_PARALLEL defaults to 1); captioning one image at a time."
-            )
-        return 1
-    return max(1, configured)
-
-
-def _resolve_summarize_workers(
-    config: dict, *, effective_provider: str | None, timings: bool
+def _resolve_io_workers(
+    config: dict,
+    *,
+    key: str,
+    default: int,
+    provider: str | None,
+    verb: str,
+    unit: str,
+    timings: bool,
 ) -> int:
-    """Resolve how many documents summarize concurrently in the post-parse pass.
+    """Resolve the worker count for a network/IO-bound post-parse stage.
 
-    Like captioning (and unlike RAM-bound parse workers), summarization is
-    network/IO-bound, so this is a plain configured count defaulting to
-    ``DEFAULT_SUMMARIZE_WORKERS``. ``--timings`` forces 1 for a clean per-document
-    baseline, meaningless once summaries overlap (same rationale as the others).
+    Captioning and summarization share this resolver (#441): unlike RAM-bound
+    parse workers (auto-sized), both are a plain configured count (``config[key]``)
+    defaulting to ``default``. ``--timings`` forces 1 for a sequential baseline,
+    meaningless once the stage's work overlaps (same rationale as ``max_workers``).
 
-    A local Ollama LLM provider clamps to 1 regardless (#243): Ollama's
-    ``OLLAMA_NUM_PARALLEL`` defaults to 1, so a single model serializes requests
-    and parallel workers only queue. An explicit ``summarize_workers`` > 1 is
-    ignored (with a warning) rather than honored — the clamp is the point.
+    A local Ollama ``provider`` clamps to 1 regardless (#243): with
+    ``OLLAMA_NUM_PARALLEL`` defaulting to 1 a single model serializes requests, so
+    an explicit ``config[key]`` > 1 is ignored (with a warning), not honored.
 
-    ``effective_provider`` is the provider summaries *actually* run against —
-    ``--provider`` override folded in, not bare ``config['provider']`` (#314).
-    Clamping on the config alone bypasses the clamp when ``--provider ollama``
-    overrides a cloud config, and falsely clamps a cloud override over an Ollama
-    config; the caller computes the effective name and threads it in.
+    ``provider`` is the provider the stage *actually* runs against — the caller
+    threads in the already-resolved name (``config['vision_provider']`` for
+    captions; the ``--provider`` override folded in for summaries, not bare
+    ``config['provider']`` (#314)) so the clamp keys off the real backend.
+    ``verb``/``unit`` only shape the warning strings.
     """
-    configured = int(config.get("summarize_workers") or DEFAULT_SUMMARIZE_WORKERS)
+    configured = int(config.get(key) or default)
     if timings:
         if configured > 1:
             console.warn(
-                "--timings summarizes sequentially (summarize_workers=1) for a "
-                "clean baseline."
+                f"--timings {verb} sequentially ({key}=1) for a clean baseline."
             )
         return 1
-    if effective_provider == "ollama":
+    if provider == "ollama":
         # Re-read the raw value (not `configured`, which has the default folded
         # in) so the warning fires only on an explicit count, not the default.
-        if int(config.get("summarize_workers") or 0) > 1:
+        if int(config.get(key) or 0) > 1:
             console.warn(
-                "summarize_workers > 1 ignored — Ollama serializes requests "
-                "(OLLAMA_NUM_PARALLEL defaults to 1); summarizing one document "
-                "at a time."
+                f"{key} > 1 ignored — Ollama serializes requests "
+                f"(OLLAMA_NUM_PARALLEL defaults to 1); {unit} at a time."
             )
         return 1
     return max(1, configured)
