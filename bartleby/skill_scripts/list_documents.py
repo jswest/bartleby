@@ -61,15 +61,16 @@ import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, add_file_like_arg, pagination_hint,
+    add_date_filter_args, add_file_like_arg, comma_int_list, nonneg_int,
+    pagination_hint, positive_int,
 )
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("list_documents", __doc__)
     p.add_argument("--project", type=str, default=None)
-    p.add_argument("--limit", type=int, default=200)
-    p.add_argument("--offset", type=int, default=0)
+    p.add_argument("--limit", type=positive_int, default=200)
+    p.add_argument("--offset", type=nonneg_int, default=0)
     tier = p.add_mutually_exclusive_group()
     tier.add_argument(
         "--verbose",
@@ -80,6 +81,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--brief",
         action="store_true",
         help="Skinniest tier below the default: id, file_name, title only.",
+    )
+    p.add_argument(
+        "--in-documents",
+        type=comma_int_list("document_id"),
+        default=None,
+        dest="in_documents",
+        help="Comma-separated document_ids to restrict the listing to.",
     )
     p.add_argument(
         "--tag",
@@ -152,6 +160,7 @@ def work(*, conn, args, session_id) -> dict:
     cur = conn.cursor()
     scope = resolve_scope(
         conn,
+        in_documents=args.in_documents,
         tags=args.tags,
         file_like=args.file_like,
         authored_after=args.authored_after,

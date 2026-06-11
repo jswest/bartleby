@@ -54,6 +54,7 @@ from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     extract_citations,
     finding_chunk_and_citation_ids,
+    positive_int,
     resolve_citations,
     session_provenance,
 )
@@ -61,7 +62,7 @@ from bartleby.skill_scripts._common import (
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_finding", __doc__)
-    p.add_argument("--finding", type=int, required=True, dest="finding_id")
+    p.add_argument("--finding", type=positive_int, required=True, dest="finding_id")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 

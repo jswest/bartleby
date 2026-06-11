@@ -49,13 +49,15 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     comma_int_list,
+    embed_body_chunks,
     load_finding_body,
-    rebuild_finding_chunks,
+    positive_int,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
     session_provenance,
     validated_replacement,
+    write_finding_chunks,
 )
 
 
@@ -65,7 +67,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--from", type=comma_int_list("finding_id"), required=True,
         dest="from_ids",
     )
-    p.add_argument("--into", type=int, required=True, dest="into")
+    p.add_argument("--into", type=positive_int, required=True, dest="into")
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)
@@ -118,6 +120,10 @@ def work(*, conn, args, session_id) -> dict:
         conn, citations, ids, code="CITES_MERGED_CHUNKS", action="merge",
     )
 
+    # Embed BEFORE the UPDATE (the first write) so the transaction's write
+    # lock doesn't span the lazy model load (issue #364).
+    chunk_inputs = embed_body_chunks(body)
+
     owning_session_id = owners[target]
     current_title, current_description = cur.execute(
         "SELECT title, description FROM findings WHERE finding_id = ?",
@@ -136,7 +142,7 @@ def work(*, conn, args, session_id) -> dict:
         "WHERE finding_id = ?",
         (new_title, new_description, body, target),
     )
-    chunk_ids = rebuild_finding_chunks(conn, target, body)
+    chunk_ids = write_finding_chunks(conn, target, chunk_inputs)
     replace_finding_citations(conn, target, citations)
     for src in sources:
         delete_chunks_for(conn, "finding", src)

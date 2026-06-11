@@ -49,7 +49,9 @@ def stub_embed(monkeypatch):
             norm = sum(v * v for v in vec) ** 0.5 or 1.0
             out.append([v / norm for v in vec])
         return out
-    monkeypatch.setattr(tags_helpers, "embed_texts", _stub)
+    # find_similar_tag imports embed_texts lazily from its source module
+    # (#371), so patch it there rather than on _tags.
+    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", _stub)
 
 
 @pytest.fixture
@@ -185,7 +187,7 @@ def test_delete_tag_cascades_assignments(seeded_project, capsys):
         conn.close()
 
     delete_tag.main([
-        "--project", seeded_project["project"], "--name", "ch",
+        "--project", seeded_project["project"], "--tag", "ch",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "deleted"
@@ -207,6 +209,55 @@ def test_rename_tag_refuses_existing_target(seeded_project, capsys):
         ])
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "TAG_EXISTS"
+
+
+def test_rename_tag_refuses_normalized_equal_target(seeded_project, capsys):
+    # add_tag catches "NYSEG" ≡ "ny-seg" via its normalized leg; rename_tag
+    # must too — renaming "ny-seg" onto a normalized-equal "NYSEG" is refused,
+    # not silently duplicated.
+    conn = open_db(seeded_project["project"])
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tags (name, description) VALUES ('ny-seg', 'd1')")
+        cur.execute("INSERT INTO tags (name, description) VALUES ('NYSEG', 'd2')")
+    finally:
+        conn.close()
+
+    with pytest.raises(SystemExit):
+        rename_tag.main([
+            "--project", seeded_project["project"],
+            "--old", "ny-seg", "--new", "NYSEG",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "TAG_EXISTS"
+
+
+def test_rename_tag_allows_case_punctuation_self_rename(seeded_project, capsys):
+    # A normalized-equal self-rename (same tag_id) must pass the collision
+    # guard — the tag_id != target check lets "ny-seg" → "NYSEG" through.
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO tags (name, description) VALUES ('ny-seg', 'd1')"
+        )
+    finally:
+        conn.close()
+
+    rename_tag.main([
+        "--project", seeded_project["project"],
+        "--old", "ny-seg", "--new", "NYSEG",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "renamed"
+    assert out["new_name"] == "NYSEG"
+
+    conn = open_db(seeded_project["project"])
+    try:
+        assert conn.cursor().execute(
+            "SELECT name FROM tags WHERE name = 'NYSEG'"
+        ).fetchone()[0] == "NYSEG"
+    finally:
+        conn.close()
 
 
 def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys):

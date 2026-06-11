@@ -15,7 +15,7 @@ import argparse
 from bartleby.db.chunks import delete_chunks_for, insert_summary_chunks
 from bartleby.ingest.summarize import normalize_authored_date
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import embed_body_chunks
+from bartleby.skill_scripts._common import embed_body_chunks, positive_int
 
 
 _AUTHOR_MODEL = "agent"
@@ -23,7 +23,7 @@ _AUTHOR_MODEL = "agent"
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("save_summary", __doc__)
-    p.add_argument("--document", type=int, required=True, dest="document_id")
+    p.add_argument("--document", type=positive_int, required=True, dest="document_id")
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--text", type=str, required=True)

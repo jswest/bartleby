@@ -14,9 +14,11 @@ integer space, and `read_chunks` accepts both kinds (`--document`, `--chunks`,
 
 ## What we changed
 
-- **Unknown `--document` returns `{"error", "code": "UNKNOWN_DOCUMENT"}`** with
-  a non-zero exit (renamed from the prior `DOCUMENT_NOT_FOUND`, to match the
-  issue's contract). No path emits a raw traceback for a bad id — the runner's
+- **Unknown `--document` returns `{"error", "code": "DOCUMENT_NOT_FOUND"}`** with
+  a non-zero exit. (Issue #397 reverted the short-lived `UNKNOWN_DOCUMENT` name
+  back to the canonical `*_NOT_FOUND` codes — `DOCUMENT_NOT_FOUND` /
+  `CHUNK_NOT_FOUND` — now used across the whole skill surface.) No path emits a
+  raw traceback for a bad id — the runner's
   catch-all already prevents leaked tracebacks, and this seam now raises a
   *meaningful* code rather than relying on that backstop.
 - **Cross-namespace hint, one direction at a time.** When the unknown

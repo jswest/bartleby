@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """rename_tag — change a tag's name (assignments preserved).
 
-Errors if the new name already exists; use ``merge_tags`` to combine.
+Errors if the new name already exists — by the same normalized-name check
+``add_tag`` runs, so ``"NYSEG"`` collides with an existing ``"ny-seg"`` rather
+than creating a duplicate; use ``merge_tags`` to combine. A case/punctuation-
+only self-rename of the same tag (e.g. ``"ny-seg"`` → ``"NYSEG"``) is allowed.
 
 Output:
     {"status": "renamed", "tag_id": int, "old_name": str, "new_name": str}
@@ -13,7 +16,7 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._tags import (
-    get_tag_by_name, normalize_name, require_tag_by_name,
+    find_tag_by_normalized_name, normalize_name, require_tag_by_name,
 )
 
 
@@ -37,11 +40,13 @@ def work(*, conn, args, session_id) -> dict:
 
     tag = require_tag_by_name(conn, args.old)
 
-    existing = get_tag_by_name(conn, new_name)
+    # tag_id guard lets a case/punctuation-only self-rename through.
+    existing = find_tag_by_normalized_name(conn, new_name)
     if existing is not None and existing.tag_id != tag.tag_id:
         raise SkillError(
             "TAG_EXISTS",
-            f"A tag named {new_name!r} already exists. "
+            f"A tag named {existing.name!r} already exists "
+            f"(normalized-equal to {new_name!r}). "
             "Use merge_tags if you want to combine them.",
         )
 

@@ -42,14 +42,16 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
-from bartleby.skill_scripts._common import memory_enabled, pagination_hint
+from bartleby.skill_scripts._common import (
+    memory_enabled, nonneg_int, pagination_hint, positive_int,
+)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("list_findings", __doc__)
     p.add_argument("--project", type=str, default=None)
-    p.add_argument("--limit", type=int, default=200)
-    p.add_argument("--offset", type=int, default=0)
+    p.add_argument("--limit", type=positive_int, default=200)
+    p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument(
         "--brief",
         action="store_true",

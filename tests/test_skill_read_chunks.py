@@ -74,7 +74,7 @@ def test_read_chunks_unknown_document(seeded_project, capsys):
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
     assert "hint" not in out
 
 
@@ -130,7 +130,7 @@ def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys)
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
     assert out["hint"] == (
         f"{chunk_id} is a chunk_id — did you mean --chunks {chunk_id}?"
     )
@@ -492,3 +492,138 @@ def test_read_chunks_around_memory_off_own_finding_allowed(seeded_project, capsy
     assert out["mode"] == "around"
     assert out["target"]["chunk_id"] == own
     assert [c["chunk_id"] for c in out["chunks"]] == [own]
+
+
+# --- around-chunk window mechanics (#409) --------------------------------
+
+
+def _wide_document(project: str, n: int = 9) -> tuple[int, list[int]]:
+    """Insert a fresh document with ``n`` text chunks; return (doc_id, chunk_ids).
+
+    chunk_ids are returned in chunk_index order (0..n-1) so tests can pick an
+    interior target and assert the returned neighbourhood by id.
+    """
+    from bartleby.db.chunks import insert_document_chunks
+
+    conn = open_db(project)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, "
+            "page_count, token_count) VALUES (?, ?, ?, ?, ?)",
+            ("wide-hash", "wide.pdf", "/tmp/wide.pdf", 1, 100),
+        )
+        doc_id = conn.last_insert_rowid()
+        emb = [0.01 * i for i in range(EMBEDDING_DIM)]
+        chunk_ids = insert_document_chunks(conn, doc_id, [
+            ChunkInput(text=f"wide chunk {i}", embedding=emb, chunk_index=i,
+                       section_heading=None, page_number=None, content_type="text")
+            for i in range(n)
+        ])
+    finally:
+        conn.close()
+    return doc_id, chunk_ids
+
+
+def test_read_chunks_around_interior_default_window(seeded_project, capsys):
+    """Interior target with the default window returns 3 neighbours on each side."""
+    project = seeded_project["project"]
+    doc_id, chunk_ids = _wide_document(project, n=9)
+    target = chunk_ids[4]  # chunk_index 4, comfortably interior for window 3
+
+    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["mode"] == "around"
+    assert out["window"] == 3  # default window
+    assert out["target"]["chunk_id"] == target
+    assert out["target"]["chunk_index"] == 4
+    assert out["target"]["source_kind"] == "document"
+    assert out["target"]["source_id"] == doc_id
+    assert out["target"]["source_name"] == "wide.pdf"
+    # 3 each side + target, in chunk_index order.
+    assert [c["chunk_id"] for c in out["chunks"]] == chunk_ids[1:8]
+    assert [c["chunk_index"] for c in out["chunks"]] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_read_chunks_around_explicit_window(seeded_project, capsys):
+    """--window N returns N neighbours on each side and echoes the window."""
+    project = seeded_project["project"]
+    _doc_id, chunk_ids = _wide_document(project, n=9)
+    target = chunk_ids[4]
+
+    read_chunks.main([
+        "--project", project, "--around-chunk", str(target), "--window", "1",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["window"] == 1
+    assert [c["chunk_index"] for c in out["chunks"]] == [3, 4, 5]
+
+
+def test_read_chunks_around_window_zero_returns_only_target(seeded_project, capsys):
+    """--window 0 returns the target chunk alone."""
+    project = seeded_project["project"]
+    _doc_id, chunk_ids = _wide_document(project, n=9)
+    target = chunk_ids[4]
+
+    read_chunks.main([
+        "--project", project, "--around-chunk", str(target), "--window", "0",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["window"] == 0
+    assert [c["chunk_id"] for c in out["chunks"]] == [target]
+    assert [c["chunk_index"] for c in out["chunks"]] == [4]
+
+
+def test_read_chunks_around_clamps_at_document_start(seeded_project, capsys):
+    """A target at chunk_index 0 has no left neighbours — the window clamps."""
+    project = seeded_project["project"]
+    _doc_id, chunk_ids = _wide_document(project, n=9)
+    target = chunk_ids[0]
+
+    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    out = json.loads(capsys.readouterr().out)
+    # No negative indexes; just the target and its 3 right neighbours.
+    assert [c["chunk_index"] for c in out["chunks"]] == [0, 1, 2, 3]
+    assert out["chunks"][0]["chunk_id"] == target
+
+
+def test_read_chunks_around_clamps_at_document_end(seeded_project, capsys):
+    """A target at the last chunk_index has no right neighbours — the window clamps."""
+    project = seeded_project["project"]
+    _doc_id, chunk_ids = _wide_document(project, n=9)
+    target = chunk_ids[-1]  # chunk_index 8
+
+    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    out = json.loads(capsys.readouterr().out)
+    # No overrun past the last chunk; target and its 3 left neighbours only.
+    assert [c["chunk_index"] for c in out["chunks"]] == [5, 6, 7, 8]
+    assert out["chunks"][-1]["chunk_id"] == target
+
+
+def test_read_chunks_around_unknown_chunk(seeded_project, capsys):
+    """--around-chunk with an id that is no chunk at all raises CHUNK_NOT_FOUND."""
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--around-chunk", "999999",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "CHUNK_NOT_FOUND"
+
+
+@pytest.mark.parametrize("bad", [
+    ["--limit", "0"],     # positive_int rejects < 1
+    ["--limit", "-5"],
+    ["--offset", "-1"],   # nonneg_int rejects < 0
+])
+def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, bad):
+    # Shared positive/non-negative validators (issue #403) reject at parse time,
+    # so the JSON usage envelope is emitted before any query runs.
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]), *bad,
+        ])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"

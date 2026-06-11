@@ -21,12 +21,12 @@ def mock_embed(monkeypatch):
     # Both scripts share `embed_texts` / `chunk_markdown_string` via _common;
     # patch there so the test never reaches BAAI.
     monkeypatch.setattr(
-        "bartleby.skill_scripts._common.embed_texts",
+        "bartleby.ingest.embed.embed_texts",
         lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.skill_scripts._common.chunk_markdown_string",
+        "bartleby.ingest.chunk.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 

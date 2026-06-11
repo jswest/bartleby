@@ -106,6 +106,23 @@ def test_save_date_clear_nulls_the_field(seeded_project, capsys):
     assert _authored_date(seeded_project["project"], seeded_project["doc_a"]) is None
 
 
+def test_save_date_rejects_nonpositive_document_id(seeded_project, capsys):
+    """Representative #413 check: an id flag now uses the shared ``positive_int``
+    validator, so a non-positive id (here 0) fails at parse time and surfaces as
+    the standard USAGE_ERROR JSON envelope, never a raw argparse dump. (The same
+    swap covers --document/--finding/--chunk/--into across the id-flag scripts.)
+    """
+    with pytest.raises(SystemExit) as exc:
+        save_date.main([
+            "--project", seeded_project["project"],
+            "--document", "0",
+            "--date", "2024-03-08",
+        ])
+    assert exc.value.code != 0
+    err = json.loads(capsys.readouterr().out)
+    assert err["code"] == "USAGE_ERROR"
+
+
 def test_save_date_no_summary_is_rejected(seeded_project, capsys):
     # doc_b has no summary row to carry a date.
     with pytest.raises(SystemExit):

@@ -153,3 +153,151 @@ def test_mutating_work_opens_a_transaction(seeded_project):
         mutates=True,
     )
     assert seen["in_transaction"] is True
+
+
+def _never(*, conn, args, session_id) -> dict:  # pragma: no cover - never runs
+    raise AssertionError("work() must not run when arg parsing fails")
+
+
+def test_bad_flag_emits_json_envelope_not_usage_dump(capsys):
+    """A malformed flag becomes the ``{"error","code"}`` envelope with a
+    non-zero exit — argparse's raw usage dump never reaches stderr, so agents
+    parse one shape (issue #402)."""
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--bogus-flag"],
+        )
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    # stdout carries the envelope agents parse — not argparse's usage dump,
+    # which argparse writes to stderr only.
+    out = json.loads(captured.out)  # whole stdout is one JSON object
+    assert out["code"] == "USAGE_ERROR"
+    assert "error" in out
+
+
+def test_systemexit_in_work_is_not_mislabeled_usage_error(seeded_project, capsys):
+    """A ``SystemExit`` raised inside ``work()`` must NOT become a USAGE_ERROR.
+
+    The USAGE_ERROR arm is narrowed to wrap only ``parse_args`` (issue #402),
+    so a ``SystemExit`` from anywhere past argument parsing (here, work() — but
+    equally a library calling ``sys.exit``) is no longer caught by that arm. It
+    is a ``BaseException``, not an ``Exception``, so the INTERNAL_ERROR catch-all
+    doesn't swallow it either: it propagates untouched, carrying its own code.
+    """
+    project = seeded_project["project"]
+
+    def work(*, conn, args, session_id) -> dict:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="exit_in_work_probe",
+            parse_args=_parse_args,
+            work=work,
+            argv=["--project", project],
+        )
+    # Propagated with its original code — not remapped to the exit-1 envelope.
+    assert exc.value.code == 3
+    # And no USAGE_ERROR (or any) envelope was printed to stdout.
+    assert capsys.readouterr().out == ""
+
+
+def test_session_resolution_failure_closes_conn_keeps_envelope(
+    seeded_project, capsys, monkeypatch
+):
+    """If ``open_db`` succeeds but session resolution then raises, the runner
+    still closes the conn (no leak) and emits the standard error envelope —
+    even though no audit row can be written (issue #407). We wrap ``open_db`` to
+    record close calls and force session resolution to raise.
+    """
+    project = seeded_project["project"]
+    closed: list[bool] = []
+    real_open_db = run.__globals__["open_db"]
+
+    class TrackingConn:
+        """Proxy that delegates to a real apsw conn but records close().
+
+        apsw.Connection.close is read-only, so we can't patch it in place;
+        wrapping is the least-magic way to observe that the runner closed it.
+        """
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def close(self, *a, **k):
+            closed.append(True)
+            return self._inner.close(*a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def tracking_open_db(name):
+        return TrackingConn(real_open_db(name))
+
+    monkeypatch.setattr("bartleby.skill_runner.open_db", tracking_open_db)
+
+    def boom_session(*a, **k):
+        raise RuntimeError("session resolution exploded")
+
+    monkeypatch.setattr("bartleby.skill_runner.ensure_active_session", boom_session)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="session_fail_probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--project", project],
+        )
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+    assert "error" in out
+
+    # The conn opened before the failure was closed — no leak.
+    assert closed == [True]
+    # No session resolved → no audit row for this tool.
+    assert _audit_rows(project, "session_fail_probe") == 0
+
+
+def test_no_active_project_emits_envelope_without_opening_db(capsys, monkeypatch):
+    """With no ``--project`` and no active project, the runner raises the
+    ``NO_ACTIVE_PROJECT`` SkillError *before* ``open_db`` — so the envelope
+    surfaces with exit 1 and the DB is never touched (no conn to leak, no audit
+    row). The autouse home-isolation fixture already guarantees a fresh sandbox
+    with no active-project pointer; we also assert ``open_db`` is never called.
+    """
+    def boom_open_db(name):  # pragma: no cover - must never run
+        raise AssertionError("open_db must not run when no project resolves")
+
+    monkeypatch.setattr("bartleby.skill_runner.open_db", boom_open_db)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="no_project_probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=[],  # no --project, and the sandbox has no active project
+        )
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "NO_ACTIVE_PROJECT"
+    assert "error" in out
+
+
+def test_help_still_exits_zero(capsys):
+    """``--help`` keeps argparse's clean exit-0 behavior — the envelope arm
+    only swallows non-zero usage errors."""
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--help"],
+        )
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert "usage:" in captured.out  # argparse printed its own help, untouched

@@ -19,6 +19,11 @@ Three modes (mutually exclusive):
       derived from the target chunk — no need to pass --document. Works
       for any source kind, though image chunks have no neighbors.
 
+The modes are mutually exclusive: pick one, and any flags belonging to the
+other modes are silently ignored (e.g. ``--window`` is read only in
+``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document``
+mode).
+
 In a memory-off session the finding wall (see ``read_finding``) extends here:
 finding-kind chunks authored by *another* session are walled off so an
 evaluation run can't read prior conclusions by chunk_id. ``--chunks`` drops
@@ -114,8 +119,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="around_chunk",
         help="Target chunk_id; returns target plus --window chunks on each side.",
     )
-    p.add_argument("--offset", type=int, default=0)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--offset", type=nonneg_int, default=0)
+    p.add_argument("--limit", type=positive_int, default=50)
     p.add_argument(
         "--window",
         type=nonneg_int,
@@ -280,7 +285,7 @@ def _read_by_document(conn, args) -> dict:
                 f"did you mean --chunks {args.document_id}?"
             )
         raise SkillError(
-            "UNKNOWN_DOCUMENT",
+            "DOCUMENT_NOT_FOUND",
             f"No document with id {args.document_id}.",
             **extra,
         )

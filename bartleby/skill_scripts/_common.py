@@ -12,8 +12,6 @@ from bartleby.db.chunks import (
     delete_chunks_for,
     insert_finding_chunks,
 )
-from bartleby.ingest.chunk import chunk_markdown_string
-from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError
 
 
@@ -260,7 +258,15 @@ def embed_body_chunks(body: str) -> list[ChunkInput]:
     concurrency). Hoisting it ahead of the first write keeps apsw's deferred
     transaction from grabbing a lock until the millisecond SQL tail. Returns
     ``[]`` for an empty body.
+
+    The chunker + embedder are imported lazily here (not at module top) so the
+    FTS-only read scripts that share this module — ``scan``, ``list_documents``,
+    ``read_chunks``, ``describe_corpus`` — never pay the embedding/model stack's
+    import cost just to import a helper they don't embed with (#371).
     """
+    from bartleby.ingest.chunk import chunk_markdown_string
+    from bartleby.ingest.embed import embed_texts
+
     rows = chunk_markdown_string(body)
     if not rows:
         return []
@@ -292,20 +298,6 @@ def write_finding_chunks(
     if not chunk_inputs:
         return []
     return insert_finding_chunks(conn, finding_id, chunk_inputs)
-
-
-def rebuild_finding_chunks(conn, finding_id: int, body: str) -> list[int]:
-    """Embed ``body`` then replace this finding's chunks (embed + write in one).
-
-    The original single-call helper, now a thin composition of
-    :func:`embed_body_chunks` and :func:`write_finding_chunks`. ``save_finding``
-    and ``edit_finding`` call the two phases separately so the embed runs *before*
-    their first write (issue #340 — keeping the model load out of the txn's
-    write-lock window). ``merge_findings`` still calls this combined form: it
-    already holds a write txn across embedding by its own design, so the hoist
-    buys it nothing and that script is owned elsewhere.
-    """
-    return write_finding_chunks(conn, finding_id, embed_body_chunks(body))
 
 
 def replace_finding_citations(conn, finding_id: int, chunk_ids: list[int]) -> None:

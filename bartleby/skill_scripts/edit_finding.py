@@ -43,6 +43,7 @@ from bartleby.skill_scripts._common import (
     embed_body_chunks,
     finding_chunk_and_citation_ids,
     load_finding_body,
+    positive_int,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
@@ -54,7 +55,7 @@ from bartleby.skill_scripts._common import (
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("edit_finding", __doc__)
-    p.add_argument("--finding", type=int, required=True, dest="finding_id")
+    p.add_argument("--finding", type=positive_int, required=True, dest="finding_id")
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)
     p.add_argument("--body-file", type=str, default=None, dest="body_file")

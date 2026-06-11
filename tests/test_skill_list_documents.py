@@ -47,10 +47,12 @@ def test_list_documents_brief_projects_three_fields(seeded_project, capsys):
 
 
 def test_list_documents_brief_and_verbose_are_mutually_exclusive(seeded_project, capsys):
-    code, _ = _run(capsys, [
+    code, captured = _run(capsys, [
         "--project", seeded_project["project"], "--brief", "--verbose",
     ])
-    assert code == 2  # argparse mutually-exclusive-group error
+    # argparse mutually-exclusive-group error → JSON usage envelope (issue #402).
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
 
 
 def test_list_documents_verbose_includes_chunk_count(seeded_project, capsys):
@@ -222,6 +224,27 @@ def test_list_documents_file_like_no_match_empties(seeded_project, capsys):
     assert out["filters"]["file_like"] == ["zzz%"]
 
 
+def test_list_documents_in_documents_scopes_to_ids(seeded_project, capsys):
+    # --in-documents restricts the listing to the named ids (the #111 scope
+    # convention shared with search/scan).
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--in-documents", str(seeded_project["doc_a"]),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["id"] for d in out["documents"]] == [seeded_project["doc_a"]]
+    assert out["total"] == 1
+    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+
+
+def test_list_documents_unscoped_default_unchanged(seeded_project, capsys):
+    # Default (no --in-documents) still returns the whole corpus.
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 2
+    assert {d["file_name"] for d in out["documents"]} == {"alpha.pdf", "beta.txt"}
+
+
 def test_list_documents_no_filter_omits_filters_echo(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
@@ -311,10 +334,26 @@ def test_list_documents_sort_date_puts_undated_last(seeded_project, capsys):
 
 
 def test_list_documents_sort_rejects_unknown_value(seeded_project, capsys):
-    code, _ = _run(capsys, [
+    code, captured = _run(capsys, [
         "--project", seeded_project["project"], "--sort", "bogus",
     ])
-    assert code == 2  # argparse choices error
+    # argparse choices error → JSON usage envelope (issue #402).
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
+
+
+@pytest.mark.parametrize("bad", [
+    ["--limit", "0"],     # positive_int rejects < 1
+    ["--limit", "-5"],
+    ["--offset", "-1"],   # nonneg_int rejects < 0
+])
+def test_list_documents_out_of_range_pagination_rejected(seeded_project, capsys, bad):
+    # The shared positive/non-negative validators (issue #403) reject out-of-range
+    # --limit/--offset at parse time, so the JSON envelope is emitted before any
+    # query runs.
+    code, captured = _run(capsys, ["--project", seeded_project["project"], *bad])
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
 
 
 def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):

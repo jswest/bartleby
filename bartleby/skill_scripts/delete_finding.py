@@ -43,12 +43,12 @@ import argparse
 
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import assert_findings_accessible
+from bartleby.skill_scripts._common import assert_findings_accessible, positive_int
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("delete_finding", __doc__)
-    p.add_argument("--finding", type=int, required=True, dest="finding_id")
+    p.add_argument("--finding", type=positive_int, required=True, dest="finding_id")
     p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 

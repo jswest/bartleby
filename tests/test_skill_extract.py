@@ -19,12 +19,12 @@ from tests._skill_fixtures import _emb, project_env  # noqa: F401
 def stub_embed(monkeypatch):
     """add_tag runs a similarity check that embeds; stub it (no model load)."""
     from bartleby.db.schema import EMBEDDING_DIM
-    from bartleby.skill_scripts import _tags as tags_helpers
 
     def _stub(texts):
         return [[0.0] * EMBEDDING_DIM for _ in texts]
 
-    monkeypatch.setattr(tags_helpers, "embed_texts", _stub)
+    # find_similar_tag imports embed_texts lazily from its source module (#371).
+    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", _stub)
 
 
 def _doc(conn, file_hash, file_name) -> int:
