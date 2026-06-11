@@ -6,7 +6,7 @@ Nothing here mutates the corpus: every check is a read or a vacuous-write
 integrity probe (FTS5's ``'integrity-check'`` command writes nothing durable).
 
 Each check returns an :class:`IntegrityResult`; :func:`run_all_checks` runs the
-full battery and :func:`all_passed` collapses it to a single bool for an exit
+full battery, and the caller collapses ``r.passed`` across results into an exit
 code. The checks:
 
 - **tri_table_sync** — ``chunks`` / ``chunks_fts`` / ``chunks_vec`` agree. The
