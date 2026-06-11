@@ -185,7 +185,7 @@ def test_delete_tag_cascades_assignments(seeded_project, capsys):
         conn.close()
 
     delete_tag.main([
-        "--project", seeded_project["project"], "--name", "ch",
+        "--project", seeded_project["project"], "--tag", "ch",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "deleted"
