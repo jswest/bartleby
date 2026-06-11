@@ -156,6 +156,107 @@ def test_save_summary_drops_malformed_authored_date(seeded_project, capsys):
         conn.close()
 
 
+def test_save_summary_replace_carries_authored_date_forward(
+    seeded_project, capsys
+):
+    # Save a dated summary, then re-save it WITHOUT --authored-date. The prior
+    # date must survive the full-row replace rather than being nulled (issue
+    # #467) — otherwise the re-save silently drops the doc out of every
+    # authored-date scope.
+    doc_b = seeded_project["doc_b"]
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(doc_b),
+        "--title", "Beta dated",
+        "--description", "First save, with a date.",
+        "--text", "Dated body.",
+        "--authored-date", "2024-09-12",
+    ])
+    capsys.readouterr()
+
+    # Re-save with no --authored-date at all.
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(doc_b),
+        "--title", "Beta v2",
+        "--description", "Second save, no date arg.",
+        "--text", "Replacement body.",
+    ])
+    capsys.readouterr()
+
+    conn = open_db(seeded_project["project"])
+    try:
+        row = conn.cursor().execute(
+            "SELECT title, authored_date FROM summaries WHERE document_id = ?",
+            (doc_b,),
+        ).fetchone()
+        assert row == ("Beta v2", "2024-09-12")
+    finally:
+        conn.close()
+
+
+def test_save_summary_explicit_date_overwrites_prior_on_replace(
+    seeded_project, capsys
+):
+    # An explicitly passed --authored-date still overwrites on replace, even
+    # when a prior date exists — carry-forward only applies when the arg is
+    # omitted.
+    doc_b = seeded_project["doc_b"]
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(doc_b),
+        "--title", "Beta dated",
+        "--description", "First save.",
+        "--text", "Dated body.",
+        "--authored-date", "2024-09-12",
+    ])
+    capsys.readouterr()
+
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(doc_b),
+        "--title", "Beta v2",
+        "--description", "Second save, new date.",
+        "--text", "Replacement body.",
+        "--authored-date", "2025-01-01",
+    ])
+    capsys.readouterr()
+
+    conn = open_db(seeded_project["project"])
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries WHERE document_id = ?",
+            (doc_b,),
+        ).fetchone()
+        assert row[0] == "2025-01-01"
+    finally:
+        conn.close()
+
+
+def test_save_summary_new_save_with_no_date_stays_null(seeded_project, capsys):
+    # A brand-new save (no prior summary row) with no --authored-date stays
+    # NULL — carry-forward must not fabricate a date when there's nothing to
+    # carry. doc_b has no summary in the seed fixture.
+    doc_b = seeded_project["doc_b"]
+    save_summary.main([
+        "--project", seeded_project["project"],
+        "--document", str(doc_b),
+        "--title", "Beta",
+        "--description", "Brand-new, undated.",
+        "--text", "body",
+    ])
+    capsys.readouterr()
+    conn = open_db(seeded_project["project"])
+    try:
+        row = conn.cursor().execute(
+            "SELECT authored_date FROM summaries WHERE document_id = ?",
+            (doc_b,),
+        ).fetchone()
+        assert row[0] is None
+    finally:
+        conn.close()
+
+
 def test_save_summary_failed_replace_preserves_prior_summary_and_chunks(
     seeded_project, capsys, monkeypatch
 ):
