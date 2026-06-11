@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
+
 import yaml
 import pytest
 
 import bartleby.config
 import bartleby.commands.config as config
-from bartleby.config import config_drift, redact_config, save_config
+from bartleby.config import (
+    config_drift,
+    ensure_provider_env,
+    redact_config,
+    save_config,
+)
 
 
 @pytest.fixture
@@ -353,3 +360,25 @@ def test_config_drift_reports_changed_added_and_removed_fields():
 def test_config_drift_identical_is_silent():
     cfg = {"provider": "anthropic", "model": "x"}
     assert config_drift(cfg, dict(cfg)) == []
+
+
+def test_ensure_provider_env_ollama_honors_exported_base(monkeypatch):
+    # No ``ollama_base_url`` configured, but the user exported a remote box:
+    # the exported value must survive, mirroring the api-key branches.
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://gpu-box:11434")
+    ensure_provider_env("ollama", {})
+    assert os.environ["OLLAMA_API_BASE"] == "http://gpu-box:11434"
+
+
+def test_ensure_provider_env_ollama_applies_config_when_unexported(monkeypatch):
+    # Nothing exported: the configured ``ollama_base_url`` still applies.
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    ensure_provider_env("ollama", {"ollama_base_url": "http://configured:11434"})
+    assert os.environ["OLLAMA_API_BASE"] == "http://configured:11434"
+
+
+def test_ensure_provider_env_ollama_defaults_localhost_when_neither(monkeypatch):
+    # Neither exported nor configured: fall back to the localhost default.
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    ensure_provider_env("ollama", {})
+    assert os.environ["OLLAMA_API_BASE"] == "http://localhost:11434"
