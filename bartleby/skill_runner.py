@@ -107,11 +107,9 @@ def run(
     args_dict: dict[str, Any] = {}
 
     try:
-        # parse_args lives inside the try so an argparse usage error
-        # (a non-zero ``SystemExit`` from ``ArgumentParser.error()``) becomes
-        # the JSON envelope every other failure already emits, rather than
-        # argparse's raw stderr usage dump — agents parse one shape (issue
-        # #402). ``--help`` exits 0 and is re-raised untouched below.
+        # Inside the try so argparse usage errors become the JSON envelope
+        # instead of a raw stderr dump; --help (exit 0) is re-raised below.
+        # See docs/decisions/GH-0402-argparse-json-envelope-0001.md.
         args = parse_args(argv)
         args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
@@ -148,11 +146,7 @@ def run(
         else:
             result = work(conn=conn, args=args, session_id=session_id)
     except SystemExit as e:
-        # argparse raises SystemExit: code 0 for ``--help``/``-h`` (let it
-        # through unchanged), non-zero for a usage/argument error (turn it into
-        # the envelope). parse_args fails before open_db, so there's no
-        # conn/session to log — this falls through to the shared emit path below.
-        if not e.code:  # None or 0 → clean exit (e.g. --help)
+        if not e.code:  # None or 0 → clean exit (e.g. --help); re-raise untouched
             raise
         error_envelope = {
             "error": "Invalid arguments. See --help for usage.",
