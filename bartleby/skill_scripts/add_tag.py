@@ -63,8 +63,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def work(*, conn, args, session_id) -> dict:
     name = args.name.strip()
     description = args.description.strip()
-    if not name:
-        raise SkillError("EMPTY_NAME", "Tag name must be non-empty.")
     if not description:
         raise SkillError(
             "EMPTY_DESCRIPTION", "Tag description must be non-empty."
