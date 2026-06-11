@@ -236,6 +236,31 @@ def test_session_resolution_failure_closes_conn_keeps_envelope(
     assert _audit_rows(project, "session_fail_probe") == 0
 
 
+def test_no_active_project_emits_envelope_without_opening_db(capsys, monkeypatch):
+    """With no ``--project`` and no active project, the runner raises the
+    ``NO_ACTIVE_PROJECT`` SkillError *before* ``open_db`` — so the envelope
+    surfaces with exit 1 and the DB is never touched (no conn to leak, no audit
+    row). The autouse home-isolation fixture already guarantees a fresh sandbox
+    with no active-project pointer; we also assert ``open_db`` is never called.
+    """
+    def boom_open_db(name):  # pragma: no cover - must never run
+        raise AssertionError("open_db must not run when no project resolves")
+
+    monkeypatch.setattr("bartleby.skill_runner.open_db", boom_open_db)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="no_project_probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=[],  # no --project, and the sandbox has no active project
+        )
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "NO_ACTIVE_PROJECT"
+    assert "error" in out
+
+
 def test_help_still_exits_zero(capsys):
     """``--help`` keeps argparse's clean exit-0 behavior — the envelope arm
     only swallows non-zero usage errors."""
