@@ -39,12 +39,12 @@ def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
     monkeypatch.setattr(
-        "bartleby.skill_scripts._common.embed_texts",
+        "bartleby.ingest.embed.embed_texts",
         lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
     )
     from bartleby.ingest.chunk import ChunkRow
     monkeypatch.setattr(
-        "bartleby.skill_scripts._common.chunk_markdown_string",
+        "bartleby.ingest.chunk.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
 

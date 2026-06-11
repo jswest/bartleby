@@ -49,7 +49,9 @@ def stub_embed(monkeypatch):
             norm = sum(v * v for v in vec) ** 0.5 or 1.0
             out.append([v / norm for v in vec])
         return out
-    monkeypatch.setattr(tags_helpers, "embed_texts", _stub)
+    # find_similar_tag imports embed_texts lazily from its source module
+    # (#371), so patch it there rather than on _tags.
+    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", _stub)
 
 
 @pytest.fixture

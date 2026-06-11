@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from bartleby.config import ensure_provider_env, load_config
-from bartleby.ingest.embed import embed_texts
 from bartleby.providers import Provider, get_provider
 from bartleby.skill_runner import SkillError
 
@@ -456,6 +455,11 @@ def find_similar_tag(
         the configured ``SIMILARITY_THRESHOLD``.
 
     Embeddings are L2-normalized at the embedder, so dot-product is cosine.
+
+    ``embed_texts`` is imported lazily (not at module top) so the FTS-only read
+    scripts that share this module via ``resolve_scope`` — ``scan``,
+    ``list_documents``, ``read_chunks``, ``describe_corpus`` — never pay the
+    embedding/model stack's import cost (#371).
     """
     vocab = fetch_vocabulary(conn)
     if not vocab:
@@ -465,6 +469,8 @@ def find_similar_tag(
     for tag in vocab:
         if normalize_name(tag.name) == target_norm:
             return SimilarTag(tag.tag_id, tag.name, tag.description, 1.0)
+
+    from bartleby.ingest.embed import embed_texts
 
     proposed_emb, *existing_embs = embed_texts(
         [description] + [t.description for t in vocab]
