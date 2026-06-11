@@ -74,7 +74,7 @@ def test_read_chunks_unknown_document(seeded_project, capsys):
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
     assert "hint" not in out
 
 
@@ -130,7 +130,7 @@ def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys)
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "UNKNOWN_DOCUMENT"
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
     assert out["hint"] == (
         f"{chunk_id} is a chunk_id — did you mean --chunks {chunk_id}?"
     )
