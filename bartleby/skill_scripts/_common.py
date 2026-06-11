@@ -474,6 +474,76 @@ def finding_chunk_and_citation_ids(
     return chunk_ids, citation_ids
 
 
+def comma_field_list(value: str) -> list[str]:
+    """argparse ``type=`` for ``--returning``: a comma-separated field list.
+
+    Splits on commas, trims whitespace, drops empties, and preserves order
+    (deduped). Validation against the per-script whitelist is *not* done here —
+    argparse can't see the whitelist and a bad field deserves the JSON error
+    envelope (``UNKNOWN_RETURNING_FIELD``), not argparse's exit-2 dump. So this
+    only rejects a syntactically empty selector; :func:`project_row` does the
+    whitelist check at work() time.
+    """
+    out: list[str] = []
+    for piece in value.split(","):
+        piece = piece.strip()
+        if piece and piece not in out:
+            out.append(piece)
+    if not out:
+        raise argparse.ArgumentTypeError("at least one field required")
+    return out
+
+
+def add_returning_arg(parser: argparse.ArgumentParser, whitelist: list[str]) -> None:
+    """Add the shared ``--returning <field>,...`` projection flag.
+
+    ``whitelist`` is the script's selectable field set (in canonical order); it
+    appears in the help so ``--help`` names the valid fields. Omitting the flag
+    leaves the script's default/brief projection untouched — ``--returning`` is
+    purely additive. Resolution + validation happen in :func:`project_row`.
+    """
+    parser.add_argument(
+        "--returning",
+        type=comma_field_list, default=None, dest="returning", metavar="FIELD,...",
+        help=(
+            "Project each row to exactly these comma-separated fields, in the "
+            "order given. Overrides the default projection (and --brief). "
+            "Selectable fields: " + ", ".join(whitelist) + ". An unknown field "
+            "returns an UNKNOWN_RETURNING_FIELD error naming the valid set."
+        ),
+    )
+
+
+def project_row(
+    full: dict, requested: list[str] | None, whitelist: list[str],
+) -> dict | None:
+    """Project a fully-built row dict down to the ``--returning`` selection.
+
+    ``full`` must carry every field in ``whitelist`` (the caller builds the
+    whole row, then this selects). Returns ``None`` when ``requested`` is
+    ``None`` — the signal that no ``--returning`` was passed, so the caller
+    keeps its own default/brief projection untouched (``--returning`` is purely
+    additive). Otherwise returns ``{field: full[field]}`` in the requested
+    order. ``chunk_id`` and ``document_id`` are in every script's whitelist by
+    construction, so an id is always selectable.
+
+    Raises ``UNKNOWN_RETURNING_FIELD`` (naming the valid set in
+    ``valid_fields``) if any requested field isn't whitelisted — the JSON error
+    envelope the agent gets back, never argparse's exit-2.
+    """
+    if requested is None:
+        return None
+    unknown = [f for f in requested if f not in whitelist]
+    if unknown:
+        raise SkillError(
+            "UNKNOWN_RETURNING_FIELD",
+            f"--returning got unknown field(s) {unknown}. Valid fields for "
+            f"this script: {', '.join(whitelist)}.",
+            valid_fields=list(whitelist),
+        )
+    return {field: full[field] for field in requested}
+
+
 def comma_int_list(label: str) -> Callable[[str], list[int]]:
     """argparse ``type=`` factory for a comma-separated list of ints.
 

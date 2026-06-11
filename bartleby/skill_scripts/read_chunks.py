@@ -39,6 +39,18 @@ get full text. Every returned chunk always carries ``text_length`` — the
 pre-truncation length of the chunk's text — so the agent can size-budget
 and tell which chunks were trimmed.
 
+All modes also accept ``--returning <field>,...`` to project each chunk to
+exactly the named fields, in the order given (the envelope — ``mode`` /
+``document`` / ``target`` / ``missing`` / pagination — is untouched).
+Selectable fields: ``chunk_id``, ``document_id``, ``source_kind``,
+``source_id``, ``source_name``, ``file_name``, ``page_number``,
+``chunk_index``, ``section_heading``, ``content_type``, ``text``,
+``text_length``. ``document_id`` is the originating document for a
+document-kind chunk and ``null`` otherwise. ``--document`` / ``--around-chunk``
+default rows omit the ``source_*`` / ``file_name`` columns (the envelope names
+the document/target once), but ``--returning`` can pull them in any mode. An
+unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error naming the valid set.
+
 Paginated output:
     {
       "mode": "document",
@@ -98,9 +110,24 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    apply_preview, assert_findings_accessible, chunk_locations, comma_int_list,
-    memory_enabled, nonneg_int, owned_finding_ids, positive_int, source_names,
+    add_returning_arg, apply_preview, assert_findings_accessible,
+    chunk_locations, comma_int_list, memory_enabled, nonneg_int,
+    owned_finding_ids, positive_int, project_row, source_names,
 )
+
+
+# --returning whitelist for every chunk row read_chunks emits, across all three
+# modes. chunk_id + document_id lead so a citable id is always selectable.
+# document_id is the originating document for a document-kind chunk and null
+# otherwise (summaries/images/findings have no single document anchor here) —
+# honest-null, never faked. The --document and --around-chunk default rows are a
+# locator-light subset (no source_* / file_name), but --returning can pull the
+# full set in any mode since every row carries it underneath.
+CHUNK_FIELDS = [
+    "chunk_id", "document_id", "source_kind", "source_id", "source_name",
+    "file_name", "page_number", "chunk_index", "section_heading",
+    "content_type", "text", "text_length",
+]
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -133,12 +160,24 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="Truncate each chunk's text to the first N chars (append '…' if trimmed).",
     )
+    add_returning_arg(p, CHUNK_FIELDS)
     return p.parse_args(argv)
 
 
-def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
-    return [
-        {
+def _chunks_from_rows(
+    rows, preview: int | None, *, returning=None, source=None,
+) -> list[dict]:
+    """Build the per-chunk dicts for --document / --around-chunk modes.
+
+    Without ``--returning`` each row is the locator-light default (no source_*/
+    file_name — both modes already name the document/target once at the
+    envelope level). With ``--returning``, ``source`` supplies the shared
+    per-mode context — ``{source_kind, source_id, source_name, file_name,
+    document_id}`` — to complete the full whitelisted row before projecting.
+    """
+    out = []
+    for cid, idx, heading, page, ctype, text in rows:
+        default = {
             "chunk_id": cid,
             "chunk_index": idx,
             "section_heading": heading,
@@ -147,12 +186,17 @@ def _chunks_from_rows(rows, preview: int | None) -> list[dict]:
             "text": apply_preview(text, preview),
             "text_length": len(text),
         }
-        for cid, idx, heading, page, ctype, text in rows
-    ]
+        if returning is None:
+            out.append(default)
+            continue
+        full = {**default, **source}
+        out.append(project_row(full, returning, CHUNK_FIELDS))
+    return out
 
 
 def _read_by_chunk_ids(
-    conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int
+    conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int,
+    returning=None,
 ) -> dict:
     ordered = list(dict.fromkeys(chunk_ids))  # dedup, preserve order
 
@@ -189,8 +233,9 @@ def _read_by_chunk_ids(
             continue
         _, sk, sid, chunk_index, section_heading, content_type, text = rows[cid]
         loc = locations.get(cid, {"file_name": None, "page_number": None})
-        chunks.append({
+        full = {
             "chunk_id": cid,
+            "document_id": sid if sk == "document" else None,
             "source_kind": sk,
             "source_id": sid,
             "source_name": names.get((sk, sid), ""),
@@ -201,7 +246,18 @@ def _read_by_chunk_ids(
             "content_type": content_type,
             "text": apply_preview(text, preview),
             "text_length": len(text),
-        })
+        }
+        projected = project_row(full, returning, CHUNK_FIELDS)
+        if projected is not None:
+            chunks.append(projected)
+        else:
+            # Default --chunks row keeps the pre-#419 shape (document_id is
+            # selectable via --returning but not in the default contract).
+            chunks.append({k: full[k] for k in (
+                "chunk_id", "source_kind", "source_id", "source_name",
+                "file_name", "page_number", "chunk_index", "section_heading",
+                "content_type", "text", "text_length",
+            )})
 
     # Cross-namespace hint: a missing chunk_id that exists as a document_id is
     # very likely a --document id passed to --chunks. Surface a per-id hint so a
@@ -298,6 +354,15 @@ def _read_by_document(conn, args) -> dict:
         (args.document_id, args.limit, args.offset),
     ))
 
+    # Every row here is a document-kind chunk of this one document, so the
+    # source context is constant across the page.
+    source = {
+        "source_kind": "document",
+        "source_id": doc_row[0],
+        "source_name": doc_row[1],
+        "file_name": doc_row[1],
+        "document_id": doc_row[0],
+    }
     return {
         "mode": "document",
         "document": {"id": doc_row[0], "file_name": doc_row[1]},
@@ -305,7 +370,9 @@ def _read_by_document(conn, args) -> dict:
         "limit": args.limit,
         "total": total,
         "preview": args.preview,
-        "chunks": _chunks_from_rows(rows, args.preview),
+        "chunks": _chunks_from_rows(
+            rows, args.preview, returning=args.returning, source=source,
+        ),
     }
 
 
@@ -340,6 +407,19 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
     ))
 
     name = source_names(conn, {(sk, sid)}).get((sk, sid), "")
+    # The window never crosses (source_kind, source_id), so the source context
+    # is constant across the neighbourhood. file_name resolves off the target
+    # (None for findings); document_id is honest-null off non-document chunks.
+    file_name = chunk_locations(conn, [target_id]).get(
+        target_id, {"file_name": None},
+    )["file_name"]
+    source = {
+        "source_kind": sk,
+        "source_id": sid,
+        "source_name": name,
+        "file_name": file_name,
+        "document_id": sid if sk == "document" else None,
+    }
     return {
         "mode": "around",
         "target": {
@@ -351,7 +431,9 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
         },
         "window": args.window,
         "preview": args.preview,
-        "chunks": _chunks_from_rows(rows, args.preview),
+        "chunks": _chunks_from_rows(
+            rows, args.preview, returning=args.returning, source=source,
+        ),
     }
 
 
@@ -360,6 +442,7 @@ def work(*, conn, args, session_id) -> dict:
     if args.chunk_ids is not None:
         return _read_by_chunk_ids(
             conn, args.chunk_ids, args.preview, mem=mem, session_id=session_id,
+            returning=args.returning,
         )
     if args.around_chunk is not None:
         return _read_around_chunk(conn, args, session_id=session_id)
