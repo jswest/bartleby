@@ -110,11 +110,26 @@ def run(
     error_envelope: dict | None = None
     args_dict: dict[str, Any] = {}
 
+    # Only the argparse call gets the USAGE_ERROR treatment: a non-zero
+    # SystemExit from parse_args (argparse's usage error) becomes the JSON
+    # envelope instead of a raw stderr dump, while a clean exit (code 0, e.g.
+    # --help) re-raises untouched so help still exits 0. Narrowed to this one
+    # call so a SystemExit raised anywhere else in the try (open_db, work,
+    # teardown — or a library calling sys.exit) is NOT mislabeled USAGE_ERROR;
+    # it surfaces as INTERNAL_ERROR via the catch-all below.
+    # See docs/decisions/GH-0402-argparse-json-envelope-0001.md.
     try:
-        # Inside the try so argparse usage errors become the JSON envelope
-        # instead of a raw stderr dump; --help (exit 0) is re-raised below.
-        # See docs/decisions/GH-0402-argparse-json-envelope-0001.md.
         args = parse_args(argv)
+    except SystemExit as e:
+        if not e.code:  # None or 0 → clean exit (e.g. --help); re-raise untouched
+            raise
+        _print_json({
+            "error": "Invalid arguments. See --help for usage.",
+            "code": "USAGE_ERROR",
+        })
+        sys.exit(1)
+
+    try:
         args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
         project = args.project or get_active_project()
@@ -149,13 +164,6 @@ def run(
                 result = work(conn=conn, args=args, session_id=session_id)
         else:
             result = work(conn=conn, args=args, session_id=session_id)
-    except SystemExit as e:
-        if not e.code:  # None or 0 → clean exit (e.g. --help); re-raise untouched
-            raise
-        error_envelope = {
-            "error": "Invalid arguments. See --help for usage.",
-            "code": "USAGE_ERROR",
-        }
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
     except Exception as e:  # noqa: BLE001 — catch-all by design

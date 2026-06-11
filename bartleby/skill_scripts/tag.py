@@ -51,6 +51,7 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts import _tags as tags_helpers
+from bartleby.skill_scripts._common import positive_int
 from bartleby.skill_scripts._tags import (
     assign,
     classify_full_vocabulary,
@@ -65,7 +66,7 @@ from bartleby.skill_scripts._tags import (
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("tag", __doc__)
     scope = p.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--document", type=int, default=None, dest="document_id")
+    scope.add_argument("--document", type=positive_int, default=None, dest="document_id")
     scope.add_argument("--all", action="store_true", dest="all_documents")
     p.add_argument(
         "--tag", type=str, default=None,

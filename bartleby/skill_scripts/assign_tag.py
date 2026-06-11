@@ -34,7 +34,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import comma_int_list
+from bartleby.skill_scripts._common import comma_int_list, positive_int
 from bartleby.skill_scripts._tags import (
     assign,
     cast_value,
@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
              "value_type). Only valid on a value-tag.",
     )
     p.add_argument(
-        "--chunk", type=int, default=None, dest="chunk_id",
+        "--chunk", type=positive_int, default=None, dest="chunk_id",
         help="Chunk to anchor a manual --value to (its citation source).",
     )
     p.add_argument("--project", type=str, default=None)

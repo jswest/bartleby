@@ -179,6 +179,33 @@ def test_bad_flag_emits_json_envelope_not_usage_dump(capsys):
     assert "error" in out
 
 
+def test_systemexit_in_work_is_not_mislabeled_usage_error(seeded_project, capsys):
+    """A ``SystemExit`` raised inside ``work()`` must NOT become a USAGE_ERROR.
+
+    The USAGE_ERROR arm is narrowed to wrap only ``parse_args`` (issue #402),
+    so a ``SystemExit`` from anywhere past argument parsing (here, work() — but
+    equally a library calling ``sys.exit``) is no longer caught by that arm. It
+    is a ``BaseException``, not an ``Exception``, so the INTERNAL_ERROR catch-all
+    doesn't swallow it either: it propagates untouched, carrying its own code.
+    """
+    project = seeded_project["project"]
+
+    def work(*, conn, args, session_id) -> dict:
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="exit_in_work_probe",
+            parse_args=_parse_args,
+            work=work,
+            argv=["--project", project],
+        )
+    # Propagated with its original code — not remapped to the exit-1 envelope.
+    assert exc.value.code == 3
+    # And no USAGE_ERROR (or any) envelope was printed to stdout.
+    assert capsys.readouterr().out == ""
+
+
 def test_session_resolution_failure_closes_conn_keeps_envelope(
     seeded_project, capsys, monkeypatch
 ):

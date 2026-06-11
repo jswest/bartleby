@@ -90,6 +90,22 @@ SCRIPTS = [
 # tags via relational flags and are excluded by the same decision.
 EXISTING_TAG_SCRIPTS = ["delete_tag", "assign_tag", "unassign_tag", "extract", "tag"]
 
+
+def test_guard_roster_matches_dispatcher():
+    """The guard's SCRIPTS roster must equal the dispatcher's (#411 blind spot).
+
+    This list is hand-copied from the dispatcher; without this assertion a
+    script added to ``bartleby.commands.skill.SCRIPTS`` tomorrow would silently
+    escape every convention guard above. Pin them so a divergence fails here.
+    """
+    from bartleby.commands.skill import SCRIPTS as DISPATCHER_SCRIPTS
+
+    assert set(SCRIPTS) == set(DISPATCHER_SCRIPTS), (
+        "the convention-guard roster has drifted from the dispatcher's SCRIPTS; "
+        "add the new script(s) to this test's SCRIPTS list so the flag "
+        "conventions are enforced on them too"
+    )
+
 # Scripts that support corpus scoping — each must carry ``--in-documents`` (#408).
 SCOPE_SCRIPTS = ["search", "scan", "describe_corpus", "list_documents"]
 

@@ -51,6 +51,7 @@ from bartleby.skill_scripts._common import (
     comma_int_list,
     embed_body_chunks,
     load_finding_body,
+    positive_int,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
@@ -66,7 +67,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--from", type=comma_int_list("finding_id"), required=True,
         dest="from_ids",
     )
-    p.add_argument("--into", type=int, required=True, dest="into")
+    p.add_argument("--into", type=positive_int, required=True, dest="into")
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)
