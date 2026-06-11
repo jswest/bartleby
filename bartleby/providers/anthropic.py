@@ -38,6 +38,20 @@ _EFFORT_MAP = {"minimal": "low", "low": "low", "medium": "medium", "high": "high
 _temperature_warned = False
 
 
+def _map_effort(reasoning_effort: str) -> str:
+    """Map a unified reasoning_effort to Anthropic's ``output_config.effort``,
+    raising a named ``ValueError`` on an out-of-enum value (backstop — scribe
+    validates first; this beats the bare ``KeyError`` a raw dict lookup raises).
+    """
+    mapped = _EFFORT_MAP.get(reasoning_effort)
+    if mapped is None:
+        raise ValueError(
+            f"Unknown reasoning_effort {reasoning_effort!r}; "
+            f"expected one of {', '.join(_EFFORT_MAP)}."
+        )
+    return mapped
+
+
 def _supports_effort(model: str) -> bool:
     return model.startswith(_EFFORT_MODEL_PREFIXES)
 
@@ -85,7 +99,7 @@ class AnthropicProvider:
             tool_choice={"type": "tool", "name": _SUMMARY_TOOL},
         )
         if reasoning_effort and _supports_effort(model):
-            kwargs["output_config"] = {"effort": _EFFORT_MAP[reasoning_effort]}
+            kwargs["output_config"] = {"effort": _map_effort(reasoning_effort)}
         # Opus 4.7+ rejects temperature outright — a property of the model, not of
         # whether we sent effort — so drop it wherever it would 400, independent of
         # reasoning_effort. The older effort-capable models still accept it.

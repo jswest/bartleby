@@ -204,6 +204,53 @@ def test_scribe_ingests_txt_without_llm(isolated_project, tmp_path, mock_embed):
         conn.close()
 
 
+def test_scribe_rejects_out_of_enum_reasoning_effort(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """A hand-edited config with an out-of-enum reasoning_effort exits 1 with the
+    field named on stderr — never a bare KeyError on the provider, and never a
+    silent fall-back to the default effort (#489, hard-fail).
+
+    The error routes through ``console.error`` (stderr); capture it directly
+    rather than through capsys/capfd, since the shared Rich Console binds its
+    stream at import time — the repo's idiom for asserting on status output."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {"reasoning_effort": "xhigh"},
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(scribe.console, "error", lambda m: errors.append(m))
+    src = _write_txt(tmp_path / "doc.txt", "Some text to ingest.")
+    with pytest.raises(SystemExit) as exc:
+        scribe.main(project="test_proj", files=str(src))
+    assert exc.value.code == 1
+    assert len(errors) == 1
+    msg = errors[0]
+    assert "reasoning_effort" in msg          # the offending field is named
+    assert "xhigh" in msg                     # ...along with the bad value
+    assert "minimal, low, medium, high" in msg  # ...and the allowed set
+
+
+def test_scribe_accepts_valid_reasoning_effort(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """Positive control: a valid enum value sails through validation and ingests
+    (no provider configured, so summarization is simply skipped)."""
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: {"reasoning_effort": "high"},
+    )
+    src = _write_txt(tmp_path / "doc.txt", "Some text to ingest.")
+    scribe.main(project="test_proj", files=str(src))
+
+    conn = open_db("test_proj")
+    try:
+        n = conn.cursor().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+
 def test_scribe_dedupes_identical_files(isolated_project, tmp_path, mock_embed):
     src = _write_txt(tmp_path / "doc.txt", "Same content")
     scribe.main(project="test_proj", files=str(src))

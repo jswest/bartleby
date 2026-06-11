@@ -101,6 +101,17 @@ def test_anthropic_effort_keeps_temperature_on_older_capable_model(monkeypatch):
     assert fake.last_call["temperature"] == 0.0
 
 
+def test_anthropic_out_of_enum_effort_raises_named_valueerror(monkeypatch):
+    # Backstop for the scribe-level gate (#489): a caller reaching the provider
+    # directly with an out-of-enum effort gets a ValueError naming the field —
+    # not the bare KeyError a raw _EFFORT_MAP[...] lookup would raise.
+    with pytest.raises(ValueError) as exc:
+        _summarize_with_effort(monkeypatch, model="claude-opus-4-8", effort="xhigh")
+    msg = str(exc.value)
+    assert "reasoning_effort" in msg
+    assert "xhigh" in msg
+
+
 def test_anthropic_effort_skipped_for_uncapable_model(monkeypatch):
     # Haiku 4.5 would 400 on output_config.effort → never sent; temperature stays.
     fake = _summarize_with_effort(monkeypatch, model="claude-haiku-4-5", effort="high")
