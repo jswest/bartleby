@@ -12,8 +12,6 @@ from bartleby.db.chunks import (
     delete_chunks_for,
     insert_finding_chunks,
 )
-from bartleby.ingest.chunk import chunk_markdown_string
-from bartleby.ingest.embed import embed_texts
 from bartleby.skill_runner import SkillError
 
 
@@ -260,7 +258,15 @@ def embed_body_chunks(body: str) -> list[ChunkInput]:
     concurrency). Hoisting it ahead of the first write keeps apsw's deferred
     transaction from grabbing a lock until the millisecond SQL tail. Returns
     ``[]`` for an empty body.
+
+    The chunker + embedder are imported lazily here (not at module top) so the
+    FTS-only read scripts that share this module — ``scan``, ``list_documents``,
+    ``read_chunks``, ``describe_corpus`` — never pay the embedding/model stack's
+    import cost just to import a helper they don't embed with (#371).
     """
+    from bartleby.ingest.chunk import chunk_markdown_string
+    from bartleby.ingest.embed import embed_texts
+
     rows = chunk_markdown_string(body)
     if not rows:
         return []
