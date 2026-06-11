@@ -53,8 +53,8 @@ def _help(text: str) -> None:
         console.print(f"  {line}", style="dim")
 
 
-def _prompt_choice(label, choices, existing_value, default, *,
-                   help_text: str, invalid_noun: str) -> str:
+def _prompt_choice(label: str, choices: list[str], existing_value: str | None,
+                   default: str, *, help_text: str, invalid_noun: str) -> str:
     """Prompt for a value from a fixed allowlist, looping until it's valid.
 
     The effective default is the existing config value when it's still in the
