@@ -1,6 +1,7 @@
 # Judges for `bartleby benchmark judge` — <provider>/<model>, first entry is
-# the default. Only openai judges are supported today. The judge model and the
-# judged model both appear in each judgement store's filename, so scores from
+# the default. Judges are openai/<model> or anthropic-cc/<model> (the local
+# Claude Code CLI — see benchmarks/README.md, "Judge backends"). The judge model
+# and the judged model both appear in each judgement store's filename, so scores from
 # different judges never mix; add an off-family judge here to control for
 # same-family preference bias and compare with --judges on the leaderboard.
 
