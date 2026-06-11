@@ -224,6 +224,27 @@ def test_list_documents_file_like_no_match_empties(seeded_project, capsys):
     assert out["filters"]["file_like"] == ["zzz%"]
 
 
+def test_list_documents_in_documents_scopes_to_ids(seeded_project, capsys):
+    # --in-documents restricts the listing to the named ids (the #111 scope
+    # convention shared with search/scan).
+    list_documents.main([
+        "--project", seeded_project["project"],
+        "--in-documents", str(seeded_project["doc_a"]),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert [d["id"] for d in out["documents"]] == [seeded_project["doc_a"]]
+    assert out["total"] == 1
+    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+
+
+def test_list_documents_unscoped_default_unchanged(seeded_project, capsys):
+    # Default (no --in-documents) still returns the whole corpus.
+    list_documents.main(["--project", seeded_project["project"]])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 2
+    assert {d["file_name"] for d in out["documents"]} == {"alpha.pdf", "beta.txt"}
+
+
 def test_list_documents_no_filter_omits_filters_echo(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
