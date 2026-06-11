@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-import bartleby.config
-import bartleby.db.connection
 import bartleby.project
 from bartleby.db.chunks import (
     ChunkInput,
@@ -55,15 +53,8 @@ def assert_chunk_tables_consistent(conn) -> None:
 
 
 @pytest.fixture
-def project_env(tmp_path, monkeypatch):
-    projects = tmp_path / "projects"
-    projects.mkdir()
-    config_path = tmp_path / "config.yaml"
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+def project_env():
+    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
     bartleby.project.create_project("p")
     yield "p"
 

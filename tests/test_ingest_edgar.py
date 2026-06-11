@@ -12,8 +12,6 @@ import hashlib
 
 import pytest
 
-import bartleby.config
-import bartleby.db.connection
 import bartleby.project
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
@@ -317,17 +315,9 @@ _DOUBLE_LINKED_TOC_FILING = b"""<?xml version="1.0"?>
 
 
 @pytest.fixture
-def edgar_project(tmp_path, monkeypatch):
+def edgar_project(monkeypatch):
     """An isolated SQLite project plus a stub embedder, for the persist tests."""
-    projects = tmp_path / "projects"
-    projects.mkdir()
-    config_path = tmp_path / "config.yaml"
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
-
+    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
     def fake_embed(texts):
         return [[0.01 * (i + 1)] * EMBEDDING_DIM for i in range(len(texts))]
     monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake_embed)

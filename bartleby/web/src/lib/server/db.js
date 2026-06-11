@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const BARTLEBY_DIR = path.join(os.homedir(), '.bartleby');
+// Honors BARTLEBY_HOME (set to an absolute path) like the Python side. `serve`
+// is one long-lived process whose env is fixed at launch, so reading it once
+// here is fine — no per-call resolution needed. See GH-0393.
+const BARTLEBY_DIR = process.env.BARTLEBY_HOME || path.join(os.homedir(), '.bartleby');
 const CONFIG_PATH = path.join(BARTLEBY_DIR, 'config.yaml');
 
 let _db = null;

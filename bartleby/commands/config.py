@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 
-from bartleby.config import CONFIG_PATH, load_config, save_config
+from bartleby.config import config_path, load_config, save_config
 from bartleby.lib.consts import (
     ALLOWED_HTML_CONVERTERS,
     ALLOWED_PDF_CONVERTERS,
@@ -403,7 +403,7 @@ def main():
     save_config(config)
 
     console.print("\n[bold green]Configuration saved.[/bold green]")
-    console.print(f"Config location: [cyan]{CONFIG_PATH}[/cyan]")
+    console.print(f"Config location: [cyan]{config_path()}[/cyan]")
 
     if not config.get("active_project"):
         console.print(

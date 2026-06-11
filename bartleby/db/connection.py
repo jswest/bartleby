@@ -14,13 +14,13 @@ import apsw
 import sqlite_vec
 
 from bartleby import __version__ as BARTLEBY_VERSION
-from bartleby.config import PROJECTS_DIR
+from bartleby.config import projects_dir
 from bartleby.db.schema import DDL, EMBEDDING_DIM, SCHEMA_VERSION
 from bartleby.lib.consts import EMBEDDING_MODEL
 
 
 def project_db_path(project_name: str) -> Path:
-    return PROJECTS_DIR / project_name / "bartleby.db"
+    return projects_dir() / project_name / "bartleby.db"
 
 
 def resolve_project_name(project_name: str | None) -> str:

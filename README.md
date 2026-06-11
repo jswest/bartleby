@@ -281,6 +281,8 @@ The `chunks` table is polymorphic on purpose: documents, summaries, findings, an
 
 All queryable state lives in `bartleby.db`. Findings, audit logs, and agent-generated summaries are all stored as rows there — no sidecar files, no on-disk reports.
 
+Set `BARTLEBY_HOME` to relocate this whole tree — `projects/`, `config.yaml`, and scratch — somewhere other than `~/.bartleby`. Useful for keeping more than one corpus root, for CI, or for sandboxing a tool/agent so it can't touch your live corpora.
+
 ---
 
 ## Command reference

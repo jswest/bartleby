@@ -13,8 +13,6 @@ from pathlib import Path
 
 import pytest
 
-import bartleby.config
-import bartleby.db.connection
 import bartleby.project
 from bartleby import __version__
 from bartleby.db.chunks import ChunkInput
@@ -30,15 +28,8 @@ from bartleby.ingest.writer import (
 
 
 @pytest.fixture
-def project_conn(tmp_path, monkeypatch):
-    """A fresh project DB with PROJECTS_DIR / config isolated to tmp."""
-    projects = tmp_path / "projects"
-    projects.mkdir()
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", tmp_path / "config.yaml")
-    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+def project_conn():
+    """A fresh project DB, isolated to a tmp BARTLEBY_HOME (conftest)."""
     bartleby.project.create_project("prov")
     conn = open_db("prov")
     yield conn

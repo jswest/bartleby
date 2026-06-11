@@ -32,8 +32,7 @@ def _insert_doc(conn, file_hash: str = "h") -> int:
 
 
 @pytest.fixture
-def conn(tmp_path, monkeypatch):
-    monkeypatch.setattr("bartleby.db.connection.PROJECTS_DIR", tmp_path)
+def conn():
     init_db("test_proj")
     c = open_db("test_proj")
     yield c
@@ -96,21 +95,18 @@ def test_check_constraint_rejects_bad_source_kind(conn):
         )
 
 
-def test_open_db_rejects_missing_project(tmp_path, monkeypatch):
-    monkeypatch.setattr("bartleby.db.connection.PROJECTS_DIR", tmp_path)
+def test_open_db_rejects_missing_project():
     with pytest.raises(FileNotFoundError):
         open_db("nope")
 
 
-def test_init_db_refuses_existing(tmp_path, monkeypatch):
-    monkeypatch.setattr("bartleby.db.connection.PROJECTS_DIR", tmp_path)
+def test_init_db_refuses_existing():
     init_db("foo")
     with pytest.raises(FileExistsError):
         init_db("foo")
 
 
-def test_schema_mismatch_points_at_upgrade_first(tmp_path, monkeypatch):
-    monkeypatch.setattr("bartleby.db.connection.PROJECTS_DIR", tmp_path)
+def test_schema_mismatch_points_at_upgrade_first():
     init_db("proj")
     c = open_db("proj")
     c.cursor().execute(

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-import bartleby.config
-import bartleby.db.connection
 import bartleby.project
 from bartleby.commands import logs as logs_cmd
 from bartleby.db.audit import log_call
@@ -14,14 +12,8 @@ from bartleby.session import write_active_session_id
 
 
 @pytest.fixture
-def project(tmp_path, monkeypatch):
-    projects = tmp_path / "projects"
-    projects.mkdir()
-    monkeypatch.setattr(bartleby.config, "BARTLEBY_DIR", tmp_path)
-    monkeypatch.setattr(bartleby.config, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.config, "CONFIG_PATH", tmp_path / "config.yaml")
-    monkeypatch.setattr(bartleby.project, "PROJECTS_DIR", projects)
-    monkeypatch.setattr(bartleby.db.connection, "PROJECTS_DIR", projects)
+def project():
+    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
     bartleby.project.create_project("alpha")
     return "alpha"
 
