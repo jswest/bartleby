@@ -8,7 +8,11 @@ and calls :func:`run`. The runner:
 - Resolves or auto-creates the active session (skill scripts always run
   inside a session — see SPEC §5.4 / §6 intro).
 - Times the call.
-- Writes one ``audit_logs`` row per invocation (success or failure).
+- Writes one ``audit_logs`` row per invocation (success or failure) once a
+  session is resolved. A failure *before* session resolution (no active
+  project, DB open/schema error, or session resolution itself raising) has no
+  session to attribute the call to, so it surfaces only in the error envelope;
+  the DB connection is still closed on every path where it was opened.
 - Prints either the worker's dict result, or
   ``{"error": ..., "code": ...}`` on failure, to stdout.
 - Exits 0 on success and 1 on failure.
@@ -165,18 +169,21 @@ def run(
         f"error: {error_envelope['code']}" if error_envelope else None
     )
 
-    if conn is not None and session_id is not None:
-        try:
-            log_call(
-                conn,
-                session_id=session_id,
-                tool_name=tool_name,
-                args=args_dict,
-                result_summary=summary,
-                duration_ms=duration_ms,
-            )
-        except Exception:  # never let logging mask the real outcome
-            pass
+    if conn is not None:
+        # log_call needs a resolved session_id (its FK target); close must run
+        # on every opened path regardless, or the conn leaks. See module docstring.
+        if session_id is not None:
+            try:
+                log_call(
+                    conn,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    args=args_dict,
+                    result_summary=summary,
+                    duration_ms=duration_ms,
+                )
+            except Exception:  # never let logging mask the real outcome
+                pass
         conn.close()
 
     if error_envelope is not None:

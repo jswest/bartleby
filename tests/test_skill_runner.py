@@ -179,6 +179,63 @@ def test_bad_flag_emits_json_envelope_not_usage_dump(capsys):
     assert "error" in out
 
 
+def test_session_resolution_failure_closes_conn_keeps_envelope(
+    seeded_project, capsys, monkeypatch
+):
+    """If ``open_db`` succeeds but session resolution then raises, the runner
+    still closes the conn (no leak) and emits the standard error envelope —
+    even though no audit row can be written (issue #407). We wrap ``open_db`` to
+    record close calls and force session resolution to raise.
+    """
+    project = seeded_project["project"]
+    closed: list[bool] = []
+    real_open_db = run.__globals__["open_db"]
+
+    class TrackingConn:
+        """Proxy that delegates to a real apsw conn but records close().
+
+        apsw.Connection.close is read-only, so we can't patch it in place;
+        wrapping is the least-magic way to observe that the runner closed it.
+        """
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def close(self, *a, **k):
+            closed.append(True)
+            return self._inner.close(*a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def tracking_open_db(name):
+        return TrackingConn(real_open_db(name))
+
+    monkeypatch.setattr("bartleby.skill_runner.open_db", tracking_open_db)
+
+    def boom_session(*a, **k):
+        raise RuntimeError("session resolution exploded")
+
+    monkeypatch.setattr("bartleby.skill_runner.ensure_active_session", boom_session)
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="session_fail_probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--project", project],
+        )
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INTERNAL_ERROR"
+    assert "error" in out
+
+    # The conn opened before the failure was closed — no leak.
+    assert closed == [True]
+    # No session resolved → no audit row for this tool.
+    assert _audit_rows(project, "session_fail_probe") == 0
+
+
 def test_help_still_exits_zero(capsys):
     """``--help`` keeps argparse's clean exit-0 behavior — the envelope arm
     only swallows non-zero usage errors."""
