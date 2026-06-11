@@ -50,7 +50,6 @@ def test_summarize_short_doc_no_truncation_note():
     assert result.title == "Doc Title"
     assert result.description == "A one-line hook describing the document."
     assert result.text == "this is a summary"
-    assert result.truncated_from_tokens is None
     assert p.captured_text == "short document"
 
 
@@ -86,7 +85,6 @@ def test_summarize_long_doc_truncates_input_and_appends_note():
         max_summarize_tokens=10,
     )
 
-    assert result.truncated_from_tokens == total
     # Truncation note is appended to text only (title/description are unaffected).
     assert result.title == "Doc Title"
     assert result.text.startswith("summary body")

@@ -87,15 +87,6 @@ def is_ixbrl(path: Path) -> bool:
     return _IXBRL_MARKER in head
 
 
-def convert(path: Path) -> Sec2mdResult:
-    """Convert one iXBRL `.htm`/`.html` filing on disk into chunks.
-
-    Thin wrapper over :func:`convert_bytes` — sec2md doesn't accept file
-    paths, so we read the bytes off disk and hand them over.
-    """
-    return convert_bytes(path.read_bytes())
-
-
 def convert_bytes(html: bytes) -> Sec2mdResult:
     """Convert iXBRL/SEC HTML bytes into chunks ready for embedding.
 
@@ -138,7 +129,7 @@ def convert_bytes(html: bytes) -> Sec2mdResult:
     )
 
 
-def convert_sections(path: Path) -> list[Sec2mdSection]:
+def convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
     """Split a TOC-anchored filing into per-section conversions (#254).
 
     Returns one :class:`Sec2mdSection` per internal anchor the table of contents
@@ -151,10 +142,6 @@ def convert_sections(path: Path) -> list[Sec2mdSection]:
     top-level ancestors of each anchor target, so every byte of content lands in
     exactly one section and nothing is duplicated or dropped.
     """
-    return _convert_sections_bytes(path.read_bytes())
-
-
-def _convert_sections_bytes(html: bytes) -> list[Sec2mdSection]:
     _require_sec2md()
     from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 

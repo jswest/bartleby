@@ -1,6 +1,6 @@
 """Convert + chunk facade for non-PDF, non-image files.
 
-PDFs are dispatched by ``bartleby.commands.scribe`` directly to the pdfplumber
+PDFs are dispatched by ``bartleby.ingest.parsers`` directly to the pdfplumber
 or docling backends; standalone image files go through the image pipeline.
 This module covers HTML / Markdown (via docling) and plain text.
 """
