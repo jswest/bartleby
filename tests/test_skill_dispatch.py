@@ -14,6 +14,8 @@ import pytest
 
 from bartleby.commands.skill import SCRIPTS, dispatch
 
+_SEARCH_MOD = __import__("bartleby.skill_scripts.search", fromlist=["main"])
+
 
 def test_bare_invocation_emits_error_envelope(capsys):
     """No script name -> JSON envelope on stdout + exit 1; prose to stderr."""
@@ -51,15 +53,14 @@ def test_known_name_routes_to_script_and_passes_remaining_argv(monkeypatch):
     """A known script name imports ``bartleby.skill_scripts.<name>`` and calls
     its ``main`` with the *remaining* argv — the dispatcher is a thin router, so
     the name is consumed and everything after it is handed through verbatim."""
-    seen: dict = {}
+    seen = {}
 
     def fake_main(argv):
         seen["argv"] = argv
 
     # ``search`` is a real entry in SCRIPTS; patch its module's main so we observe
     # routing without running the actual script.
-    module = __import__("bartleby.skill_scripts.search", fromlist=["main"])
-    monkeypatch.setattr(module, "main", fake_main)
+    monkeypatch.setattr(_SEARCH_MOD, "main", fake_main)
 
     dispatch(["search", "--query", "x", "--limit", "3"])
     assert seen["argv"] == ["--query", "x", "--limit", "3"]
@@ -72,8 +73,7 @@ def test_known_name_propagates_script_exit_code(monkeypatch):
     def exit_two(argv):
         sys.exit(2)
 
-    module = __import__("bartleby.skill_scripts.search", fromlist=["main"])
-    monkeypatch.setattr(module, "main", exit_two)
+    monkeypatch.setattr(_SEARCH_MOD, "main", exit_two)
 
     with pytest.raises(SystemExit) as exc:
         dispatch(["search"])
