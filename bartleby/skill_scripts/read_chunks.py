@@ -280,7 +280,7 @@ def _read_by_document(conn, args) -> dict:
                 f"did you mean --chunks {args.document_id}?"
             )
         raise SkillError(
-            "UNKNOWN_DOCUMENT",
+            "DOCUMENT_NOT_FOUND",
             f"No document with id {args.document_id}.",
             **extra,
         )
