@@ -136,8 +136,8 @@ def resolve_documents(
 def resolve_tag_names(conn, names: list[str]) -> list[int]:
     """Resolve tag names → tag_ids; raise ``TAG_NOT_FOUND`` on any miss.
 
-    Order is preserved across the input list. Used by `list_documents`,
-    `search`, and any future consumer of `--tag`.
+    Order is preserved across the input list. The named query unit behind
+    ``resolve_scope``'s ``--tag`` intersection.
     """
     placeholders = ",".join("?" * len(names))
     rows = conn.cursor().execute(
@@ -218,7 +218,7 @@ class Scope:
     means "whole corpus" (no filter), ``[]`` means "a filter was applied but it
     matched nothing" (short-circuit to zero results). The remaining fields echo
     the *requested* filter so a response can be self-describing via
-    ``filters_dict``.
+    ``echo_into``.
     """
 
     document_ids: list[int] | None
@@ -244,34 +244,24 @@ class Scope:
             or self.date_active
         )
 
-    def filters_dict(self) -> dict | None:
-        """The self-describing ``filters`` echo, or ``None`` when unfiltered.
-
-        Shared by ``scan`` and ``describe_corpus`` so both surface scope
-        identically. ``list_documents`` predates this and keeps its own
-        top-level shape (the issue mandates no behavior change there).
-        """
-        if not self.active:
-            return None
-        return {
-            "tags": self.tags,
-            "in_documents": self.in_documents,
-            "file_like": self.file_like,
-            "authored_after": self.authored_after,
-            "authored_before": self.authored_before,
-            "include_nulls": self.include_nulls,
-            "excluded_null_dated": self.excluded_null_dated,
-        }
-
     def echo_into(self, env: dict) -> dict:
-        """Attach the ``filters`` echo to ``env`` in place when scoped; return it.
+        """Attach the self-describing ``filters`` echo to ``env`` in place when
+        scoped; return it.
 
-        Folds the "compute filters_dict, set the key only if non-None" dance that
-        ``scan`` and ``describe_corpus`` would otherwise each repeat.
+        Folds the "set the ``filters`` key only when a filter is active" dance
+        that ``search``, ``scan``, ``describe_corpus``, and ``list_documents``
+        would otherwise each repeat.
         """
-        filters = self.filters_dict()
-        if filters is not None:
-            env["filters"] = filters
+        if self.active:
+            env["filters"] = {
+                "tags": self.tags,
+                "in_documents": self.in_documents,
+                "file_like": self.file_like,
+                "authored_after": self.authored_after,
+                "authored_before": self.authored_before,
+                "include_nulls": self.include_nulls,
+                "excluded_null_dated": self.excluded_null_dated,
+            }
         return env
 
     def restrict_in(self, col: str) -> tuple[str, list]:
