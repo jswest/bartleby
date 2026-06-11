@@ -698,3 +698,89 @@ def test_scan_count_by_sort_date_orders_histogram_chronologically(scan_corpus, c
     assert [d["document_id"] for d in out["documents"]] == [
         scan_corpus["d2"], scan_corpus["d1"],
     ]
+
+
+# ---------- --returning projection (issue #419) ----------
+
+
+def test_scan_returning_projects_exact_fields(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--returning", "chunk_id,document_id"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 3  # envelope unchanged
+    assert out["matches"]
+    for m in out["matches"]:
+        assert set(m) == {"chunk_id", "document_id"}
+
+
+def test_scan_returning_respects_field_order(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--returning", "document_id,chunk_id"])
+    out = json.loads(capsys.readouterr().out)
+    # Dict order follows the requested order, not the whitelist order.
+    assert list(out["matches"][0].keys()) == ["document_id", "chunk_id"]
+
+
+def test_scan_returning_overrides_brief(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--returning", "text", "--brief"])
+    out = json.loads(capsys.readouterr().out)
+    # --returning wins over --brief's locator projection.
+    for m in out["matches"]:
+        assert set(m) == {"text"}
+
+
+def test_scan_returning_unknown_field_errors(scan_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--returning", "chunk_id,bogus"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert "chunk_id" in out["valid_fields"]
+    assert "document_id" in out["valid_fields"]
+
+
+def test_scan_default_projection_unchanged_without_returning(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER])
+    out = json.loads(capsys.readouterr().out)
+    m = out["matches"][0]
+    assert set(m) == {
+        "chunk_id", "document_id", "file_name", "chunk_index", "page_number",
+        "section_heading", "content_type", "authored_date", "text", "text_length",
+    }
+
+
+def test_scan_count_by_document_chunk_id_selectable(scan_corpus, capsys):
+    """The keystone: --count-by document rows expose a citable chunk_id via
+    --returning, removing the re-read round-trip to recover an id."""
+    _run(scan_corpus, [MARKER, "--count-by", "document", "--returning", "document_id,chunk_id"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_document_count"] == 2  # aggregate envelope intact
+    for d in out["documents"]:
+        assert set(d) == {"document_id", "chunk_id"}
+        # chunk_id is a real matching chunk in that document.
+        assert isinstance(d["chunk_id"], int)
+
+
+def test_scan_count_by_document_default_unchanged(scan_corpus, capsys):
+    _run(scan_corpus, [MARKER, "--count-by", "document"])
+    out = json.loads(capsys.readouterr().out)
+    for d in out["documents"]:
+        assert set(d) == {"document_id", "file_name", "chunk_count"}
+
+
+def test_scan_count_by_document_returning_unknown_field_errors(scan_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--count-by", "document", "--returning", "text"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    # 'text' is a per-chunk field, not in the count-by-document whitelist.
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert out["valid_fields"] == [
+        "chunk_id", "document_id", "file_name", "chunk_count",
+    ]
+
+
+def test_scan_count_by_regex_rejects_returning(scan_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--count-by", "/(ACME|BETA)/", "--returning", "chunk_id"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "RETURNING_NOT_APPLICABLE"

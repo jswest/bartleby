@@ -57,6 +57,20 @@ With ``--brief`` each hit is trimmed to a triage projection — ``chunk_id``,
 even here (it's locator-grade) so brief hits stay triageable by time without a
 re-lookup. The envelope is unchanged; ``--add-context`` is ignored under
 ``--brief``.
+
+``--returning <field>,...`` projects each hit to exactly the named fields, in
+the order given, overriding both the default and ``--brief`` (the envelope is
+untouched). Selectable fields: ``chunk_id``, ``document_id``, ``source_kind``,
+``source_id``, ``source_name``, ``file_name``, ``page_number``,
+``authored_date``, ``chunk_index``, ``section_heading``, ``content_type``,
+``text``, ``rank``, ``score``, ``normalized_score``, ``image_id``,
+``image_file_path``. ``document_id`` is the originating document for a
+document-kind chunk and ``null`` otherwise (summaries/images/findings have no
+single document anchor); the ``image_*`` fields are ``null`` on non-image hits.
+The context arrays are *not* field-selectable (opt-in nested structure shaped by
+``--add-context``, not a flat field) — use the full default projection for them.
+An unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error naming the valid
+set.
 """
 
 from __future__ import annotations
@@ -70,11 +84,26 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_file_like_arg, apply_preview, chunk_locations, comma_int_list,
-    memory_enabled, positive_int, source_names,
+    add_file_like_arg, add_returning_arg, apply_preview, chunk_locations,
+    comma_int_list, memory_enabled, positive_int, project_row, source_names,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
+
+# --returning whitelist: the flat top-level fields of a hit. chunk_id +
+# document_id lead so a citable id is always selectable. document_id is the
+# originating document for a document-kind chunk and null otherwise (summaries
+# span one doc but aren't it; images can span many; findings have none) —
+# honest-null, never faked. The context arrays (context_before/after) and the
+# image locators stay reachable via the full default projection but aren't
+# field-selectable here: context is opt-in nested structure shaped by
+# --add-context, not a flat field.
+RESULT_FIELDS = [
+    "chunk_id", "document_id", "source_kind", "source_id", "source_name",
+    "file_name", "page_number", "authored_date", "chunk_index",
+    "section_heading", "content_type", "text", "rank", "score",
+    "normalized_score", "image_id", "image_file_path",
+]
 
 RRF_K = 60
 DEFAULT_CONTEXT = 0
@@ -135,6 +164,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
+    add_returning_arg(p, RESULT_FIELDS)
     p.add_argument(
         "--brief",
         action="store_true",
@@ -441,6 +471,32 @@ def work(*, conn, args, session_id) -> dict:
             chunk_id,
             {"file_name": None, "page_number": None, "authored_date": None},
         )
+        if args.returning is not None:
+            # The full flat row, built once so --returning can project from it.
+            # document_id is honest-null off document-kind chunks; image
+            # locators are null on non-image hits (same null-not-absent posture
+            # the brief/default shapes take for fields they drop).
+            is_image = source_kind == "image"
+            results.append(project_row({
+                "chunk_id": chunk_id,
+                "document_id": source_id if source_kind == "document" else None,
+                "source_kind": source_kind,
+                "source_id": source_id,
+                "source_name": names[(source_kind, source_id)],
+                "file_name": loc["file_name"],
+                "page_number": loc["page_number"],
+                "authored_date": loc["authored_date"],
+                "chunk_index": chunk_index,
+                "section_heading": section_heading,
+                "content_type": content_type,
+                "text": text,
+                "rank": rank,
+                "score": score,
+                "normalized_score": score / top_score,
+                "image_id": source_id if is_image else None,
+                "image_file_path": image_paths.get(source_id, "") if is_image else None,
+            }, args.returning, RESULT_FIELDS))
+            continue
         if args.brief:
             results.append({
                 "chunk_id": chunk_id,

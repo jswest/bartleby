@@ -738,3 +738,70 @@ def test_search_image_source_name_notes_multiple_docs(seeded_project, capsys):
     name = image_hits[0]["source_name"]
     assert "image in alpha.pdf" in name
     assert "+1 other docs" in name
+
+
+# ---------- --returning projection (issue #419) ----------
+
+
+def test_search_returning_projects_exact_fields(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--returning", "chunk_id,document_id,rank",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"]
+    for r in out["results"]:
+        assert list(r.keys()) == ["chunk_id", "document_id", "rank"]
+
+
+def test_search_returning_document_id_is_honest_null_off_documents(seeded_project, capsys):
+    """document_id is the source_id for a document-kind chunk; null elsewhere."""
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--summaries", "--documents",
+        "--returning", "source_kind,source_id,document_id",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    by_kind = {}
+    for r in out["results"]:
+        by_kind.setdefault(r["source_kind"], []).append(r)
+    for r in by_kind.get("document", []):
+        assert r["document_id"] == r["source_id"]
+    for r in by_kind.get("summary", []):
+        assert r["document_id"] is None
+
+
+def test_search_returning_overrides_brief(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+        "--returning", "chunk_id", "--brief",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    for r in out["results"]:
+        assert set(r) == {"chunk_id"}
+
+
+def test_search_returning_unknown_field_errors(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run([
+            "--project", seeded_project["project"], "--full-text", "alpha",
+            "--returning", "chunk_id,nope",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+    assert "document_id" in out["valid_fields"]
+
+
+def test_search_default_projection_unchanged_without_returning(seeded_project, capsys):
+    _run([
+        "--project", seeded_project["project"], "--full-text", "alpha",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    hit = out["results"][0]
+    # The full default hit shape is preserved byte-for-byte (no document_id leak).
+    assert set(hit) == {
+        "chunk_id", "source_kind", "source_id", "source_name", "file_name",
+        "page_number", "authored_date", "chunk_index", "section_heading",
+        "content_type", "text", "rank", "score", "normalized_score",
+    }

@@ -69,6 +69,13 @@ even here (it's locator-grade), so brief matches stay sortable/triageable by
 time without a re-lookup. Pairs with the always-present ``total`` for pure
 "where does this phrase occur" enumeration. The envelope is unchanged.
 
+``--returning <field>,...`` projects each match to exactly the named fields, in
+the order given, overriding both the default and ``--brief`` (the envelope is
+untouched). Selectable fields: ``chunk_id``, ``document_id``, ``file_name``,
+``chunk_index``, ``page_number``, ``section_heading``, ``content_type``,
+``authored_date``, ``text``, ``text_length``. An unknown field returns an
+``UNKNOWN_RETURNING_FIELD`` error naming the valid set.
+
 Count-by aggregate (``--count-by document``):
     Replaces the per-chunk ``matches`` with a per-document hit histogram.
     ``distinct_document_count`` is the headline ("14 documents matched"),
@@ -88,6 +95,13 @@ Count-by aggregate (``--count-by document``):
       ]              # default --sort document: chunk_count DESC, document_id;
                      # --sort date: authored_date oldest-first, undated last
     }
+
+    ``--returning`` works here too, with its own whitelist: ``chunk_id``,
+    ``document_id``, ``file_name``, ``chunk_count``. ``chunk_id`` is the lowest
+    matching chunk in that document — a citable handle so you don't re-read to
+    recover one (not part of the default histogram row). ``--returning`` is
+    rejected on ``--count-by '/regex/'`` (``RETURNING_NOT_APPLICABLE``): a
+    captured value spans documents, so its buckets carry no citable id.
 
 Count-by capture (``--count-by '/regex/'``):
     On templated corpora the interesting value often sits in a predictable
@@ -150,14 +164,26 @@ from collections import Counter
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, add_file_like_arg, apply_preview, comma_int_list,
-    nonneg_int, positive_int,
+    add_date_filter_args, add_file_like_arg, add_returning_arg, apply_preview,
+    comma_int_list, nonneg_int, positive_int, project_row,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
 
 DEFAULT_PREVIEW = 240
 DEFAULT_LIMIT = 100
+
+# --returning whitelists. chunk_id + document_id lead every set so a citable id
+# is always selectable without a re-read round-trip. The per-chunk match set is
+# the full default-mode row; --count-by document rows expose a representative
+# chunk_id (the lowest matching chunk in that document) alongside the histogram
+# columns. --count-by /regex/ buckets span documents, so no id is selectable
+# there — --returning is rejected for the regex aggregate.
+MATCH_FIELDS = [
+    "chunk_id", "document_id", "file_name", "chunk_index", "page_number",
+    "section_heading", "content_type", "authored_date", "text", "text_length",
+]
+COUNT_BY_DOCUMENT_FIELDS = ["chunk_id", "document_id", "file_name", "chunk_count"]
 
 # Runaway guards for a regex --count-by. The pattern is agent-supplied, not
 # attacker-supplied, so this is a footgun rail, not an adversarial-ReDoS defence:
@@ -236,6 +262,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
     add_date_filter_args(p)
+    add_returning_arg(p, MATCH_FIELDS)
     args = p.parse_args(argv)
     if args.count_by and (args.preview is not None or args.brief):
         p.error(
@@ -344,6 +371,23 @@ def _count_by_regex(cur, where: str, params: list, pattern: re.Pattern) -> tuple
     return counter, False
 
 
+def _project_count_by_document(full: dict, returning: list[str] | None) -> dict:
+    """Project a --count-by document row to --returning, or its default.
+
+    The default row keeps the histogram's three columns (chunk_id is selectable
+    via --returning but isn't in the default output — it's the citable handle,
+    not part of the histogram contract).
+    """
+    projected = project_row(full, returning, COUNT_BY_DOCUMENT_FIELDS)
+    if projected is not None:
+        return projected
+    return {
+        "document_id": full["document_id"],
+        "file_name": full["file_name"],
+        "chunk_count": full["chunk_count"],
+    }
+
+
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
@@ -393,6 +437,14 @@ def work(*, conn, args, session_id) -> dict:
     cur = conn.cursor()
 
     if count_mode == "regex":
+        if args.returning is not None:
+            raise SkillError(
+                "RETURNING_NOT_APPLICABLE",
+                "--returning has no effect on --count-by '/regex/' output: a "
+                "captured value spans documents, so its {value, count} buckets "
+                "carry no citable id to project. Use --count-by document for a "
+                "per-document histogram with selectable chunk_id/document_id.",
+            )
         if no_match:
             counter, truncated = Counter(), False
         else:
@@ -424,10 +476,14 @@ def work(*, conn, args, session_id) -> dict:
                 params,
             ).fetchone()
             documents = [
-                {"document_id": source_id, "file_name": file_name,
-                 "chunk_count": chunk_count}
-                for source_id, file_name, chunk_count in cur.execute(
-                    f"SELECT c.source_id, d.file_name, COUNT(*) AS n "
+                _project_count_by_document(
+                    {"chunk_id": rep_chunk_id, "document_id": source_id,
+                     "file_name": file_name, "chunk_count": chunk_count},
+                    args.returning,
+                )
+                for source_id, file_name, chunk_count, rep_chunk_id in cur.execute(
+                    f"SELECT c.source_id, d.file_name, COUNT(*) AS n, "
+                    f"       MIN(c.chunk_id) AS rep "
                     f"FROM chunks_fts "
                     f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
                     f"JOIN documents d ON d.document_id = c.source_id "
@@ -481,37 +537,36 @@ def work(*, conn, args, session_id) -> dict:
         [*params, args.limit, args.offset],
     )
 
-    if args.brief:
-        matches = [
-            {
+    matches = []
+    for (chunk_id, source_id, chunk_index, section_heading,
+         page_number, content_type, text, file_name, authored_date) in rows:
+        # The full whitelisted row, built once. --returning projects from it;
+        # otherwise --brief / default shape it (and only then is text truncated).
+        full = {
+            "chunk_id": chunk_id,
+            "document_id": source_id,
+            "file_name": file_name,
+            "chunk_index": chunk_index,
+            "page_number": page_number,
+            "section_heading": section_heading,
+            "content_type": content_type,
+            "authored_date": authored_date,
+            "text": apply_preview(text, preview),
+            "text_length": len(text),
+        }
+        projected = project_row(full, args.returning, MATCH_FIELDS)
+        if projected is not None:
+            matches.append(projected)
+        elif args.brief:
+            matches.append({
                 "document_id": source_id,
                 "file_name": file_name,
                 "chunk_id": chunk_id,
                 "page_number": page_number,
                 "authored_date": authored_date,
-            }
-            for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name,
-                 authored_date) in rows
-        ]
-    else:
-        matches = [
-            {
-                "document_id": source_id,
-                "file_name": file_name,
-                "chunk_id": chunk_id,
-                "chunk_index": chunk_index,
-                "page_number": page_number,
-                "section_heading": section_heading,
-                "content_type": content_type,
-                "authored_date": authored_date,
-                "text": apply_preview(text, preview),
-                "text_length": len(text),
-            }
-            for (chunk_id, source_id, chunk_index, section_heading,
-                 page_number, content_type, text, file_name,
-                 authored_date) in rows
-        ]
+            })
+        else:
+            matches.append(full)
     return _envelope({
         "offset": args.offset, "limit": args.limit, "total": total,
         "preview": preview, "matches": matches,
