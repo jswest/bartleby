@@ -89,12 +89,9 @@ def get_tag_by_name(conn, name: str) -> TagRow | None:
 
 
 def find_tag_by_normalized_name(conn, name: str) -> TagRow | None:
-    """Return an existing tag whose name normalizes equal to ``name``, else None.
+    """Return the first tag whose normalized name equals ``normalize_name(name)``, else None.
 
-    The normalized leg of conflict detection that ``add_tag`` runs via
-    ``find_similar_tag`` (catching ``"NYSEG"`` ≡ ``"ny-seg"``), without the
-    embedding/similarity leg. ``rename_tag`` uses this so renaming onto a
-    normalized-equal tag is refused, not silently duplicated.
+    Normalized-equality check only — no embedding/similarity leg.
     """
     target_norm = normalize_name(name)
     for tag in fetch_vocabulary(conn):
