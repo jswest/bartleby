@@ -119,11 +119,8 @@ def work(*, conn, args, session_id) -> dict:
         conn, citations, ids, code="CITES_MERGED_CHUNKS", action="merge",
     )
 
-    # EMBED phase, hoisted above the first write (issue #364). The ~5-10s lazy
-    # model load on embed_texts' first call must not run inside the deferred
-    # write-lock window opened by the UPDATE below — busy_timeout is only 5000ms,
-    # so a concurrent skill/UI/ingest would hit BusyError. embed_body_chunks
-    # touches no DB; write_finding_chunks at the tail applies the result.
+    # Embed BEFORE the UPDATE (the first write) so the transaction's write
+    # lock doesn't span the lazy model load (issue #364).
     chunk_inputs = embed_body_chunks(body)
 
     owning_session_id = owners[target]
