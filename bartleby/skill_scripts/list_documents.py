@@ -61,15 +61,16 @@ import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, add_file_like_arg, pagination_hint,
+    add_date_filter_args, add_file_like_arg, nonneg_int, pagination_hint,
+    positive_int,
 )
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("list_documents", __doc__)
     p.add_argument("--project", type=str, default=None)
-    p.add_argument("--limit", type=int, default=200)
-    p.add_argument("--offset", type=int, default=0)
+    p.add_argument("--limit", type=positive_int, default=200)
+    p.add_argument("--offset", type=nonneg_int, default=0)
     tier = p.add_mutually_exclusive_group()
     tier.add_argument(
         "--verbose",

@@ -119,8 +119,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="around_chunk",
         help="Target chunk_id; returns target plus --window chunks on each side.",
     )
-    p.add_argument("--offset", type=int, default=0)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--offset", type=nonneg_int, default=0)
+    p.add_argument("--limit", type=positive_int, default=50)
     p.add_argument(
         "--window",
         type=nonneg_int,

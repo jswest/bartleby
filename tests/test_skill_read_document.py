@@ -74,3 +74,15 @@ def test_read_document_force_bypasses_gate(seeded_project, capsys, monkeypatch):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["full_text"]
+
+
+@pytest.mark.parametrize("bad", ["0", "-1"])
+def test_read_document_non_positive_id_rejected(seeded_project, capsys, bad):
+    # The --document id flag uses the shared positive_int validator (issue #403):
+    # a non-positive id fails with the JSON usage envelope before any query runs.
+    with pytest.raises(SystemExit) as exc:
+        read_document.main([
+            "--project", seeded_project["project"], "--document", bad,
+        ])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
