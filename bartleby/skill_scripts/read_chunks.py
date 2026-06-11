@@ -19,6 +19,11 @@ Three modes (mutually exclusive):
       derived from the target chunk — no need to pass --document. Works
       for any source kind, though image chunks have no neighbors.
 
+The modes are mutually exclusive: pick one, and any flags belonging to the
+other modes are silently ignored (e.g. ``--window`` is read only in
+``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document``
+mode).
+
 In a memory-off session the finding wall (see ``read_finding``) extends here:
 finding-kind chunks authored by *another* session are walled off so an
 evaluation run can't read prior conclusions by chunk_id. ``--chunks`` drops
