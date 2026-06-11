@@ -287,19 +287,7 @@ def ensure_active_session(project_name: str) -> int:
     For use by skill scripts that must always have a session to attribute
     findings and audit-log entries to.
     """
-    sid = read_active_session_id(project_name)
-    if sid is not None:
-        # Validate the pointer is still live.
-        conn = open_db(project_name)
-        try:
-            row = conn.cursor().execute(
-                "SELECT session_id FROM sessions WHERE session_id = ?", (sid,)
-            ).fetchone()
-        finally:
-            conn.close()
-        if row:
-            return sid
-        clear_active_session(project_name)
-
-    info = start_session(project_name, memory_enabled=True)
+    info = get_current_session(project_name) or start_session(
+        project_name, memory_enabled=True
+    )
     return info["session_id"]

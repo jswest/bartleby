@@ -64,12 +64,19 @@ def build_arg_parser(
     the JSON contract otherwise lives only in docstrings they never see (issue
     #47). The raw formatter must travel with the docstring, so it lives here
     rather than at each of the ~18 call sites.
+
+    ``--project`` is declared here too: ``run()`` unconditionally reads
+    ``args.project`` to resolve the corpus, so it is part of the runner's
+    contract with every script (issue #432). Each script's parser inherits it
+    from this factory rather than redeclaring the byte-identical line.
     """
-    return argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog=prog,
         description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--project", type=str, default=None)
+    return parser
 
 
 def _print_json(payload: Any) -> None:

@@ -6,41 +6,18 @@ import json
 
 import pytest
 
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_scripts import read_finding
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
-
-
-def _emb() -> list[float]:
-    return [0.01 * i for i in range(EMBEDDING_DIM)]
+from tests._skill_fixtures import (  # noqa: F401
+    project_env,
+    seed_finding,
+    seeded_project,
+)
 
 
 def _active_session_id(project):
     from bartleby.session import ensure_active_session
     return ensure_active_session(project)
-
-
-def _seed_finding(conn, *, session_id, title="A finding",
-                  description="one-line hook", body="finding body",
-                  cited_chunk_ids=()):
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO findings (session_id, title, description, body) "
-        "VALUES (?, ?, ?, ?)",
-        (session_id, title, description, body),
-    )
-    finding_id = conn.last_insert_rowid()
-    body_chunk_ids = insert_finding_chunks(conn, finding_id, [
-        ChunkInput(text=body, embedding=_emb(), chunk_index=0),
-    ])
-    for chunk_id in cited_chunk_ids:
-        cur.execute(
-            "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
-            (finding_id, chunk_id),
-        )
-    return finding_id, body_chunk_ids
 
 
 def _run(capsys, argv):
@@ -63,7 +40,7 @@ def test_read_finding_happy_path(seeded_project, capsys):
             )
         ]
         body = f"Claim one[^{cited[0]}] and claim two[^{cited[1]}]."
-        finding_id, body_chunk_ids = _seed_finding(
+        finding_id, body_chunk_ids = seed_finding(
             conn, session_id=session_id, title="PM25 equity",
             description="who bears the brunt", body=body, cited_chunk_ids=cited,
         )
@@ -112,7 +89,7 @@ def test_read_finding_dangling_citation(seeded_project, capsys):
             )
         ]
         body = f"Live claim[^{cited[0]}] and orphaned claim[^{cited[1]}]."
-        finding_id, _ = _seed_finding(
+        finding_id, _ = seed_finding(
             conn, session_id=session_id, body=body, cited_chunk_ids=cited,
         )
         # Drop the cited document's chunks; ON DELETE CASCADE strips the
@@ -137,7 +114,7 @@ def test_read_finding_no_citations(seeded_project, capsys):
 
     conn = open_db(project)
     try:
-        finding_id, _ = _seed_finding(conn, session_id=session_id)
+        finding_id, _ = seed_finding(conn, session_id=session_id)
     finally:
         conn.close()
 
@@ -169,7 +146,7 @@ def test_read_finding_memory_off_other_session(seeded_project, capsys):
             ("author", 1),
         )
         author = conn.last_insert_rowid()
-        finding_id, _ = _seed_finding(conn, session_id=author)
+        finding_id, _ = seed_finding(conn, session_id=author)
     finally:
         conn.close()
 
@@ -192,7 +169,7 @@ def test_read_finding_memory_off_own_session(seeded_project, capsys):
 
     conn = open_db(project)
     try:
-        finding_id, _ = _seed_finding(
+        finding_id, _ = seed_finding(
             conn, session_id=info["session_id"], title="own", description="mine",
         )
     finally:

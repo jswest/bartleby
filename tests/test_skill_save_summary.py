@@ -8,28 +8,12 @@ import pytest
 
 from bartleby.skill_scripts import save_summary
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from tests._skill_fixtures import (  # noqa: F401
     assert_chunk_tables_consistent,
+    mock_embed,
     project_env,
     seeded_project,
 )
-
-
-@pytest.fixture(autouse=True)
-def mock_embed(monkeypatch):
-    # save_summary embeds via _common.embed_body_chunks; patch the names where
-    # that helper looks them up.
-    monkeypatch.setattr(
-        "bartleby.ingest.embed.embed_texts",
-        lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
-    )
-    # Force single-chunk output so chunk_count assertions stay stable.
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.chunk.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
 
 
 def test_save_summary_creates_new_summary(seeded_project, capsys):

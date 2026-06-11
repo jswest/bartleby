@@ -662,7 +662,7 @@ def _image_anchors(cur, image_ids: list[int]) -> dict[int, dict]:
 
     out: dict[int, dict] = {}
     for image_id, occurrences in by_image.items():
-        primary_doc, primary_page, primary_name, primary_date = occurrences[0]
+        _, primary_page, primary_name, primary_date = occurrences[0]
         out[image_id] = {
             "file_name": primary_name,
             "page_number": primary_page,

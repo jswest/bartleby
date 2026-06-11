@@ -78,26 +78,6 @@ def _fmt_eta(secs: float) -> str:
     return f"{hours}h{mins:02d}m"
 
 
-class _ProgressTally:
-    """Counts completed work units and forwards ``(done, total)`` to a progress
-    callback — the shared meter for the caption (#166) and summarize (#188)
-    stages, which both report identically against a fixed-size work-list."""
-
-    def __init__(
-        self, total: int, on_progress: Callable[[int, int], None] | None
-    ) -> None:
-        self._total = total
-        self._on_progress = on_progress
-        self._done = 0
-        if on_progress is not None:
-            on_progress(0, total)
-
-    def advance(self) -> None:
-        self._done += 1
-        if self._on_progress is not None:
-            self._on_progress(self._done, self._total)
-
-
 class ScribeProgress:
     """Live multi-worker progress for a scribe ingest run (see module docstring).
 
@@ -281,12 +261,6 @@ class ScribeProgress:
         self._clear_lanes()       # new phase, fresh lanes
         self._refresh_overall()
 
-    def _set_completed(self, name: str, done: int) -> None:
-        with self._lock:
-            self._done[name] = done
-            self._recompute_eta(name)
-        self._refresh_overall()
-
     def _advance(self, name: str, n: int = 1) -> None:
         with self._lock:
             self._done[name] += n
@@ -297,7 +271,7 @@ class ScribeProgress:
 class _Phase:
     """A bound view of one phase, handed to the phase's loop so it never touches
     Rich directly. ``start`` reveals the denominator (and grows the overall bar),
-    ``advance``/``set_completed`` move the tally, ``lane`` updates a worker row."""
+    ``advance`` moves the tally, ``lane`` updates a worker row."""
 
     def __init__(self, parent: ScribeProgress, name: str) -> None:
         self._parent = parent
@@ -308,18 +282,6 @@ class _Phase:
 
     def advance(self, n: int = 1) -> None:
         self._parent._advance(self._name, n)
-
-    def set_completed(self, done: int) -> None:
-        self._parent._set_completed(self._name, done)
-
-    def on_progress(self, done: int, total: int) -> None:
-        """Adapt the ``_caption_all``/``_summarize_all`` ``on_progress`` contract
-        — ``(0, total)`` to reveal, then ``(done, total)`` per item — onto this
-        phase, so those passes need no bespoke closure in the caller."""
-        if done == 0:
-            self.start(total)
-        else:
-            self.set_completed(done)
 
     def lane(self, key: object, item: str, stage: str) -> None:
         self._parent._lane_update(key, item, stage)

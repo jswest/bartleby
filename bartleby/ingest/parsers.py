@@ -81,11 +81,8 @@ class _ImageRoute:
 
 def _parse_image_routes(
     routes: list[_ImageRoute],
+    config: ParseConfig,
     *,
-    archive_root: Path,
-    vision_enabled: bool,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
     on_warn: Callable[[str], None] | None = None,
 ) -> list[ParsedImage]:
     """Scale + archive each route into a ParsedImage (no VLM, no DB).
@@ -98,7 +95,7 @@ def _parse_image_routes(
     """
     if not routes:
         return []
-    if not vision_enabled:
+    if not config.vision_enabled:
         if on_warn is not None:
             on_warn(
                 f"Skipping {len(routes)} image(s) — no vision provider configured."
@@ -107,19 +104,19 @@ def _parse_image_routes(
     parsed: list[ParsedImage] = []
     for route in routes:
         prepared = image_pipeline.prepare_image(
-            route.bytes_, max_dimension=vision_max_dimension,
+            route.bytes_, max_dimension=config.vision_max_dimension,
         )
         if image_pipeline.is_below_vlm_minimum(
-            prepared, min_dimension=vision_min_dimension
+            prepared, min_dimension=config.vision_min_dimension
         ):
             page_str = f" (page {route.page_number})" if route.page_number else ""
             if on_warn is not None:
                 on_warn(
                     f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
-                    f"is below the {vision_min_dimension}px vision minimum."
+                    f"is below the {config.vision_min_dimension}px vision minimum."
                 )
             continue
-        archived = image_pipeline.archive_image(prepared, archive_root)
+        archived = image_pipeline.archive_image(prepared, config.archive_root)
         parsed.append(ParsedImage(
             hash=prepared.hash,
             archive_path=archived,
@@ -197,13 +194,14 @@ def _parse_html_sec2md(
     """
     if on_stage is not None:
         on_stage("extracting")
-    sections = sec2md_pipeline.convert_sections(archived)
+    file_bytes = archived.read_bytes()
+    sections = sec2md_pipeline.convert_sections_bytes(file_bytes)
     if sections:
         return _parse_html_sec2md_split(
-            archived, sections, file_hash=file_hash, file_name=file_name,
-            on_stage=on_stage,
+            archived, sections, file_bytes=file_bytes,
+            file_hash=file_hash, file_name=file_name, on_stage=on_stage,
         )
-    result = sec2md_pipeline.convert(archived)
+    result = sec2md_pipeline.convert_bytes(file_bytes)
     if on_stage is not None and result.chunks:
         on_stage("embedding")
     chunks = _build_sec2md_chunks(result)
@@ -217,6 +215,7 @@ def _parse_html_sec2md_split(
     archived: Path,
     sections: list,
     *,
+    file_bytes: bytes,
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
@@ -228,7 +227,6 @@ def _parse_html_sec2md_split(
     is one atomic write unit — the Writer persists the container last."""
     if on_stage is not None:
         on_stage("embedding")
-    file_bytes = archived.read_bytes()
     parsed_sections: list[ParsedSection] = []
     total_tokens = 0
     for sec in sections:
@@ -307,15 +305,10 @@ def _parse_edgar_submission(
 
 def _parse_pdf_pdfplumber(
     archived: Path,
+    config: ParseConfig,
     *,
     file_hash: str,
     file_name: str,
-    archive_root: Path,
-    sparse_text_threshold: int,
-    ocr_min_confidence: int,
-    vision_enabled: bool,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
     on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
@@ -323,8 +316,8 @@ def _parse_pdf_pdfplumber(
         on_stage("extracting")
     result = pdfplumber_pipeline.convert(
         archived,
-        sparse_text_threshold=sparse_text_threshold,
-        ocr_min_confidence=ocr_min_confidence,
+        sparse_text_threshold=config.sparse_text_threshold,
+        ocr_min_confidence=config.ocr_min_confidence,
     )
 
     doc_rows: list[ChunkRow] = []
@@ -362,12 +355,7 @@ def _parse_pdf_pdfplumber(
         embeddings = embed.embed_texts([r.text for r in doc_rows])
         chunks = _build_chunk_inputs(doc_rows, embeddings)
 
-    images = _parse_image_routes(
-        image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
-        vision_max_dimension=vision_max_dimension,
-        vision_min_dimension=vision_min_dimension,
-        on_warn=on_warn,
-    )
+    images = _parse_image_routes(image_routes, config, on_warn=on_warn)
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
         page_count=result.page_count, token_count=_token_count(result.full_text),
@@ -376,13 +364,10 @@ def _parse_pdf_pdfplumber(
 
 def _parse_pdf_docling(
     archived: Path,
+    config: ParseConfig,
     *,
     file_hash: str,
     file_name: str,
-    archive_root: Path,
-    vision_enabled: bool,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
     on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
@@ -391,7 +376,7 @@ def _parse_pdf_docling(
     if on_stage is not None:
         on_stage("extracting")
     docling_result = docling_pipeline.convert(
-        archived, extract_images=vision_enabled,
+        archived, extract_images=config.vision_enabled,
     )
 
     chunks: list[ChunkInput] = []
@@ -408,7 +393,7 @@ def _parse_pdf_docling(
 
     # Embedded images come out of the same docling pass (no second parse).
     image_routes: list[_ImageRoute] = []
-    if vision_enabled and docling_result.images:
+    if config.vision_enabled and docling_result.images:
         image_routes = [
             _ImageRoute(
                 bytes_=img.png_bytes,
@@ -417,12 +402,7 @@ def _parse_pdf_docling(
             )
             for img in docling_result.images
         ]
-    images = _parse_image_routes(
-        image_routes, archive_root=archive_root, vision_enabled=vision_enabled,
-        vision_max_dimension=vision_max_dimension,
-        vision_min_dimension=vision_min_dimension,
-        on_warn=on_warn,
-    )
+    images = _parse_image_routes(image_routes, config, on_warn=on_warn)
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
         page_count=docling_result.page_count,
@@ -432,13 +412,10 @@ def _parse_pdf_docling(
 
 def _parse_image_file(
     archived: Path,
+    config: ParseConfig,
     *,
     file_hash: str,
     file_name: str,
-    archive_root: Path,
-    vision_enabled: bool,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
     on_stage: Callable[[str], None] | None = None,
     on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
@@ -451,12 +428,7 @@ def _parse_image_file(
     route = _ImageRoute(
         bytes_=archived.read_bytes(), page_number=None, image_index_on_page=0,
     )
-    images = _parse_image_routes(
-        [route], archive_root=archive_root, vision_enabled=vision_enabled,
-        vision_max_dimension=vision_max_dimension,
-        vision_min_dimension=vision_min_dimension,
-        on_warn=on_warn,
-    )
+    images = _parse_image_routes([route], config, on_warn=on_warn)
     return ParsedDocument(
         file_hash=file_hash, file_name=file_name, archive_path=archived,
         page_count=None, token_count=0, document_chunks=[], images=images,
@@ -465,27 +437,17 @@ def _parse_image_file(
 def _parse_document(
     archived: Path,
     ext: str,
+    config: ParseConfig,
     *,
     file_hash: str,
     file_name: str,
-    pdf_converter: str,
-    html_converter: str,
-    sparse_text_threshold: int,
-    ocr_min_confidence: int,
-    vision_enabled: bool,
-    vision_max_dimension: int,
-    vision_min_dimension: int,
-    archive_root: Path,
     on_stage: Callable[[str], None] | None = None,
     on_warn: Callable[[str], None] | None = None,
 ) -> ParsedDocument:
     """Route an archived file to its converter and return a parsed result."""
     if ext in IMAGE_EXTENSIONS:
         return _parse_image_file(
-            archived, file_hash=file_hash, file_name=file_name,
-            archive_root=archive_root, vision_enabled=vision_enabled,
-            vision_max_dimension=vision_max_dimension,
-            vision_min_dimension=vision_min_dimension,
+            archived, config, file_hash=file_hash, file_name=file_name,
             on_stage=on_stage, on_warn=on_warn,
         )
     if ext in PDF_EXTENSIONS:
@@ -494,22 +456,13 @@ def _parse_document(
         # *without* rerouting them into the HTML pipeline (they carry no
         # document content; ingesting a portal error page pollutes the corpus).
         pdfplumber_pipeline.reject_if_html(archived)
-        if pdf_converter == "docling":
+        if config.pdf_converter == "docling":
             return _parse_pdf_docling(
-                archived, file_hash=file_hash, file_name=file_name,
-                archive_root=archive_root, vision_enabled=vision_enabled,
-                vision_max_dimension=vision_max_dimension,
-                vision_min_dimension=vision_min_dimension,
+                archived, config, file_hash=file_hash, file_name=file_name,
                 on_stage=on_stage, on_warn=on_warn,
             )
         return _parse_pdf_pdfplumber(
-            archived, file_hash=file_hash, file_name=file_name,
-            archive_root=archive_root,
-            sparse_text_threshold=sparse_text_threshold,
-            ocr_min_confidence=ocr_min_confidence,
-            vision_enabled=vision_enabled,
-            vision_max_dimension=vision_max_dimension,
-            vision_min_dimension=vision_min_dimension,
+            archived, config, file_hash=file_hash, file_name=file_name,
             on_stage=on_stage, on_warn=on_warn,
         )
     if edgar_pipeline.detect(archived):
@@ -521,7 +474,7 @@ def _parse_document(
         )
     if (
         ext in HTML_EXTENSIONS
-        and html_converter == "sec2md"
+        and config.html_converter == "sec2md"
         and sec2md_pipeline.is_ixbrl(archived)
     ):
         return _parse_html_sec2md(
@@ -601,14 +554,8 @@ def _parse_request(
     try:
         parsed = _parse_document(
             _archive(request.path, config.archive_root, request.file_hash, request.ext),
-            request.ext, file_hash=request.file_hash, file_name=request.file_name,
-            pdf_converter=config.pdf_converter, html_converter=config.html_converter,
-            sparse_text_threshold=config.sparse_text_threshold,
-            ocr_min_confidence=config.ocr_min_confidence,
-            vision_enabled=config.vision_enabled,
-            vision_max_dimension=config.vision_max_dimension,
-            vision_min_dimension=config.vision_min_dimension,
-            archive_root=config.archive_root,
+            request.ext, config, file_hash=request.file_hash,
+            file_name=request.file_name,
             on_stage=on_stage, on_warn=warnings.append,
         )
     except Exception as e:

@@ -33,7 +33,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--boolean-only", action="store_true", dest="boolean_only",
         help="List only boolean tags (value_type IS NULL), excluding value-tags.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

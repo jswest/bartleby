@@ -65,7 +65,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--chunks", type=comma_int_list("chunk_id"), required=True,
         dest="chunk_ids", help="Comma-separated chunk ids, e.g. 4192,4193.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

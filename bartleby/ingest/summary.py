@@ -13,13 +13,12 @@ import itertools
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import Callable
 
 from bartleby.db.chunks import ChunkInput
 from bartleby.ingest import embed
 from bartleby.ingest import parsers
 from bartleby.ingest.chunk import chunk_markdown_string
-from bartleby.ingest.progress import _ProgressTally
+from bartleby.ingest.progress import _Phase
 from bartleby.ingest.summarize import summarize
 from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS, PendingSummary, Writer
 from bartleby.lib import console
@@ -44,8 +43,7 @@ def _summarize_all(
     max_summarize_tokens: int,
     summarize_workers: int,
     timings: bool,
-    on_progress: Callable[[int, int], None] | None,
-    on_lane: Callable[[object, str, str], None] | None = None,
+    phase: _Phase | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[int, dict[int, tuple[str, float]]]:
     """Phase 3: summarize every document still owing one, concurrently (#188).
@@ -71,7 +69,8 @@ def _summarize_all(
     """
     incomplete = 0
     times: dict[int, tuple[str, float]] = {}
-    progress = _ProgressTally(len(pending), on_progress)
+    if phase is not None:
+        phase.start(len(pending))
 
     # Capped docs (failed MAX_INGEST_ATTEMPTS× already) are surfaced, not retried.
     work: list[PendingSummary] = []
@@ -82,7 +81,8 @@ def _summarize_all(
                 f"{MAX_INGEST_ATTEMPTS}× already; not retrying."
             )
             incomplete += 1
-            progress.advance()
+            if phase is not None:
+                phase.advance()
         else:
             work.append(ps)
 
@@ -100,8 +100,8 @@ def _summarize_all(
     def _summarize(ps: PendingSummary, text: str):
         # Claim the running thread's lane for this document, then make the LLM
         # call — keyed by thread id so the pool's N threads map to N sticky lanes.
-        if on_lane is not None:
-            on_lane(threading.get_ident(), ps.file_name, "summarizing")
+        if phase is not None:
+            phase.lane(threading.get_ident(), ps.file_name, "summarizing")
         return summarize(
             text, provider=llm_provider, model=llm_model,
             temperature=temperature, max_summarize_tokens=max_summarize_tokens,
@@ -119,7 +119,8 @@ def _summarize_all(
                 _fail(ps, e)
             if t0 is not None:
                 times[ps.document_id] = (ps.file_name, time.perf_counter() - t0)
-            progress.advance()
+            if phase is not None:
+                phase.advance()
         return incomplete, times
 
     # Pooled: keep at most ``summarize_workers`` inputs in flight (see docstring) —
@@ -138,7 +139,8 @@ def _summarize_all(
                     _persist(ps, fut.result())
                 except Exception as e:
                     _fail(ps, e)
-                progress.advance()
+                if phase is not None:
+                    phase.advance()
                 nxt = next(it, None)
                 if nxt is not None:
                     in_flight[

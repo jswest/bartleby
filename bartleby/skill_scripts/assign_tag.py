@@ -61,7 +61,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--chunk", type=positive_int, default=None, dest="chunk_id",
         help="Chunk to anchor a manual --value to (its citation source).",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

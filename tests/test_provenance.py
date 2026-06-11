@@ -136,7 +136,7 @@ def test_persist_summary_and_caption_stamp_run(project_conn):
     writer.persist_summary(
         document_id,
         SummaryResult(title="T", description="D", text="S", model="m",
-                      truncated_from_tokens=None, authored_date=None),
+                      authored_date=None),
         [_chunk("summary chunk")],
     )
 
@@ -244,7 +244,7 @@ def test_persist_summary_clears_failed_ingest(project_conn):
     writer.persist_summary(
         document_id,
         SummaryResult(title="T", description="D", text="S", model="m",
-                      truncated_from_tokens=None, authored_date=None),
+                      authored_date=None),
         [_chunk("summary chunk")],
     )
 

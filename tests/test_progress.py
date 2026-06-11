@@ -56,7 +56,8 @@ def test_overall_total_grows_as_each_phase_reveals_its_denominator():
     cap = sp.phase("caption")
     cap.start(5)
     assert _overall(sp) == (2, 8)              # caption's 5 join the total
-    cap.set_completed(5)
+    for _ in range(5):
+        cap.advance()
     assert _overall(sp) == (7, 8)
 
     summ = sp.phase("summarize")

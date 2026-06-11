@@ -51,10 +51,16 @@ from bartleby.ingest.writer import FailedUnit, MAX_INGEST_ATTEMPTS, Writer
 from bartleby.lib import console
 from bartleby.lib import timing
 from bartleby.lib.consts import (
+    ALLOWED_HTML_CONVERTERS,
+    ALLOWED_PDF_CONVERTERS,
+    DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
+    DEFAULT_MAX_SUMMARIZE_TOKENS,
     DEFAULT_OCR_MIN_CONFIDENCE,
     DEFAULT_PDF_CONVERTER,
     DEFAULT_SPARSE_TEXT_THRESHOLD,
+    DEFAULT_SUMMARIZE_WORKERS,
+    DEFAULT_TEMPERATURE,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
@@ -106,18 +112,18 @@ def main(
     pdf_converter_name = (
         pdf_converter or config.get("pdf_converter", DEFAULT_PDF_CONVERTER)
     ).lower()
-    if pdf_converter_name not in ("pdfplumber", "docling"):
+    if pdf_converter_name not in ALLOWED_PDF_CONVERTERS:
         raise ValueError(
             f"Unknown pdf_converter {pdf_converter_name!r}; "
-            f"expected 'pdfplumber' or 'docling'."
+            f"expected one of {', '.join(ALLOWED_PDF_CONVERTERS)}."
         )
     html_converter_name = (
         html_converter or config.get("html_converter", DEFAULT_HTML_CONVERTER)
     ).lower()
-    if html_converter_name not in ("docling", "sec2md"):
+    if html_converter_name not in ALLOWED_HTML_CONVERTERS:
         raise ValueError(
             f"Unknown html_converter {html_converter_name!r}; "
-            f"expected 'docling' or 'sec2md'."
+            f"expected one of {', '.join(ALLOWED_HTML_CONVERTERS)}."
         )
 
     required_models = resolve._required_hf_models(
@@ -192,9 +198,11 @@ def main(
         archive_root=archive_root,
         timings=timings,
     )
-    temperature = float(config.get("temperature", 0))
+    temperature = float(config.get("temperature", DEFAULT_TEMPERATURE))
     reasoning_effort = config.get("reasoning_effort")
-    max_summarize_tokens = int(config.get("max_summarize_tokens", 50_000))
+    max_summarize_tokens = int(
+        config.get("max_summarize_tokens", DEFAULT_MAX_SUMMARIZE_TOKENS)
+    )
     summaries_enabled = llm_provider is not None and bool(llm_model)
 
     conn = open_db(project_name)
@@ -236,9 +244,15 @@ def main(
         max_workers = (
             resolve._resolve_max_workers(config, timings=timings) if to_parse else 1
         )
-        caption_workers = resolve._resolve_caption_workers(config, timings=timings)
-        summarize_workers = resolve._resolve_summarize_workers(
-            config, effective_provider=effective_provider, timings=timings
+        caption_workers = resolve._resolve_io_workers(
+            config, key="caption_workers", default=DEFAULT_CAPTION_WORKERS,
+            provider=config.get("vision_provider"),
+            verb="captions", unit="captioning one image", timings=timings,
+        )
+        summarize_workers = resolve._resolve_io_workers(
+            config, key="summarize_workers", default=DEFAULT_SUMMARIZE_WORKERS,
+            provider=effective_provider,
+            verb="summarizes", unit="summarizing one document", timings=timings,
         )
         if len(to_parse) > 1 and max_workers > 1:
             console.info(
@@ -281,18 +295,15 @@ def main(
             )
 
             # ---- Phase 2: caption every uncaptioned image, concurrently ------
-            # _caption_all drives the tally via on_progress (0,total then per
-            # image) and the lanes via on_lane (per worker thread); the phase
-            # adapts the tally contract itself and reveals the caption total the
-            # first time it hears one.
-            cap_phase = progress.phase("caption")
+            # _caption_all drives the phase directly: start() reveals the caption
+            # total, advance() ticks the tally per image, lane() updates a worker
+            # row.
             caption._caption_all(
                 writer, units,
                 vision_provider=vision_provider, vision_model=vision_model,
                 vision_enabled=parse_config.vision_enabled,
                 caption_workers=caption_workers, timings=timings,
-                on_progress=cap_phase.on_progress,
-                on_lane=cap_phase.lane,
+                phase=progress.phase("caption"),
             )
             # A document is caption-incomplete if any image is still uncaptioned
             # (failed / capped / no provider — recomputed from the DB so a shared
@@ -319,15 +330,13 @@ def main(
             if summaries_enabled:
                 pending = writer.documents_needing_summary()
                 if pending:
-                    sum_phase = progress.phase("summarize")
                     owed, summarize_times = summary._summarize_all(
                         writer, pending,
                         llm_provider=llm_provider, llm_model=llm_model,
                         temperature=temperature,
                         max_summarize_tokens=max_summarize_tokens,
                         summarize_workers=summarize_workers, timings=timings,
-                        on_progress=sum_phase.on_progress,
-                        on_lane=sum_phase.lane,
+                        phase=progress.phase("summarize"),
                         reasoning_effort=reasoning_effort,
                     )
                     incomplete_count += owed

@@ -7,21 +7,20 @@ description, and summary.
 
 from __future__ import annotations
 
+from bartleby.providers.base import DocumentSummary
 
+
+# Single source of truth: the per-field rules live on DocumentSummary's Field
+# descriptions, which already enforce structured output for every provider.
+# Render them into the prompt rather than hand-copying — Ollama's format=
+# grammar channel never shows the model the schema descriptions as text, so the
+# prompt must keep carrying them.
 SUMMARY_INSTRUCTIONS = (
     "Read the document below and produce four things in one pass:\n"
-    "  - title: a short human-readable title (no filename, no quotes, "
-    "no trailing punctuation, 60 characters or fewer).\n"
-    "  - description: a one-sentence hook (~20 words) that tells a reader "
-    "what this document is and why they might care.\n"
-    "  - text: a concise, self-contained summary covering the topic, key "
-    "claims, and structural skeleton. Readable on its own, without the "
-    "original document.\n"
-    "  - authored_date: the date the document itself was authored or "
-    "published, if stated in the document, in ISO 8601 YYYY-MM-DD form. "
-    "Not the date of events described in the document; not an inferred or "
-    "estimated date. If only the year or only the month is known, or if no "
-    "date is stated, return null."
+    + "\n".join(
+        f"  - {name}: {field.description}"
+        for name, field in DocumentSummary.model_fields.items()
+    )
 )
 
 

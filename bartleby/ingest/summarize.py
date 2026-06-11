@@ -44,7 +44,6 @@ class SummaryResult:
     description: str
     text: str
     model: str
-    truncated_from_tokens: int | None  # None when not truncated
     authored_date: str | None  # ISO 8601, NULL when not stated or malformed
 
 
@@ -109,6 +108,5 @@ def summarize(
         description=summary.description,
         text=text,
         model=model,
-        truncated_from_tokens=total_tokens if truncated else None,
         authored_date=normalize_authored_date(summary.authored_date),
     )

@@ -68,7 +68,7 @@ def test_convert_text_only_pdf(tmp_path):
     assert len(result.pages) == 2
     assert "page one" in result.pages[0].text.lower()
     assert "page two" in result.pages[1].text.lower()
-    assert all(not p.is_sparse for p in result.pages)
+    assert all(p.content_type == "text" for p in result.pages)
     assert all(p.page_render_png is None for p in result.pages)
     assert all(p.embedded_images == [] for p in result.pages)
     # full_text concatenates everything.
@@ -83,7 +83,7 @@ def test_convert_extracts_embedded_image(tmp_path):
 
     assert result.page_count == 1
     page = result.pages[0]
-    assert not page.is_sparse
+    assert page.content_type == "text"
     # At least one embedded image is detected and cropped to PNG bytes.
     assert len(page.embedded_images) >= 1
     img = page.embedded_images[0]
@@ -101,7 +101,6 @@ def test_convert_marks_sparse_pages_and_saves_render(tmp_path):
 
     assert result.page_count == 1
     page = result.pages[0]
-    assert page.is_sparse
     # OCR on a page with just "abc" cannot clear the 100-char threshold, so
     # content_type=None and text="" — the caller will route the page render
     # through the VLM instead.
@@ -146,14 +145,12 @@ def test_convert_degrades_to_vlm_when_ocr_raises(tmp_path, monkeypatch):
 
     # Sparse page: OCR raised → routed to the VLM (content_type None, no text),
     # with its render preserved so the caller can hand it to the VLM.
-    assert sparse_page.is_sparse
     assert sparse_page.content_type is None
     assert sparse_page.text == ""
     assert sparse_page.page_render_png is not None
     assert sparse_page.page_render_png.startswith(b"\x89PNG")
 
     # Non-sparse page is untouched by the OCR failure — still chunks as text.
-    assert not text_page.is_sparse
     assert text_page.content_type == "text"
     assert "plenty of text" in text_page.text.lower()
 
@@ -287,22 +284,3 @@ def test_reject_if_html_passes_a_real_pdf(tmp_path):
     _text_pdf(src, ["A genuine PDF with plenty of text. " * 4])
     # A valid PDF starts with %PDF — no exception.
     pp.reject_if_html(src)
-
-
-def test_convert_calls_on_progress_with_total_then_each_page(tmp_path):
-    src = tmp_path / "multi.pdf"
-    _text_pdf(src, [
-        ("Page one body. " * 12),
-        ("Page two body. " * 12),
-        ("Page three body. " * 12),
-    ])
-    seen: list[tuple[int, int]] = []
-    pp.convert(
-        src,
-        sparse_text_threshold=100,
-        ocr_min_confidence=30,
-        on_progress=lambda done, total: seen.append((done, total)),
-    )
-    # First call signals the total; later calls report each page.
-    assert seen[0] == (0, 3)
-    assert seen[1:] == [(1, 3), (2, 3), (3, 3)]

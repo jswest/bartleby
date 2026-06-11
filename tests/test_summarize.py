@@ -50,7 +50,6 @@ def test_summarize_short_doc_no_truncation_note():
     assert result.title == "Doc Title"
     assert result.description == "A one-line hook describing the document."
     assert result.text == "this is a summary"
-    assert result.truncated_from_tokens is None
     assert p.captured_text == "short document"
 
 
@@ -86,7 +85,6 @@ def test_summarize_long_doc_truncates_input_and_appends_note():
         max_summarize_tokens=10,
     )
 
-    assert result.truncated_from_tokens == total
     # Truncation note is appended to text only (title/description are unaffected).
     assert result.title == "Doc Title"
     assert result.text.startswith("summary body")
@@ -112,6 +110,17 @@ def test_summarize_passes_through_valid_authored_date():
         max_summarize_tokens=100,
     )
     assert result.authored_date == "2024-03-15"
+
+
+def test_summarize_drops_malformed_authored_date_through_summarize():
+    # Exercises the normalize_authored_date call site via summarize() itself,
+    # not the helper directly: a malformed provider date must drop to None.
+    p = FakeProvider(return_authored_date="Q3 2024")
+    result = summarize(
+        "doc", provider=p, model="m", temperature=0.0,
+        max_summarize_tokens=100,
+    )
+    assert result.authored_date is None
 
 
 @pytest.mark.parametrize("raw", [

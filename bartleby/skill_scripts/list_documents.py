@@ -68,7 +68,6 @@ from bartleby.skill_scripts._common import (
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("list_documents", __doc__)
-    p.add_argument("--project", type=str, default=None)
     p.add_argument("--limit", type=positive_int, default=200)
     p.add_argument("--offset", type=nonneg_int, default=0)
     tier = p.add_mutually_exclusive_group()

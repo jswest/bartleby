@@ -168,6 +168,31 @@ def test_add_tag_detects_similar_description(seeded_project, capsys):
     assert out["similar_to"]["similarity"] >= tags_helpers.SIMILARITY_THRESHOLD
 
 
+def test_add_tag_rejects_whitespace_name(seeded_project, capsys):
+    # A whitespace-only name has no alphanumeric content; it falls through to
+    # the normalize_name guard and reports EMPTY_NORMALIZED_NAME.
+    with pytest.raises(SystemExit):
+        add_tag.main([
+            "--project", seeded_project["project"],
+            "--name", "   ", "--description", "a real description",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_NORMALIZED_NAME"
+
+
+def test_add_tag_rejects_punctuation_only_name(seeded_project, capsys):
+    # A punctuation-only name normalizes to "" — same EMPTY_NORMALIZED_NAME
+    # envelope. (Leading-dash values like "---" are eaten by argparse before
+    # work() runs, so use non-flag punctuation to exercise the normalize guard.)
+    with pytest.raises(SystemExit):
+        add_tag.main([
+            "--project", seeded_project["project"],
+            "--name", "%%%", "--description", "a real description",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_NORMALIZED_NAME"
+
+
 # ---------- delete_tag / rename_tag / merge_tags ----------
 
 
@@ -258,6 +283,26 @@ def test_rename_tag_allows_case_punctuation_self_rename(seeded_project, capsys):
         ).fetchone()[0] == "NYSEG"
     finally:
         conn.close()
+
+
+def test_rename_tag_rejects_whitespace_new_name(seeded_project, capsys):
+    # A whitespace-only --new normalizes to "" and is refused via the
+    # normalize_name guard's EMPTY_NORMALIZED_NAME envelope.
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO tags (name, description) VALUES ('a', 'd1')"
+        )
+    finally:
+        conn.close()
+
+    with pytest.raises(SystemExit):
+        rename_tag.main([
+            "--project", seeded_project["project"],
+            "--old", "a", "--new", "   ",
+        ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "EMPTY_NORMALIZED_NAME"
 
 
 def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys):

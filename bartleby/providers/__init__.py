@@ -31,7 +31,6 @@ def get_provider(name: str, *, ollama_base_url: str | None = None) -> Provider:
 
 
 __all__ = [
-    "ALLOWED_PROVIDERS",
     "DocumentSummary", "ImageAnalysis", "Provider", "VlmDescription",
     "get_provider",
 ]

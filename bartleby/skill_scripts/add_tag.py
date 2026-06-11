@@ -41,7 +41,6 @@ from bartleby.skill_scripts._tags import (
     compile_pattern,
     find_similar_tag,
     normalize_name,
-    validate_value_type,
 )
 
 
@@ -58,15 +57,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--pattern", type=str, default=None,
         help="Extraction regex with a (?P<value>…) group. Requires --value-type.",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
     name = args.name.strip()
     description = args.description.strip()
-    if not name:
-        raise SkillError("EMPTY_NAME", "Tag name must be non-empty.")
     if not description:
         raise SkillError(
             "EMPTY_DESCRIPTION", "Tag description must be non-empty."
@@ -77,10 +73,12 @@ def work(*, conn, args, session_id) -> dict:
             "Tag name must contain at least one alphanumeric character.",
         )
 
-    # Value-tag: --value-type and --pattern are all-or-nothing. Validate the
-    # type and compile the pattern (re2, must expose (?P<value>…)) before any
-    # write so a malformed value-tag never lands.
-    value_type = validate_value_type(args.value_type)
+    # Value-tag: --value-type and --pattern are all-or-nothing. argparse's
+    # ``choices=list(VALUE_TYPES)`` already constrains args.value_type to None
+    # or a valid type before work() runs, so we read it directly and only need
+    # to compile the pattern (re2, must expose (?P<value>…)) before any write
+    # so a malformed value-tag never lands.
+    value_type = args.value_type
     pattern = args.pattern
     if (value_type is None) != (pattern is None):
         raise SkillError(

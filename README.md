@@ -143,13 +143,7 @@ This stamps the skill that came with your installed `bartleby` into `~/.claude/s
 └── SKILL.md
 ```
 
-`bartleby ready` is idempotent and version-aware: re-running it when nothing changed is a no-op. Useful variants:
-
-- `bartleby ready --check` — report whether the installed skill is current and exit non-zero if it's missing or stale, **without writing anything** (handy in scripts).
-- `bartleby ready --force` — reinstall even when already up to date.
-- `bartleby ready --dest <dir>` — install into a different skills directory (other harnesses also read `~/.claude/skills/`).
-
-Restart your harness after installing — skills load at startup. See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for harness-specific notes.
+Restart your harness after installing — skills load at startup. See the [`bartleby ready`](#bartleby-ready) command reference for the `--check` / `--force` / `--dest` flags, and [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for harness-specific notes.
 
 ### Verify your install
 
@@ -389,13 +383,7 @@ Ingestion runs sequentially. The embedding model is heavy, and small corpora don
 
 _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, news, and regulatory PDFs--with a good number of images, it took ~2 minutes per document running with entirely local models. Shorter documents with fewer images will perform _much_ faster. Long documents with lots of images are slower. For example, a ~200-page regulatory document with lots of fine print and 23 images took ~5 minutes to embed, describe the images, and summarize. A five-page news article with a single image took ~30 seconds.
 
-**Benchmarking ingest.** `--timings` turns the run into a repeatable measurement: it times each document's `prep` / `parse` / `embed` / `caption` / `summarize` stages (the chunk writes fold into `embed`), prints the per-doc split to stderr, and writes an aggregate — `docs`, `pages`, `wall_clock_s`, `docs_per_s`, `pages_per_s`, and a per-stage breakdown (`total_s`, `pct`, `mean_s`) — as a single JSON object to stdout. Capture it with a redirect, since the bar and prose stay on stderr:
-
-```
-bartleby scribe --project bench --files /path/to/sample --timings > bench.json
-```
-
-Already-ingested files are skipped (and so not timed), so run against a **fresh project** for a clean baseline — `bartleby project delete bench -y && bartleby project create bench` between runs. The per-stage `pct` answers the question the concurrency work needs settled first: on a representative sample, is per-doc time dominated by parse, or by the captions? Recorded runs and the reproducible recipe (including the gotchas that silently corrupt a run) live in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+**Benchmarking ingest.** `--timings` turns the run into a repeatable measurement, timing each document's stages and emitting a per-stage aggregate as JSON to stdout (the bar and prose stay on stderr, so capture it with a redirect). The reproducible recipe — fresh-project setup, the aggregate JSON field reference, the gotchas that silently corrupt a run, and recorded runs — lives in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ### `bartleby session`
 
@@ -519,8 +507,10 @@ No prompts, source text, or research notes leave the machine.
 
 | Hardware | Ingest (summarization and tagging) | Ingest (VLM) | Research (Goose or Pi) |
 | --- | --- | --- | --- |
-| 64 GB+ unified memory | `gpt-oss:120b` or `qwen3.6:35b-mlx` | `qwen3-vl:30b` | `gpt-oss:120b` or `qwen3.6:35b-mlx` |
+| 64 GB+ unified memory | `gpt-oss:120b` or `qwen3:30b` | `qwen3-vl:30b` | `gpt-oss:120b` or `qwen3.6:35b-mlx` |
 | ~32 GB unified memory | `gpt-oss:20b` | `gemma4:e2b` (Can occasionally stall on structured-output JSON reparses, which shows up as an apparently slow run rather than an error.) | `gpt-oss:20b` |
+
+`qwen3.6:35b-mlx` is fine for research but **not** for ingest summarization — it failed the summarizer's structured-JSON contract 10/10 in testing (`docs: 0`); see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md#gotchas-that-silently-corrupt-a-run).
 
 **A note on model quality.** Local models follow tool-use protocols less reliably than frontier cloud models. Bartleby's research loop (search → read → cite → save) asks the model to track `chunk_id`s and cite them accurately; smaller models sometimes drop or hallucinate them. They can also format them incorrectly, which is super annoying. `gpt-oss:120b` is reasonably disciplined; with `gpt-oss:20b` you'll want to spot-check.
 

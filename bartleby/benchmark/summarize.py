@@ -32,8 +32,13 @@ from bartleby.benchmark.sources import (
     load_corpus,
     select_documents,
 )
-from bartleby.benchmark.stores import BenchmarkRoot, append_record, read_records
-from bartleby.commands.config import DEFAULT_TEMPERATURE
+from bartleby.benchmark.stores import (
+    BenchmarkRoot,
+    append_record,
+    make_openai_client,
+    read_records,
+)
+from bartleby.lib.consts import DEFAULT_TEMPERATURE
 
 
 def prompt_sha() -> str:
@@ -198,7 +203,6 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
         _warn_missing_ollama(
             ollama_client, [r.model for r in refs if r.provider == "ollama"])
     if openai_client is None and any(r.provider == "openai" for r in refs):
-        from bartleby.benchmark.clients import make_openai_client
         openai_client = make_openai_client(root)
 
     plan = [(ref, doc_id) for ref in refs for doc_id in corpus

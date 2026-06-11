@@ -33,7 +33,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="document_ids", help="Comma-separated document ids, e.g. 1,2,3.",
     )
     p.add_argument("--tag", type=str, required=True)
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

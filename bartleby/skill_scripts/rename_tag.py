@@ -24,14 +24,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("rename_tag", __doc__)
     p.add_argument("--old", type=str, required=True)
     p.add_argument("--new", type=str, required=True)
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
     new_name = args.new.strip()
-    if not new_name:
-        raise SkillError("EMPTY_NAME", "New tag name must be non-empty.")
     if not normalize_name(new_name):
         raise SkillError(
             "EMPTY_NORMALIZED_NAME",

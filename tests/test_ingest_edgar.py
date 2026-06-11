@@ -100,8 +100,6 @@ def test_parse_splits_inner_documents():
     assert types == ["10-K", "EX-99.1", "GRAPHIC", "EX-101.INS"]
     first = docs[0]
     assert first.filename == "acme-10k.htm"
-    assert first.sequence == "1"
-    assert first.description == "FORM 10-K"
     assert "Risk factors and revenue figures." in first.text
 
 
@@ -134,14 +132,13 @@ def test_classify_routes_each_inner_document():
 
 def test_classify_skips_empty():
     assert edgar.classify(
-        InnerDocument(type="10-K", sequence="1", filename="a.htm",
-                      description=None, text="")
+        InnerDocument(type="10-K", filename="a.htm", text="")
     ) == "skip"
 
 
 def test_classify_html_by_body_sniff_when_filename_uninformative():
     doc = InnerDocument(
-        type="10-K", sequence="1", filename=None, description=None,
+        type="10-K", filename=None,
         text="<?xml version='1.0'?>\n<html xmlns:ix='...'>...</html>",
     )
     assert edgar.classify(doc) == "html"
@@ -149,7 +146,7 @@ def test_classify_html_by_body_sniff_when_filename_uninformative():
 
 def test_classify_skips_uuencoded_without_filename_hint():
     doc = InnerDocument(
-        type="GRAPHIC", sequence="1", filename=None, description=None,
+        type="GRAPHIC", filename=None,
         text="begin 644 image\nM_]C_X``02D9)\nend",
     )
     assert edgar.classify(doc) == "skip"
@@ -333,7 +330,7 @@ def _write(tmp_path, name, content: bytes):
 
 
 def test_convert_sections_splits_toc_anchored_filing():
-    sections = sec2md._convert_sections_bytes(_ANCHORED_FILING)
+    sections = sec2md.convert_sections_bytes(_ANCHORED_FILING)
     assert [s.anchor_id for s in sections] == [
         "sec_business", "sec_risk", "sec_glossary",
     ]
@@ -348,7 +345,7 @@ def test_convert_sections_splits_toc_anchored_filing():
 
 
 def test_convert_sections_returns_empty_without_toc():
-    assert sec2md._convert_sections_bytes(_UNANCHORED_FILING) == []
+    assert sec2md.convert_sections_bytes(_UNANCHORED_FILING) == []
 
 
 def test_convert_sections_ignores_dangling_anchors():
@@ -361,14 +358,14 @@ def test_convert_sections_ignores_dangling_anchors():
 <h2 id="real">Real</h2>
 <p>This is the only anchor that actually resolves to a target in the body here.</p>
 </body></html>"""
-    assert sec2md._convert_sections_bytes(html) == []
+    assert sec2md.convert_sections_bytes(html) == []
 
 
 def test_convert_sections_emits_preamble_for_pre_toc_content():
     """Body content before the first TOC target (the EDGAR cover page) lands in a
     synthetic order-0 preamble section rather than being silently dropped (BUG 1).
     The TOC nav block itself is not re-indexed as preamble."""
-    sections = sec2md._convert_sections_bytes(_PREAMBLE_FILING)
+    sections = sec2md.convert_sections_bytes(_PREAMBLE_FILING)
     assert sections[0].anchor_id == sec2md._PREAMBLE_ANCHOR_ID
     assert sections[0].order == 0
     # The cover-page facts are searchable in the preamble section's chunks.
@@ -386,7 +383,7 @@ def test_convert_sections_does_not_duplicate_out_of_document_order_anchors():
     """A TOC that lists anchors out of document order is sliced in DOCUMENT order,
     so no section's slice runs to end-of-body and duplicates a later section's
     content (BUG 2a)."""
-    sections = sec2md._convert_sections_bytes(_OUT_OF_ORDER_FILING)
+    sections = sec2md.convert_sections_bytes(_OUT_OF_ORDER_FILING)
     # Sliced in document order regardless of TOC link order.
     assert [s.anchor_id for s in sections] == ["sec_business", "sec_risk"]
     # The risk paragraph ("explode") appears in exactly one section, once.
@@ -404,7 +401,7 @@ def test_convert_sections_ignores_in_text_cross_reference_links():
     """In-text cross-references ("see Risk Factors") and "back to top" links do
     not create spurious sections — only the contiguous TOC link cluster does
     (BUG 2b)."""
-    sections = sec2md._convert_sections_bytes(_CROSSREF_FILING)
+    sections = sec2md.convert_sections_bytes(_CROSSREF_FILING)
     assert [s.anchor_id for s in sections] == [
         "sec_business", "sec_risk", "sec_glossary",
     ]
@@ -421,7 +418,7 @@ def test_convert_sections_keeps_cover_text_sharing_div_with_toc():
     but the cover prose is NOT excised with the nav block — only the pure-nav
     portion is dropped, so the cover-page facts survive in the preamble (DATA-LOSS
     defect: the old rule excised the whole shared div)."""
-    sections = sec2md._convert_sections_bytes(_TOC_SHARES_DIV_FILING)
+    sections = sec2md.convert_sections_bytes(_TOC_SHARES_DIV_FILING)
     # It still splits into the two real sections (preceded by the preamble).
     assert [s.anchor_id for s in sections] == [
         sec2md._PREAMBLE_ANCHOR_ID, "sec_business", "sec_risk",
@@ -442,7 +439,7 @@ def test_convert_sections_does_not_split_on_inline_content_links():
     """Two adjacent forward links INLINE in a content paragraph (not a dedicated
     nav block) are prose cross-references, not a TOC: the file does NOT mis-split
     AND the host paragraph's prose is not dropped (DATA-LOSS defect)."""
-    sections = sec2md._convert_sections_bytes(_INLINE_LINKS_FILING)
+    sections = sec2md.convert_sections_bytes(_INLINE_LINKS_FILING)
     # No TOC → ingest whole.
     assert sections == []
     # And nothing is lost: converting the file whole keeps the host paragraph's
@@ -458,7 +455,7 @@ def test_convert_sections_splits_double_linked_toc():
     anchor still forms one contiguous run and splits into the correct sections —
     deduping the final target list must not let duplicate links break run
     contiguity (REGRESSION the rework introduced)."""
-    sections = sec2md._convert_sections_bytes(_DOUBLE_LINKED_TOC_FILING)
+    sections = sec2md.convert_sections_bytes(_DOUBLE_LINKED_TOC_FILING)
     assert [s.anchor_id for s in sections] == [
         "sec_business", "sec_risk", "sec_glossary",
     ]

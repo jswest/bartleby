@@ -46,7 +46,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("merge_tags", __doc__)
     p.add_argument("--from", type=str, required=True, dest="from_name")
     p.add_argument("--into", type=str, required=True, dest="into_name")
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 
