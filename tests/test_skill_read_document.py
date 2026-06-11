@@ -76,6 +76,43 @@ def test_read_document_force_bypasses_gate(seeded_project, capsys, monkeypatch):
     assert out["full_text"]
 
 
+def test_read_document_unknown_document(seeded_project, capsys):
+    with pytest.raises(SystemExit) as exc:
+        read_document.main([
+            "--project", seeded_project["project"], "--document", "999999",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "DOCUMENT_NOT_FOUND"
+
+
+def test_read_document_summary_null_when_undocumented(seeded_project, capsys):
+    # doc_b has no summary row; --summary returns the documented success shape
+    # with summary == null (not an error).
+    read_document.main([
+        "--project", seeded_project["project"],
+        "--document", str(seeded_project["doc_b"]),
+        "--summary",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["document"]["file_name"] == "beta.txt"
+    assert out["summary"] is None
+    assert out["full_text"] is None
+
+
+def test_read_document_summary_and_full_mutually_exclusive(seeded_project, capsys):
+    # --summary and --full are an argparse mutually-exclusive group; passing
+    # both fails with the JSON usage envelope before any query runs.
+    with pytest.raises(SystemExit) as exc:
+        read_document.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]),
+            "--summary", "--full",
+        ])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
 @pytest.mark.parametrize("bad", ["0", "-1"])
 def test_read_document_non_positive_id_rejected(seeded_project, capsys, bad):
     # The --document id flag uses the shared positive_int validator (issue #403):
