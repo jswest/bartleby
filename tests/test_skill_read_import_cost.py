@@ -28,20 +28,15 @@ FORBIDDEN = ("bartleby.ingest.embed", "sentence_transformers", "torch",
 
 @pytest.mark.parametrize("script", READ_SCRIPTS)
 def test_read_script_import_skips_embedding_stack(script: str) -> None:
-    forbidden = ",".join(repr(m) for m in FORBIDDEN)
+    forbidden_repr = ",".join(repr(m) for m in FORBIDDEN)
     code = (
-        "import sys\n"
+        f"import sys\n"
         f"import bartleby.skill_scripts.{script}\n"
-        f"forbidden = ({forbidden},)\n"
-        "leaked = [m for m in forbidden "
-        "if any(k == m or k.startswith(m + '.') for k in sys.modules)]\n"
-        "assert not leaked, leaked\n"
-        "print('OK')\n"
+        f"forbidden = ({forbidden_repr},)\n"
+        f"leaked = [m for m in forbidden if any(k == m or k.startswith(m + '.') for k in sys.modules)]\n"
+        f"assert not leaked, leaked\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True, text=True,
-    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, (
         f"importing {script} leaked heavy modules:\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
