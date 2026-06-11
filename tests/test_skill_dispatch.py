@@ -8,6 +8,7 @@ only, and a non-zero exit. ``-h/--help`` must still exit 0 with help text.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
@@ -44,6 +45,39 @@ def test_unknown_skill_still_emits_error_envelope(capsys):
     assert exc.value.code == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["code"] == "UNKNOWN_SKILL"
+
+
+def test_known_name_routes_to_script_and_passes_remaining_argv(monkeypatch):
+    """A known script name imports ``bartleby.skill_scripts.<name>`` and calls
+    its ``main`` with the *remaining* argv — the dispatcher is a thin router, so
+    the name is consumed and everything after it is handed through verbatim."""
+    seen: dict = {}
+
+    def fake_main(argv):
+        seen["argv"] = argv
+
+    # ``search`` is a real entry in SCRIPTS; patch its module's main so we observe
+    # routing without running the actual script.
+    module = __import__("bartleby.skill_scripts.search", fromlist=["main"])
+    monkeypatch.setattr(module, "main", fake_main)
+
+    dispatch(["search", "--query", "x", "--limit", "3"])
+    assert seen["argv"] == ["--query", "x", "--limit", "3"]
+
+
+def test_known_name_propagates_script_exit_code(monkeypatch):
+    """The dispatcher does not swallow a script's ``SystemExit`` — a script that
+    exits non-zero (its own error envelope path) surfaces that code to the
+    caller unchanged."""
+    def exit_two(argv):
+        sys.exit(2)
+
+    module = __import__("bartleby.skill_scripts.search", fromlist=["main"])
+    monkeypatch.setattr(module, "main", exit_two)
+
+    with pytest.raises(SystemExit) as exc:
+        dispatch(["search"])
+    assert exc.value.code == 2
 
 
 def test_scripts_tuple_nonempty():
