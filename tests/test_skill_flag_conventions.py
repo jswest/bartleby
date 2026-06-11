@@ -67,17 +67,11 @@ def _parser_for(module_name: str) -> argparse.ArgumentParser:
 
 
 def _option_strings(parser: argparse.ArgumentParser) -> set[str]:
-    out: set[str] = set()
-    for action in parser._actions:
-        out.update(action.option_strings)
-    return out
+    return {s for action in parser._actions for s in action.option_strings}
 
 
 def _action_for(parser: argparse.ArgumentParser, option: str):
-    for action in parser._actions:
-        if option in action.option_strings:
-            return action
-    return None
+    return next((a for a in parser._actions if option in a.option_strings), None)
 
 
 # The skill scripts whose argparse parser we introspect (everything but the
