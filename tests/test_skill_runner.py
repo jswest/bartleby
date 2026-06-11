@@ -153,3 +153,42 @@ def test_mutating_work_opens_a_transaction(seeded_project):
         mutates=True,
     )
     assert seen["in_transaction"] is True
+
+
+def _never(*, conn, args, session_id) -> dict:  # pragma: no cover - never runs
+    raise AssertionError("work() must not run when arg parsing fails")
+
+
+def test_bad_flag_emits_json_envelope_not_usage_dump(capsys):
+    """A malformed flag becomes the ``{"error","code"}`` envelope with a
+    non-zero exit — argparse's raw usage dump never reaches stderr, so agents
+    parse one shape (issue #402)."""
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--bogus-flag"],
+        )
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    # stdout carries the envelope agents parse — not argparse's usage dump,
+    # which argparse writes to stderr only.
+    out = json.loads(captured.out)  # whole stdout is one JSON object
+    assert out["code"] == "USAGE_ERROR"
+    assert "error" in out
+
+
+def test_help_still_exits_zero(capsys):
+    """``--help`` keeps argparse's clean exit-0 behavior — the envelope arm
+    only swallows non-zero usage errors."""
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--help"],
+        )
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert "usage:" in captured.out  # argparse printed its own help, untouched

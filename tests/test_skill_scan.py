@@ -409,12 +409,13 @@ def test_scan_count_by_no_match_is_all_zeros(scan_corpus, capsys):
     assert out["documents"] == []
 
 
-def test_scan_count_by_rejects_preview_and_brief(scan_corpus):
+def test_scan_count_by_rejects_preview_and_brief(scan_corpus, capsys):
     for bad in (["--preview", "100"], ["--brief"]):
         with pytest.raises(SystemExit) as exc:
             _run(scan_corpus, [MARKER, "--count-by", "document", *bad])
-        # argparse-level conflict → exit 2.
-        assert exc.value.code == 2
+        # argparse-level conflict → the JSON usage envelope, exit 1 (issue #402).
+        assert exc.value.code == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
 
 
 # ---------- --count-by '/regex/' (capture-group aggregate mode) ----------
@@ -546,11 +547,12 @@ def test_scan_count_by_rejects_bare_non_document_value(templated_corpus, capsys)
     assert json.loads(capsys.readouterr().out)["code"] == "INVALID_COUNT_BY"
 
 
-def test_scan_count_by_regex_rejects_preview_and_brief(templated_corpus):
+def test_scan_count_by_regex_rejects_preview_and_brief(templated_corpus, capsys):
     for bad in (["--preview", "100"], ["--brief"]):
         with pytest.raises(SystemExit) as exc:
             _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE, *bad])
-        assert exc.value.code == 2
+        assert exc.value.code == 1
+        assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
 
 
 # ---------- date scope (shared with list_documents / describe_corpus) ----------

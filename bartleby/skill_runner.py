@@ -99,15 +99,20 @@ def run(
         pass
 
     start = time.perf_counter()
-    args = parse_args(argv)
-    args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
     conn = None
     session_id: int | None = None
     result: dict | None = None
     error_envelope: dict | None = None
+    args_dict: dict[str, Any] = {}
 
     try:
+        # Inside the try so argparse usage errors become the JSON envelope
+        # instead of a raw stderr dump; --help (exit 0) is re-raised below.
+        # See docs/decisions/GH-0402-argparse-json-envelope-0001.md.
+        args = parse_args(argv)
+        args_dict = {k: v for k, v in vars(args).items() if v is not None}
+
         project = args.project or get_active_project()
         if not project:
             raise SkillError(
@@ -140,6 +145,13 @@ def run(
                 result = work(conn=conn, args=args, session_id=session_id)
         else:
             result = work(conn=conn, args=args, session_id=session_id)
+    except SystemExit as e:
+        if not e.code:  # None or 0 → clean exit (e.g. --help); re-raise untouched
+            raise
+        error_envelope = {
+            "error": "Invalid arguments. See --help for usage.",
+            "code": "USAGE_ERROR",
+        }
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
     except Exception as e:  # noqa: BLE001 — catch-all by design
