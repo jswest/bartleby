@@ -6,43 +6,24 @@ import json
 
 import pytest
 
-from bartleby.skill_scripts import edit_finding, save_finding
+from bartleby.skill_scripts import edit_finding
 from bartleby.db.connection import open_db
 from tests._skill_fixtures import (  # noqa: F401
     assert_chunk_tables_consistent,
     mock_embed,
     project_env,
+    seed_finding_via_main,
     seeded_project,
 )
 
 
 def _seed_finding(seeded_project, tmp_path, capsys, *, body_suffix: str = "") -> dict:
-    """Save a baseline finding and return the parsed save_finding response."""
-    conn = open_db(seeded_project["project"])
-    try:
-        cited = conn.cursor().execute(
-            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
-            "AND source_id = ? ORDER BY chunk_index LIMIT 2",
-            (seeded_project["doc_a"],),
-        ).fetchall()
-        a, b = (r[0] for r in cited)
-    finally:
-        conn.close()
-
-    body_file = tmp_path / "initial.md"
-    body_file.write_text(
-        f"# Original\n\nClaim one[^{a}]. Claim two[^{b}].{body_suffix}",
-        encoding="utf-8",
+    """Seed the baseline finding these edit tests assert against ("Original …")."""
+    return seed_finding_via_main(
+        seeded_project, tmp_path, capsys,
+        title="Original title", description="Original description.",
+        body_suffix=body_suffix,
     )
-    save_finding.main([
-        "--project", seeded_project["project"],
-        "--title", "Original title",
-        "--description", "Original description.",
-        "--body-file", str(body_file),
-    ])
-    saved = json.loads(capsys.readouterr().out)
-    saved["_chunks"] = (a, b)
-    return saved
 
 
 def test_edit_finding_body_rebuilds_citations_and_chunks(

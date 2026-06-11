@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import bartleby.project
@@ -63,6 +65,44 @@ def seed_finding(conn, session_id, *, title="A finding", description="hook",
             (finding_id, chunk_id),
         )
     return finding_id, body_chunk_ids
+
+
+def seed_finding_via_main(seeded_project, tmp_path, capsys, *, title,
+                          description, body_suffix: str = "") -> dict:
+    """Save a baseline finding by running ``save_finding.main`` end-to-end.
+
+    Unlike :func:`seed_finding` (a direct DB insert), this drives the real
+    save_finding script: it cites the first two ``document`` chunks of
+    ``doc_a``, writes a body file marking both citations, invokes the script,
+    and returns the parsed JSON response with ``_chunks`` attached.
+    """
+    from bartleby.skill_scripts import save_finding
+
+    conn = open_db(seeded_project["project"])
+    try:
+        cited = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 2",
+            (seeded_project["doc_a"],),
+        ).fetchall()
+        a, b = (r[0] for r in cited)
+    finally:
+        conn.close()
+
+    body_file = tmp_path / "seed.md"
+    body_file.write_text(
+        f"# Seed\n\nClaim one[^{a}]. Claim two[^{b}].{body_suffix}",
+        encoding="utf-8",
+    )
+    save_finding.main([
+        "--project", seeded_project["project"],
+        "--title", title,
+        "--description", description,
+        "--body-file", str(body_file),
+    ])
+    saved = json.loads(capsys.readouterr().out)
+    saved["_chunks"] = (a, b)
+    return saved
 
 
 def assert_chunk_tables_consistent(conn) -> None:

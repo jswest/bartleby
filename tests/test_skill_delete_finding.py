@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from bartleby.skill_scripts import delete_finding, save_finding
+from bartleby.skill_scripts import delete_finding
 from bartleby.db.connection import open_db
 from bartleby.session import start_session
 from tests._skill_fixtures import (  # noqa: F401
@@ -14,6 +14,7 @@ from tests._skill_fixtures import (  # noqa: F401
     mock_embed,
     project_env,
     seed_finding,
+    seed_finding_via_main,
     seeded_project,
 )
 
@@ -28,36 +29,13 @@ def _finding_exists(project, finding_id) -> bool:
         conn.close()
 
 
-def _seed_finding(seeded_project, tmp_path, capsys) -> dict:
-    """Save a baseline finding citing two document chunks; return the response."""
-    conn = open_db(seeded_project["project"])
-    try:
-        cited = conn.cursor().execute(
-            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
-            "AND source_id = ? ORDER BY chunk_index LIMIT 2",
-            (seeded_project["doc_a"],),
-        ).fetchall()
-        a, b = (r[0] for r in cited)
-    finally:
-        conn.close()
-
-    body_file = tmp_path / "f.md"
-    body_file.write_text(f"# F\n\nClaim[^{a}]. Two[^{b}].", encoding="utf-8")
-    save_finding.main([
-        "--project", seeded_project["project"],
-        "--title", "Stale draft",
-        "--description", "A draft to retract.",
-        "--body-file", str(body_file),
-    ])
-    saved = json.loads(capsys.readouterr().out)
-    saved["_chunks"] = (a, b)
-    return saved
-
-
 def test_delete_finding_removes_row_chunks_and_citations(
     seeded_project, tmp_path, capsys
 ):
-    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys,
+        title="Stale draft", description="A draft to retract.",
+    )
     finding_id = saved["finding_id"]
     a, b = saved["_chunks"]
 
