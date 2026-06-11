@@ -8,27 +8,12 @@ import pytest
 
 from bartleby.skill_scripts import edit_finding, save_finding
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from tests._skill_fixtures import (  # noqa: F401
     assert_chunk_tables_consistent,
+    mock_embed,
     project_env,
     seeded_project,
 )
-
-
-@pytest.fixture(autouse=True)
-def mock_embed(monkeypatch):
-    # Both scripts share `embed_texts` / `chunk_markdown_string` via _common;
-    # patch there so the test never reaches BAAI.
-    monkeypatch.setattr(
-        "bartleby.ingest.embed.embed_texts",
-        lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.chunk.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
 
 
 def _seed_finding(seeded_project, tmp_path, capsys, *, body_suffix: str = "") -> dict:

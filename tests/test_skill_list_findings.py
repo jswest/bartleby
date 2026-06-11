@@ -6,36 +6,13 @@ import json
 
 import pytest
 
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_scripts import list_findings
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
-
-
-def _emb() -> list[float]:
-    return [0.01 * i for i in range(EMBEDDING_DIM)]
-
-
-def _seed_finding(conn, *, session_id, title, description, body="body",
-                  cited_chunk_ids=()):
-    """Insert a finding (+ optional citations) directly, returning its id."""
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO findings (session_id, title, description, body) "
-        "VALUES (?, ?, ?, ?)",
-        (session_id, title, description, body),
-    )
-    finding_id = conn.last_insert_rowid()
-    insert_finding_chunks(conn, finding_id, [
-        ChunkInput(text=body, embedding=_emb(), chunk_index=0),
-    ])
-    for chunk_id in cited_chunk_ids:
-        cur.execute(
-            "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
-            (finding_id, chunk_id),
-        )
-    return finding_id
+from tests._skill_fixtures import (  # noqa: F401
+    project_env,
+    seed_finding,
+    seeded_project,
+)
 
 
 def _active_session_id(project):
@@ -63,10 +40,10 @@ def test_list_findings_happy_path(seeded_project, capsys):
             "AND source_id=? ORDER BY chunk_index LIMIT 1",
             (seeded_project["doc_a"],),
         ).fetchone()[0]
-        _seed_finding(conn, session_id=session_id, title="First",
-                      description="oldest", cited_chunk_ids=[doc_chunk])
-        _seed_finding(conn, session_id=session_id, title="Second",
-                      description="newest", cited_chunk_ids=[])
+        seed_finding(conn, session_id=session_id, title="First",
+                     description="oldest", cited_chunk_ids=[doc_chunk])
+        seed_finding(conn, session_id=session_id, title="Second",
+                     description="newest", cited_chunk_ids=[])
     finally:
         conn.close()
 
@@ -95,8 +72,8 @@ def test_list_findings_brief_projects_three_fields(seeded_project, capsys):
             "AND source_id=? ORDER BY chunk_index LIMIT 1",
             (seeded_project["doc_a"],),
         ).fetchone()[0]
-        _seed_finding(conn, session_id=session_id, title="Cited",
-                      description="hook", cited_chunk_ids=[doc_chunk])
+        seed_finding(conn, session_id=session_id, title="Cited",
+                     description="hook", cited_chunk_ids=[doc_chunk])
     finally:
         conn.close()
 
@@ -117,8 +94,8 @@ def test_list_findings_pagination_hint(seeded_project, capsys):
     conn = open_db(project)
     try:
         for i in range(3):
-            _seed_finding(conn, session_id=session_id, title=f"f{i}",
-                          description="x")
+            seed_finding(conn, session_id=session_id, title=f"f{i}",
+                         description="x")
     finally:
         conn.close()
 
@@ -163,7 +140,7 @@ def test_list_findings_memory_off_scopes_to_own_session(seeded_project, capsys):
             ("author", 1),
         )
         author = conn.last_insert_rowid()
-        _seed_finding(conn, session_id=author, title="hidden", description="x")
+        seed_finding(conn, session_id=author, title="hidden", description="x")
     finally:
         conn.close()
 
@@ -171,8 +148,8 @@ def test_list_findings_memory_off_scopes_to_own_session(seeded_project, capsys):
     info = start_session(project, memory_enabled=False)
     conn = open_db(project)
     try:
-        _seed_finding(conn, session_id=info["session_id"],
-                      title="mine", description="y")
+        seed_finding(conn, session_id=info["session_id"],
+                     title="mine", description="y")
     finally:
         conn.close()
 
