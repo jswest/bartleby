@@ -94,6 +94,24 @@ class BenchmarkRoot:
         return entries
 
 
+def make_openai_client(root: BenchmarkRoot):
+    """Construct an OpenAI client, loading the key from env or ``root/.env``.
+
+    Imports of ``dotenv``/``openai`` stay function-local so ``bartleby --help``
+    (and any non-OpenAI benchmark path) never pays for them.
+    """
+    import os
+
+    from dotenv import load_dotenv
+
+    load_dotenv(dotenv_path=root.root / ".env")
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise SystemExit(
+            f"OPENAI_API_KEY not set (looked in env and {root.root / '.env'})")
+    from openai import OpenAI
+    return OpenAI()
+
+
 def append_record(path: Path, record: dict) -> None:
     """Append one timestamped JSON line; creates the store on first write."""
     record = {"timestamp": time.time(), **record}

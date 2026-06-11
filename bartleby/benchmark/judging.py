@@ -25,7 +25,12 @@ from pydantic import BaseModel, Field
 
 from bartleby.benchmark.refs import ModelRef
 from bartleby.benchmark.sources import load_source
-from bartleby.benchmark.stores import BenchmarkRoot, append_record, read_records
+from bartleby.benchmark.stores import (
+    BenchmarkRoot,
+    append_record,
+    make_openai_client,
+    read_records,
+)
 
 DEFAULT_PASSES = 3
 RUBRIC_AXES = ("faithfulness", "coverage", "conciseness", "constraint_compliance")
@@ -154,7 +159,6 @@ def _make_judge_fn(root: BenchmarkRoot, judge: ModelRef, judge_client):
     a subprocess runner for ``anthropic-cc``."""
     if judge.provider == "openai":
         if judge_client is None:
-            from bartleby.benchmark.clients import make_openai_client
             judge_client = make_openai_client(root)
         return lambda src, summary: judge_summary(
             judge_client, judge.model, src, summary)
