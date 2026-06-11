@@ -88,6 +88,18 @@ def get_tag_by_name(conn, name: str) -> TagRow | None:
     return TagRow(*row) if row else None
 
 
+def find_tag_by_normalized_name(conn, name: str) -> TagRow | None:
+    """Return the first tag whose normalized name equals ``normalize_name(name)``, else None.
+
+    Normalized-equality check only — no embedding/similarity leg.
+    """
+    target_norm = normalize_name(name)
+    for tag in fetch_vocabulary(conn):
+        if normalize_name(tag.name) == target_norm:
+            return tag
+    return None
+
+
 def require_tag_by_name(conn, name: str) -> TagRow:
     """``get_tag_by_name`` that raises ``TAG_NOT_FOUND`` instead of returning None.
 
