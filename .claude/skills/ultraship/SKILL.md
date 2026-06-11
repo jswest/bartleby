@@ -239,6 +239,17 @@ never guesses (the up-front interview is what keeps this rare). On restart the
 stage-manager adopts or cleans **only its own** orphaned player worktrees; it
 never touches a worktree it didn't create.
 
+**Never touch the live corpus namespace.** A player runs in a worktree, so the
+`bartleby-home-sandbox.sh` `SessionStart` hook points its `BARTLEBY_HOME` at a
+per-worktree sandbox — its `bartleby` invocations can't read or write the
+developer's live `~/.bartleby/projects` (the GH-0393 escape: a critic's ad-hoc
+script assumed that isolation before it existed and corrupted a live corpus).
+Reinforce it in instructions: a player **verifies against a throwaway corpus it
+ingests under its own sandbox**, never against a real project, and **never drives
+`bartleby serve`, `project upgrade`, or `ingest` against `~/.bartleby`** — a live
+research session may be open on it. If a step seems to need a real corpus, that's
+a **park-with-a-question**, not a reach into live data.
+
 ## Integration & state = sub-PRs + git
 
 Integration is **PR-based** — each landed sub-issue is a "Part of #N" sub-PR the
