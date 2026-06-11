@@ -8,6 +8,7 @@ import bartleby.project
 from bartleby.db.chunks import (
     ChunkInput,
     insert_document_chunks,
+    insert_finding_chunks,
     insert_image_chunks,
     insert_summary_chunks,
 )
@@ -17,6 +18,51 @@ from bartleby.db.schema import EMBEDDING_DIM
 
 def _emb(seed: float = 0.0) -> list[float]:
     return [seed + 0.001 * j for j in range(EMBEDDING_DIM)]
+
+
+@pytest.fixture(autouse=True)
+def mock_embed(monkeypatch):
+    """Autouse stub so finding/summary skill tests never reach the real BGE model.
+
+    Patches the names ``skill_scripts._common`` looks up: a deterministic
+    ``embed_texts`` and a single-``ChunkRow`` ``chunk_markdown_string`` (the
+    latter keeps chunk_count assertions stable). Only active in modules that
+    import it.
+    """
+    monkeypatch.setattr(
+        "bartleby.ingest.embed.embed_texts",
+        lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.ingest.chunk.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+
+
+def seed_finding(conn, session_id, *, title="A finding", description="hook",
+                 body="body", cited_chunk_ids=()) -> tuple[int, list[int]]:
+    """Insert a finding (+ one body chunk, + optional citations) directly.
+
+    Returns ``(finding_id, body_chunk_ids)``. The body chunk goes through the
+    typed ``insert_finding_chunks`` helper (chunks discipline).
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO findings (session_id, title, description, body) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, title, description, body),
+    )
+    finding_id = conn.last_insert_rowid()
+    body_chunk_ids = insert_finding_chunks(conn, finding_id, [
+        ChunkInput(text=body, embedding=_emb(), chunk_index=0),
+    ])
+    for chunk_id in cited_chunk_ids:
+        cur.execute(
+            "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
+            (finding_id, chunk_id),
+        )
+    return finding_id, body_chunk_ids
 
 
 def assert_chunk_tables_consistent(conn) -> None:

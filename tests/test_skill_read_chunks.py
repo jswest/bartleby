@@ -6,27 +6,27 @@ import json
 
 import pytest
 
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
+from bartleby.db.chunks import ChunkInput
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
 from bartleby.skill_scripts import read_chunks
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    project_env,
+    seed_finding,
+    seeded_project,
+)
 
 
 def _seed_finding_chunk(conn, *, session_id: int, body: str = "finding body") -> int:
-    """Insert a finding owned by ``session_id`` and return its body chunk_id."""
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO findings (session_id, title, description, body) "
-        "VALUES (?, ?, ?, ?)",
-        (session_id, "secret finding", "hook", body),
-    )
-    finding_id = conn.last_insert_rowid()
-    emb = [0.01 * i for i in range(EMBEDDING_DIM)]
-    [chunk_id] = insert_finding_chunks(
-        conn, finding_id,
-        [ChunkInput(text=body, embedding=emb, chunk_index=0)],
+    """Seed a foreign-walled finding and return its body chunk_id.
+
+    Title is fixed at ``"secret finding"`` because the memory-wall leak tests
+    assert that exact string never appears in a walled response — a different
+    title would make those assertions vacuous.
+    """
+    _, [chunk_id] = seed_finding(
+        conn, session_id=session_id, title="secret finding", body=body,
     )
     return chunk_id
 

@@ -282,27 +282,10 @@ def test_scribe_writes_summary_when_provider_configured(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
     # Configure summarization in the loaded config.
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: {
-            "summary_depth": "one-shot",
-            "provider": "anthropic",
-            "model": "test-model",
-            "temperature": 0.0,
-            "max_summarize_tokens": 50_000,
-        },
-    )
-
-    stub = _StubProvider(text="## Stub summary\n\nKey points appear here.")
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider",
-        lambda name, **kwargs: stub,
-    )
-    # Bypass docling for the summary chunking too — return one chunk.
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    stub = _summary_pipeline(
+        monkeypatch,
+        _StubProvider(text="## Stub summary\n\nKey points appear here."),
+        model="test-model",
     )
 
     src = _write_txt(tmp_path / "doc.txt", "Hello world summarized.")
@@ -352,23 +335,7 @@ def test_scribe_summarizes_existing_document_on_later_run(
 
     # Second run: summaries now configured. The file is already parsed (so it's
     # classified as skipped), yet the summarize pass still summarizes it.
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: {
-            "summary_depth": "one-shot", "provider": "anthropic",
-            "model": "test-model", "temperature": 0.0,
-            "max_summarize_tokens": 50_000,
-        },
-    )
-    stub = _StubProvider()
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
+    stub = _summary_pipeline(monkeypatch, model="test-model")
 
     scribe.main(project="test_proj", files=str(src))
     assert stub.calls == 1  # summarized exactly once
@@ -742,24 +709,42 @@ def _summary_config(**overrides):
     }
 
 
+def _summary_pipeline(monkeypatch, provider=None, **config_overrides):
+    """Wire up the single-provider summary pipeline in one call.
+
+    Performs the three setattrs the summarize-pass tests share: a summaries-on
+    ``load_config`` (with ``config_overrides`` like ``model=`` or
+    ``html_converter=``), a ``get_provider`` returning ``provider`` (a fresh
+    ``_StubProvider()`` by default), and the single-``ChunkRow``
+    ``chunk_markdown_string`` stub. Returns ``provider`` so callers can assert
+    on it (e.g. ``stub.calls``). Dual-provider (vision) tests wire their own
+    branching resolver and don't use this.
+    """
+    if provider is None:
+        provider = _StubProvider()
+    monkeypatch.setattr(
+        "bartleby.commands.scribe.load_config",
+        lambda: _summary_config(**config_overrides),
+    )
+    monkeypatch.setattr(
+        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: provider,
+    )
+    from bartleby.ingest.chunk import ChunkRow
+    monkeypatch.setattr(
+        "bartleby.ingest.summary.chunk_markdown_string",
+        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    )
+    return provider
+
+
 def test_scribe_summarizes_many_documents_concurrently_in_one_run(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
     """#188: summarization is its own concurrent pass. Several documents parsed in
     one run all get summarized through the summarize thread pool — not just the
     first — with the DB write staying on the single Writer thread."""
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: _summary_config(summarize_workers=3),
-    )
-    stub = _StubProvider(text="summary body")
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    _summary_pipeline(
+        monkeypatch, _StubProvider(text="summary body"), summarize_workers=3,
     )
 
     srcs = [
@@ -809,18 +794,7 @@ def test_scribe_one_summary_failure_does_not_block_the_rest(
                 title="t", description="d", text="ok", authored_date=None,
             )
 
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: _summary_config(summarize_workers=3),
-    )
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider", lambda name, **k: _OneFailLLM(),
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
+    _summary_pipeline(monkeypatch, _OneFailLLM(), summarize_workers=3)
 
     srcs = [
         str(_write_txt(tmp_path / f"d{i}.txt", f"Body of document {i}."))
@@ -1594,24 +1568,9 @@ def test_scribe_interleaves_image_chunks_into_summary_input(
 def test_scribe_persists_authored_date_from_summary(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: {
-            "summary_depth": "one-shot",
-            "provider": "anthropic", "model": "m",
-            "temperature": 0.0, "max_summarize_tokens": 50_000,
-        },
-    )
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider",
-        lambda name, **kwargs: _StubProvider(
-            text="summary body", authored_date="2024-09-12",
-        ),
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    _summary_pipeline(
+        monkeypatch,
+        _StubProvider(text="summary body", authored_date="2024-09-12"),
     )
 
     src = _write_txt(tmp_path / "doc.txt", "Dated document body.")
@@ -1873,22 +1832,10 @@ def test_scribe_splits_anchored_edgar_filing_end_to_end(
     """A TOC-anchored iXBRL filing ingested with html_converter=sec2md splits into
     a zero-chunk container + N section documents, each with its own summary; the
     container owes no summary (#254)."""
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: {
-            "summary_depth": "one-shot", "html_converter": "sec2md",
-            "provider": "anthropic", "model": "test-model",
-            "temperature": 0.0, "max_summarize_tokens": 50_000,
-        },
-    )
-    stub = _StubProvider(text="## Section summary\n\nKey points.")
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider", lambda name, **k: stub,
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
+    stub = _summary_pipeline(
+        monkeypatch,
+        _StubProvider(text="## Section summary\n\nKey points."),
+        html_converter="sec2md", model="test-model",
     )
 
     src = _write_txt(tmp_path / "filing.htm", _ANCHORED_IXBRL)
@@ -2450,23 +2397,7 @@ def test_scribe_timings_includes_decoupled_summarize_stage(
     inflated by the second pass (one merged record per document, issue #167)."""
     import json
 
-    monkeypatch.setattr(
-        "bartleby.commands.scribe.load_config",
-        lambda: {
-            "summary_depth": "one-shot", "provider": "anthropic",
-            "model": "test-model", "temperature": 0.0,
-            "max_summarize_tokens": 50_000,
-        },
-    )
-    stub = _StubProvider()
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve.get_provider", lambda name, **kwargs: stub,
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.summary.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
+    stub = _summary_pipeline(monkeypatch, model="test-model")
 
     _write_txt(tmp_path / "a.txt", "First doc with some words.")
     _write_txt(tmp_path / "b.txt", "Second doc with other words.")

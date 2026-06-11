@@ -7,33 +7,15 @@ import json
 import pytest
 
 from bartleby.skill_scripts import delete_finding, save_finding
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
 from tests._skill_fixtures import (  # noqa: F401
     assert_chunk_tables_consistent,
+    mock_embed,
     project_env,
+    seed_finding,
     seeded_project,
 )
-
-
-def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
-    """Insert a minimal finding owned by ``session_id``; return its id."""
-    conn.cursor().execute(
-        "INSERT INTO findings (session_id, title, description, body) "
-        "VALUES (?, ?, ?, ?)",
-        (session_id, title, "hook", "body"),
-    )
-    finding_id = conn.last_insert_rowid()
-    insert_finding_chunks(conn, finding_id, [
-        ChunkInput(
-            text="body",
-            embedding=[0.01 * i for i in range(EMBEDDING_DIM)],
-            chunk_index=0,
-        ),
-    ])
-    return finding_id
 
 
 def _finding_exists(project, finding_id) -> bool:
@@ -44,19 +26,6 @@ def _finding_exists(project, finding_id) -> bool:
         ).fetchone()[0] == 1
     finally:
         conn.close()
-
-
-@pytest.fixture(autouse=True)
-def mock_embed(monkeypatch):
-    monkeypatch.setattr(
-        "bartleby.ingest.embed.embed_texts",
-        lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.chunk.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
 
 
 def _seed_finding(seeded_project, tmp_path, capsys) -> dict:
@@ -177,7 +146,7 @@ def test_delete_finding_memory_off_other_session(seeded_project, capsys):
             ("author", 1),
         )
         author = conn.last_insert_rowid()
-        finding_id = _seed_finding_as(conn, author)
+        finding_id, _ = seed_finding(conn, author)
     finally:
         conn.close()
 
@@ -201,7 +170,7 @@ def test_delete_finding_memory_off_own_session(seeded_project, capsys):
 
     conn = open_db(project)
     try:
-        finding_id = _seed_finding_as(conn, info["session_id"], title="own")
+        finding_id, _ = seed_finding(conn, info["session_id"], title="own")
     finally:
         conn.close()
 

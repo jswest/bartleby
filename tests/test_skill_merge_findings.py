@@ -7,46 +7,15 @@ import json
 import pytest
 
 from bartleby.skill_scripts import merge_findings, save_finding
-from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.session import start_session
 from tests._skill_fixtures import (  # noqa: F401
     assert_chunk_tables_consistent,
+    mock_embed,
     project_env,
+    seed_finding,
     seeded_project,
 )
-
-
-def _seed_finding_as(conn, session_id, title="Foreign draft") -> int:
-    """Insert a minimal finding owned by ``session_id``; return its id."""
-    conn.cursor().execute(
-        "INSERT INTO findings (session_id, title, description, body) "
-        "VALUES (?, ?, ?, ?)",
-        (session_id, title, "hook", "body"),
-    )
-    finding_id = conn.last_insert_rowid()
-    insert_finding_chunks(conn, finding_id, [
-        ChunkInput(
-            text="body",
-            embedding=[0.01 * i for i in range(EMBEDDING_DIM)],
-            chunk_index=0,
-        ),
-    ])
-    return finding_id
-
-
-@pytest.fixture(autouse=True)
-def mock_embed(monkeypatch):
-    monkeypatch.setattr(
-        "bartleby.ingest.embed.embed_texts",
-        lambda texts: [[0.01 * i for _ in range(EMBEDDING_DIM)] for i in range(len(texts))],
-    )
-    from bartleby.ingest.chunk import ChunkRow
-    monkeypatch.setattr(
-        "bartleby.ingest.chunk.chunk_markdown_string",
-        lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
-    )
 
 
 def _doc_chunk_ids(project, doc_id) -> list[int]:
@@ -350,7 +319,7 @@ def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, caps
             ("author", 1),
         )
         author = conn.last_insert_rowid()
-        foreign_src = _seed_finding_as(conn, author)
+        foreign_src, _ = seed_finding(conn, author)
     finally:
         conn.close()
 
