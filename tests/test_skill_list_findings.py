@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
@@ -131,6 +133,20 @@ def test_list_findings_pagination_hint(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert len(out["findings"]) == 1
     assert out["hint"] is None
+
+
+@pytest.mark.parametrize("bad", [
+    ["--limit", "0"],     # positive_int rejects < 1
+    ["--limit", "-5"],
+    ["--offset", "-1"],   # nonneg_int rejects < 0
+])
+def test_list_findings_out_of_range_pagination_rejected(seeded_project, capsys, bad):
+    # Shared positive/non-negative validators (issue #403) reject at parse time:
+    # the JSON usage envelope is emitted before any query runs.
+    with pytest.raises(SystemExit) as exc:
+        list_findings.main(["--project", seeded_project["project"], *bad])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
 
 
 def test_list_findings_memory_off_scopes_to_own_session(seeded_project, capsys):

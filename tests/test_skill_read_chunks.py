@@ -610,3 +610,20 @@ def test_read_chunks_around_unknown_chunk(seeded_project, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "CHUNK_NOT_FOUND"
+
+
+@pytest.mark.parametrize("bad", [
+    ["--limit", "0"],     # positive_int rejects < 1
+    ["--limit", "-5"],
+    ["--offset", "-1"],   # nonneg_int rejects < 0
+])
+def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, bad):
+    # Shared positive/non-negative validators (issue #403) reject at parse time,
+    # so the JSON usage envelope is emitted before any query runs.
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", str(seeded_project["doc_a"]), *bad,
+        ])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"

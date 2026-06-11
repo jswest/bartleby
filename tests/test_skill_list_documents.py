@@ -321,6 +321,20 @@ def test_list_documents_sort_rejects_unknown_value(seeded_project, capsys):
     assert json.loads(captured.out)["code"] == "USAGE_ERROR"
 
 
+@pytest.mark.parametrize("bad", [
+    ["--limit", "0"],     # positive_int rejects < 1
+    ["--limit", "-5"],
+    ["--offset", "-1"],   # nonneg_int rejects < 0
+])
+def test_list_documents_out_of_range_pagination_rejected(seeded_project, capsys, bad):
+    # The shared positive/non-negative validators (issue #403) reject out-of-range
+    # --limit/--offset at parse time, so the JSON envelope is emitted before any
+    # query runs.
+    code, captured = _run(capsys, ["--project", seeded_project["project"], *bad])
+    assert code == 1
+    assert json.loads(captured.out)["code"] == "USAGE_ERROR"
+
+
 def test_list_documents_date_filter_composes_with_tag(seeded_project, capsys):
     from bartleby.db.connection import open_db
     project = seeded_project["project"]
