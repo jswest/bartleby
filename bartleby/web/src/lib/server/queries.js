@@ -36,8 +36,8 @@ export function getFinding(findingId) {
   return finding;
 }
 
-// Resolve each cited chunk to {document_id, file_name, page_number, source_kind}
-// so the UI can render a link straight to the archived PDF at the right page.
+// Resolve each cited chunk to {document_id, file_name, page_number} so the UI
+// can render a link straight to the archived PDF at the right page.
 // Image chunks pull their page from document_images (image can appear on
 // different pages in different documents — take the lowest-doc, lowest-page).
 function getCitations(findingId) {
