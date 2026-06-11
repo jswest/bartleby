@@ -288,6 +288,54 @@ def test_no_active_project_emits_envelope_without_opening_db(capsys, monkeypatch
     assert "error" in out
 
 
+def test_error_is_echoed_to_stderr_without_changing_stdout_envelope(
+    seeded_project, capsys
+):
+    """On failure the error lands on BOTH channels (issue #421): the stdout JSON
+    envelope is unchanged (the machine contract) with a non-zero exit, and stderr
+    now carries a human-readable ``code: message`` line so a stdout-only consumer
+    can tell a tool error from an empty result."""
+    project = seeded_project["project"]
+
+    def work(*, conn, args, session_id) -> dict:
+        raise RuntimeError("boom in work")
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="both_channels_probe",
+            parse_args=_parse_args,
+            work=work,
+            argv=["--project", project],
+        )
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+
+    # stdout: the JSON envelope, unchanged — whole stdout is one JSON object.
+    out = json.loads(captured.out)
+    assert out["code"] == "INTERNAL_ERROR"
+    assert out["error"] == "RuntimeError: boom in work"
+
+    # stderr: now non-empty, carrying the code and the message.
+    assert captured.err.strip() == "INTERNAL_ERROR: RuntimeError: boom in work"
+
+
+def test_usage_error_is_echoed_to_stderr(capsys):
+    """The USAGE_ERROR path shares the same dual-channel emission: stdout keeps
+    the envelope, stderr gets the ``code: message`` echo (issue #421)."""
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="probe",
+            parse_args=_parse_args,
+            work=_never,
+            argv=["--bogus-flag"],
+        )
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["code"] == "USAGE_ERROR"
+    assert "USAGE_ERROR:" in captured.err
+
+
 def test_help_still_exits_zero(capsys):
     """``--help`` keeps argparse's clean exit-0 behavior — the envelope arm
     only swallows non-zero usage errors."""
