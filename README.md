@@ -292,12 +292,13 @@ Interactive configuration wizard. Asks for:
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
+| Reasoning effort | `low` | `minimal`, `low`, `medium`, or `high` — how hard the model reasons before summarizing. Lower = fewer billed reasoning tokens and faster; plenty for summaries. Applies to OpenAI (gpt-5) and effort-capable Anthropic models; Ollama/wsjpt accept and ignore it. Only prompted when summary depth is `one-shot` |
 | Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
 | Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider. A local Ollama provider auto-clamps to 1 and isn't prompted for a count (`OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
-| Parse workers | auto | How many documents to parse in parallel. `0` = auto (`min(CPU cores − 2 reserved, free RAM ÷ ~4 GB)`) — the auto-pick leaves a couple of cores for the OS so a long ingest doesn't saturate the machine; a value you set here can use every core. Workers recycle periodically to keep memory bounded. Raise for a faster bulk ingest on a big machine, lower if memory is tight |
+| Parse workers | auto | How many documents to parse in parallel. `0` = auto (`min(CPU cores − 2 reserved, free RAM ÷ ~12 GB)`, the `PER_WORKER_GB` budget measured against peak pdfplumber RSS) — the auto-pick leaves a couple of cores for the OS so a long ingest doesn't saturate the machine; a value you set here can use every core. Workers recycle periodically to keep memory bounded. Raise for a faster bulk ingest on a big machine, lower if memory is tight |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
@@ -362,7 +363,7 @@ bartleby scribe --files <path> [<path> ...] [options]
 
 **Supported file types:** `.pdf`, `.html`/`.htm`, `.md`, `.txt`, image files (`.jpg`/`.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`/`.tif`). The type is taken from the extension when it is one of these; a missing or unrecognized extension is resolved by sniffing the file's magic bytes instead. A recognized extension is always trusted as-is — content never overrides it — so a `.txt` that happens to hold PDF bytes stays text.
 
-Ingestion runs sequentially. The embedding model is heavy, and small corpora don't benefit enough from parallelism to justify the warmup cost and complexity.
+Ingestion runs in three concurrent phases — parse (a process pool), image caption, and summarize (each its own worker pool, sized by the wizard settings above) — all feeding a single writer that owns the database connection. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the single-writer drain and how a run resumes by what's missing.
 
 **Pipeline:**
 
@@ -476,7 +477,7 @@ stores, and provenance — lives in [`benchmarks/README.md`](benchmarks/README.m
 | --- | --- | --- | --- |
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
-| Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative — see the Ollama-defaults note above. |
+| Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative (see [Picking models for your hardware](#picking-models-for-your-hardware)). |
 | wsjpt | `fast` | `fast` | Out-of-band install (`uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'`; not in the locked deps — WSJ-internal git source). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install. Set `GEMINI_API_KEY` (or `wsjpt_api_key` in config); without one, wsjpt falls back to Vertex AI via ADC. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
