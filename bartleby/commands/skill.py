@@ -10,33 +10,23 @@ from __future__ import annotations
 
 import importlib
 import json
+import pkgutil
 import sys
 
+from bartleby import skill_scripts
 
-SCRIPTS = (
-    "describe_corpus",
-    "list_documents",
-    "search",
-    "scan",
-    "read_chunks",
-    "read_document",
-    "save_summary",
-    "save_date",
-    "save_finding",
-    "edit_finding",
-    "delete_finding",
-    "merge_findings",
-    "list_findings",
-    "read_finding",
-    "read_tags",
-    "add_tag",
-    "delete_tag",
-    "rename_tag",
-    "merge_tags",
-    "tag",
-    "assign_tag",
-    "unassign_tag",
-    "extract",
+
+# The dispatchable scripts are exactly the non-underscore modules of the
+# ``bartleby.skill_scripts`` package (``_common``/``_tags`` are shared helpers,
+# not skills). Derive the allowlist from the package directory so a new script
+# is dispatchable on drop-in, with no parallel edit here. Sorted for a stable
+# help/error ordering.
+SCRIPTS = tuple(
+    sorted(
+        m.name
+        for m in pkgutil.iter_modules(skill_scripts.__path__)
+        if not m.name.startswith("_")
+    )
 )
 
 

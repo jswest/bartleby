@@ -22,7 +22,7 @@ from bartleby.benchmark.stores import BenchmarkRoot
 
 # Production parity: the same truncation limit ingest actually uses, imported
 # (not copied) so the benchmark can't silently diverge from it.
-from bartleby.commands.config import DEFAULT_MAX_SUMMARIZE_TOKENS
+from bartleby.lib.consts import DEFAULT_MAX_SUMMARIZE_TOKENS
 
 DOC_ID_RE = re.compile(r"^[a-z0-9-]+$")
 

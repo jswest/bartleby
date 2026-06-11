@@ -38,7 +38,7 @@ from bartleby.benchmark.stores import (
     make_openai_client,
     read_records,
 )
-from bartleby.commands.config import DEFAULT_TEMPERATURE
+from bartleby.lib.consts import DEFAULT_TEMPERATURE
 
 
 def prompt_sha() -> str:

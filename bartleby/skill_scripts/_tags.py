@@ -186,43 +186,6 @@ def documents_matching_file_like(conn, patterns: list[str]) -> list[int]:
     ]
 
 
-def intersect_file_like_filter(
-    conn, base_ids: list[int] | None, file_like: list[str] | None,
-) -> list[int] | None:
-    """Fold ``--file-like`` into ``base_ids`` as an intersection.
-
-    Without patterns, ``base_ids`` passes through unchanged. With patterns, the
-    result is the intersection of the existing scope (if any) and the documents
-    whose ``file_name`` matches any pattern. An empty intersection yields ``[]``
-    so the caller short-circuits to zero hits.
-    """
-    if not file_like:
-        return base_ids
-    matched = documents_matching_file_like(conn, file_like)
-    if base_ids is None:
-        return matched
-    return sorted(set(base_ids) & set(matched))
-
-
-def intersect_tag_filter(
-    conn, in_documents: list[int] | None, tag_names: list[str] | None,
-) -> tuple[list[int] | None, list[str] | None]:
-    """Fold ``--tag`` into ``in_documents`` as an intersection.
-
-    Shared by ``search`` and ``scan``. Without tags, ``in_documents`` passes
-    through unchanged. With tags, the result is the intersection of the
-    explicit document set (if any) and the documents carrying any of the named
-    tags. An empty intersection yields ``[]`` — the caller short-circuits to
-    zero hits.
-    """
-    if not tag_names:
-        return in_documents, None
-    tagged = documents_with_any_tag(conn, resolve_tag_names(conn, tag_names))
-    if in_documents is None:
-        return tagged, tag_names
-    return sorted(set(in_documents) & set(tagged)), tag_names
-
-
 # ---------- scope resolution (tags + in_documents + date bounds) ----------
 
 
@@ -396,17 +359,23 @@ def resolve_scope(
     """Fold ``--tag`` ∩ ``--in-documents`` ∩ ``--file-like`` ∩ date bounds into one ``Scope``.
 
     The single scope resolver for ``list_documents``, ``scan``, ``search``, and
-    ``describe_corpus``. Tags and ``in_documents`` intersect via
-    ``intersect_tag_filter``; ``--file-like`` (LIKE patterns OR'd together) then
-    intersects that set via ``intersect_file_like_filter``; an active date bound
+    ``describe_corpus``. Tags and ``in_documents`` intersect; ``--file-like``
+    (LIKE patterns OR'd together) then intersects that set; an active date bound
     finally narrows the result (and accounts for the undated docs it drops).
+    Each intersection yields ``[]`` (short-circuit to zero hits) when empty, or
+    passes the prior scope through unchanged when its filter is absent.
     Unknown tags raise ``TAG_NOT_FOUND`` and malformed bounds raise ``INVALID_DATE``.
     """
     after = validate_date_bound("--authored-after", authored_after)
     before = validate_date_bound("--authored-before", authored_before)
 
-    scoped_docs, tag_names = intersect_tag_filter(conn, in_documents, tags)
-    scoped_docs = intersect_file_like_filter(conn, scoped_docs, file_like)
+    scoped_docs = in_documents
+    if tags:
+        tagged = documents_with_any_tag(conn, resolve_tag_names(conn, tags))
+        scoped_docs = tagged if scoped_docs is None else sorted(set(scoped_docs) & set(tagged))
+    if file_like:
+        matched = documents_matching_file_like(conn, file_like)
+        scoped_docs = matched if scoped_docs is None else sorted(set(scoped_docs) & set(matched))
     date_active = after is not None or before is not None
 
     if not date_active:
@@ -424,7 +393,7 @@ def resolve_scope(
     return Scope(
         document_ids=document_ids,
         in_documents=in_documents,
-        tags=tag_names,
+        tags=tags or None,
         file_like=file_like,
         authored_after=after,
         authored_before=before,

@@ -32,7 +32,7 @@ _ENVELOPE_MARKERS = (b"<SEC-DOCUMENT>", b"<SEC-HEADER>")
 _DOCUMENT_RE = re.compile(r"<DOCUMENT>(.*?)</DOCUMENT>", re.DOTALL)
 _TEXT_RE = re.compile(r"<TEXT>(.*?)</TEXT>", re.DOTALL)
 _META_RE = re.compile(
-    r"^<(TYPE|SEQUENCE|FILENAME|DESCRIPTION)>(.*)$", re.MULTILINE
+    r"^<(TYPE|FILENAME)>(.*)$", re.MULTILINE
 )
 
 # Some bodies wrap their real payload in an <XBRL>/<XML> shell inside <TEXT>.
@@ -51,9 +51,7 @@ _HTML_OPENERS = ("<html", "<!doctype", "<?xml", "<xbrl", "<div", "<table", "<spa
 @dataclass
 class InnerDocument:
     type: str | None
-    sequence: str | None
     filename: str | None
-    description: str | None
     text: str
 
 
@@ -86,9 +84,7 @@ def parse(raw: bytes) -> list[InnerDocument]:
         docs.append(
             InnerDocument(
                 type=meta.get("type"),
-                sequence=meta.get("sequence"),
                 filename=meta.get("filename"),
-                description=meta.get("description"),
                 text=body,
             )
         )

@@ -37,7 +37,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--clear", action="store_true",
         help="Set authored_date to NULL (mark the document undated).",
     )
-    p.add_argument("--project", type=str, default=None)
     return p.parse_args(argv)
 
 

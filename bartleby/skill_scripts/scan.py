@@ -235,7 +235,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=DEFAULT_LIMIT)
-    p.add_argument("--project", type=str, default=None)
     add_date_filter_args(p)
     args = p.parse_args(argv)
     if args.count_by and (args.preview is not None or args.brief):

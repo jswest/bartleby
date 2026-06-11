@@ -197,13 +197,14 @@ def _parse_html_sec2md(
     """
     if on_stage is not None:
         on_stage("extracting")
-    sections = sec2md_pipeline.convert_sections(archived)
+    file_bytes = archived.read_bytes()
+    sections = sec2md_pipeline.convert_sections_bytes(file_bytes)
     if sections:
         return _parse_html_sec2md_split(
-            archived, sections, file_hash=file_hash, file_name=file_name,
-            on_stage=on_stage,
+            archived, sections, file_bytes=file_bytes,
+            file_hash=file_hash, file_name=file_name, on_stage=on_stage,
         )
-    result = sec2md_pipeline.convert(archived)
+    result = sec2md_pipeline.convert_bytes(file_bytes)
     if on_stage is not None and result.chunks:
         on_stage("embedding")
     chunks = _build_sec2md_chunks(result)
@@ -217,6 +218,7 @@ def _parse_html_sec2md_split(
     archived: Path,
     sections: list,
     *,
+    file_bytes: bytes,
     file_hash: str,
     file_name: str,
     on_stage: Callable[[str], None] | None = None,
@@ -228,7 +230,6 @@ def _parse_html_sec2md_split(
     is one atomic write unit — the Writer persists the container last."""
     if on_stage is not None:
         on_stage("embedding")
-    file_bytes = archived.read_bytes()
     parsed_sections: list[ParsedSection] = []
     total_tokens = 0
     for sec in sections:

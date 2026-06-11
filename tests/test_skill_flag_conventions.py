@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import pkgutil
 
 import pytest
 
+from bartleby import skill_scripts
+from bartleby.commands.skill import SCRIPTS
 from bartleby.skill_scripts._common import nonneg_int, positive_int
 
 
@@ -74,15 +77,9 @@ def _action_for(parser: argparse.ArgumentParser, option: str):
     return next((a for a in parser._actions if option in a.option_strings), None)
 
 
-# The skill scripts whose argparse parser we introspect (everything but the
-# ``_``-prefixed shared modules).
-SCRIPTS = [
-    "add_tag", "assign_tag", "delete_finding", "delete_tag", "describe_corpus",
-    "edit_finding", "extract", "list_documents", "list_findings",
-    "merge_findings", "merge_tags", "read_chunks", "read_document",
-    "read_finding", "read_tags", "rename_tag", "save_date", "save_finding",
-    "save_summary", "scan", "search", "tag", "unassign_tag",
-]
+# The skill scripts whose argparse parser we introspect are exactly the
+# dispatcher's roster (everything but the ``_``-prefixed shared modules); we
+# reuse ``SCRIPTS`` imported from the dispatcher rather than re-listing them.
 
 # Scripts that identify a *single existing* tag — the selector must be ``--tag``
 # (#405). ``add_tag`` is excluded: its ``--name`` names a tag being *created*.
@@ -91,19 +88,25 @@ SCRIPTS = [
 EXISTING_TAG_SCRIPTS = ["delete_tag", "assign_tag", "unassign_tag", "extract", "tag"]
 
 
-def test_guard_roster_matches_dispatcher():
-    """The guard's SCRIPTS roster must equal the dispatcher's (#411 blind spot).
-
-    This list is hand-copied from the dispatcher; without this assertion a
-    script added to ``bartleby.commands.skill.SCRIPTS`` tomorrow would silently
-    escape every convention guard above. Pin them so a divergence fails here.
+def test_dispatcher_roster_derives_from_package():
+    """The dispatcher's SCRIPTS is *derived* from the package, not hand-listed
+    (#443). It must be exactly the non-underscore modules of
+    ``bartleby.skill_scripts``, sorted — so a script dropped into that package
+    is dispatchable (and convention-guarded above) with no parallel edit, while
+    ``_``-prefixed shared modules stay excluded.
     """
-    from bartleby.commands.skill import SCRIPTS as DISPATCHER_SCRIPTS
-
-    assert set(SCRIPTS) == set(DISPATCHER_SCRIPTS), (
-        "the convention-guard roster has drifted from the dispatcher's SCRIPTS; "
-        "add the new script(s) to this test's SCRIPTS list so the flag "
-        "conventions are enforced on them too"
+    derived = sorted(
+        m.name
+        for m in pkgutil.iter_modules(skill_scripts.__path__)
+        if not m.name.startswith("_")
+    )
+    assert list(SCRIPTS) == derived, (
+        "the dispatcher's SCRIPTS must equal the sorted non-underscore modules "
+        "of bartleby.skill_scripts; it is no longer a hand-maintained list"
+    )
+    assert SCRIPTS, "the dispatcher must advertise at least one script"
+    assert not any(name.startswith("_") for name in SCRIPTS), (
+        "underscore-prefixed helper modules must never appear in SCRIPTS"
     )
 
 # Scripts that support corpus scoping — each must carry ``--in-documents`` (#408).

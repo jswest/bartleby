@@ -143,7 +143,6 @@ class FailedUnit:
     stage: str
     error: str
     attempts: int
-    last_attempt: str
 
     @property
     def capped(self) -> bool:
@@ -240,40 +239,17 @@ class Writer:
         ).fetchall()
         return [PendingImage(*r) for r in rows]
 
-    def summary_exists(self, document_id: int) -> bool:
-        return self.conn.cursor().execute(
-            "SELECT 1 FROM summaries WHERE document_id = ?", (document_id,)
-        ).fetchone() is not None
-
-    def summarizable_chunk_count(self, document_id: int) -> int:
-        """Indexed chunks attributable to a document: its own document chunks
-        plus image chunks joined through ``document_images``.
-
-        Zero means there's nothing real to summarize (an image-only doc whose
-        images carry no OCR/description, say) — the summary stage skips such a
-        doc rather than feed the model trace garbage (issue #80), and it counts
-        as summary-complete.
-        """
-        return self.conn.cursor().execute(
-            "SELECT "
-            "  (SELECT COUNT(*) FROM chunks "
-            "   WHERE source_kind = 'document' AND source_id = ?) "
-            "+ (SELECT COUNT(*) FROM chunks c "
-            "     JOIN document_images di ON di.image_id = c.source_id "
-            "   WHERE c.source_kind = 'image' AND di.document_id = ?)",
-            (document_id, document_id),
-        ).fetchone()[0]
-
     def documents_needing_summary(self) -> list[PendingSummary]:
         """Every parsed document that still owes a summary: no ``summaries`` row
         yet, and at least one indexed (summarizable) chunk.
 
         This is the work-list for the summarize pass (issue #167), which runs
         after the parse/caption drain rather than inline per document. The
-        ``> 0`` chunk guard mirrors :meth:`summarizable_chunk_count`, so an
-        image-only doc with nothing extractable is never offered to the model
-        (issue #80) and isn't counted as owed. Capped documents *are* returned —
-        the pass surfaces them as still-incomplete instead of dropping them.
+        ``> 0`` chunk guard (its own document chunks plus image chunks joined
+        through ``document_images``) means an image-only doc with nothing
+        extractable is never offered to the model (issue #80) and isn't counted
+        as owed. Capped documents *are* returned — the pass surfaces them as
+        still-incomplete instead of dropping them.
         """
         rows = self.conn.cursor().execute(
             "SELECT d.document_id, d.file_hash, d.file_name "
@@ -298,8 +274,9 @@ class Writer:
         image-only doc has no document chunks). We build from whatever indexed
         chunks exist so the summarizer always sees real, indexed content —
         never raw trace text, which makes the model confabulate (issue #80).
-        Callers gate on :meth:`summarizable_chunk_count` > 0, so this never
-        returns empty in practice.
+        Callers gate on the same ``> 0`` chunk count as
+        :meth:`documents_needing_summary`, so this never returns empty in
+        practice.
         """
         cur = self.conn.cursor()
         img_rows = cur.execute(
@@ -590,7 +567,7 @@ class Writer:
     def failures(self) -> list[FailedUnit]:
         """Every still-unresolved failed unit, oldest attempt first."""
         rows = self.conn.cursor().execute(
-            "SELECT file_hash, file_name, stage, error, attempts, last_attempt "
+            "SELECT file_hash, file_name, stage, error, attempts "
             "FROM failed_ingests ORDER BY last_attempt, file_name"
         ).fetchall()
         return [FailedUnit(*r) for r in rows]
