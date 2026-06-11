@@ -716,3 +716,20 @@ def test_read_chunks_returning_unknown_field_errors(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "UNKNOWN_RETURNING_FIELD"
     assert "document_id" in out["valid_fields"]
+
+
+def test_read_chunks_returning_unknown_field_errors_on_zero_rows(
+    seeded_project, capsys
+):
+    """A typo'd --returning must error even when the read resolves to no rows,
+    rather than coming back as a silent empty result. A non-existent document id
+    reaches work() (parse succeeds), so the up-front whitelist check fires."""
+    with pytest.raises(SystemExit) as exc:
+        read_chunks.main([
+            "--project", seeded_project["project"],
+            "--document", "999999",
+            "--returning", "chunk_id,bogus",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"

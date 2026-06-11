@@ -441,6 +441,21 @@ def test_list_documents_returning_unknown_field_errors(seeded_project, capsys):
     assert "document_id" in out["valid_fields"]
 
 
+def test_list_documents_returning_unknown_field_errors_on_zero_documents(
+    seeded_project, capsys
+):
+    """A typo'd --returning must error even when the filter matches no documents,
+    rather than coming back as a silent empty list."""
+    code, captured = _run(capsys, [
+        "--project", seeded_project["project"],
+        "--file-like", "zzzznomatchzzz",
+        "--returning", "document_id,bogus",
+    ])
+    assert code == 1
+    out = json.loads(captured.out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
 def test_list_documents_default_projection_unchanged(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)

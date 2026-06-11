@@ -74,7 +74,7 @@ import argparse
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_date_filter_args, add_file_like_arg, add_returning_arg, comma_int_list,
-    nonneg_int, pagination_hint, positive_int, project_row,
+    nonneg_int, pagination_hint, positive_int, project_row, validate_returning,
 )
 
 
@@ -182,6 +182,9 @@ def _value_tag_values(conn, tag_names, doc_ids):
 def work(*, conn, args, session_id) -> dict:
     from bartleby.skill_scripts._tags import resolve_scope
 
+    # Reject a typo'd --returning field up front, so a zero-document filter still
+    # returns UNKNOWN_RETURNING_FIELD rather than a silent empty result.
+    validate_returning(args.returning, DOCUMENT_FIELDS)
     cur = conn.cursor()
     scope = resolve_scope(
         conn,

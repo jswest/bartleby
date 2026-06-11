@@ -209,7 +209,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
     apply_preview, comma_int_list, nonneg_int, parse_capture_regex,
-    positive_int, project_row, text_qualified_fts,
+    positive_int, project_row, text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -630,6 +630,7 @@ def work(*, conn, args, session_id) -> dict:
         })
 
     if count_mode == "document":
+        validate_returning(args.returning, COUNT_BY_DOCUMENT_FIELDS)
         if no_match:
             distinct_document_count = total_chunk_count = 0
             documents = []
@@ -670,6 +671,7 @@ def work(*, conn, args, session_id) -> dict:
         })
 
     # Default mode: paginated per-chunk matches.
+    validate_returning(args.returning, MATCH_FIELDS)
     preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
     if no_match:
         return _envelope({

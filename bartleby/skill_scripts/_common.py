@@ -530,6 +530,28 @@ def add_returning_arg(parser: argparse.ArgumentParser, whitelist: list[str]) -> 
     )
 
 
+def validate_returning(requested: list[str] | None, whitelist: list[str]) -> None:
+    """Reject an unknown ``--returning`` field up front, independent of row count.
+
+    ``project_row`` validates as it projects, but a query matching zero rows
+    never reaches it — so a typo'd field would slip through as a silent empty
+    result instead of the ``UNKNOWN_RETURNING_FIELD`` envelope the docstrings and
+    SKILL.md promise unconditionally. Call this once at the top of ``work()``
+    (before any early empty-result return) against the whitelist that applies to
+    the current mode. No-op when ``requested`` is ``None``.
+    """
+    if requested is None:
+        return
+    unknown = [f for f in requested if f not in whitelist]
+    if unknown:
+        raise SkillError(
+            "UNKNOWN_RETURNING_FIELD",
+            f"--returning got unknown field(s) {unknown}. Valid fields for "
+            f"this script: {', '.join(whitelist)}.",
+            valid_fields=list(whitelist),
+        )
+
+
 def project_row(
     full: dict, requested: list[str] | None, whitelist: list[str],
 ) -> dict | None:
@@ -545,18 +567,13 @@ def project_row(
 
     Raises ``UNKNOWN_RETURNING_FIELD`` (naming the valid set in
     ``valid_fields``) if any requested field isn't whitelisted — the JSON error
-    envelope the agent gets back, never argparse's exit-2.
+    envelope the agent gets back, never argparse's exit-2. ``work()`` should also
+    call :func:`validate_returning` up front so this fires even on a zero-row
+    query.
     """
     if requested is None:
         return None
-    unknown = [f for f in requested if f not in whitelist]
-    if unknown:
-        raise SkillError(
-            "UNKNOWN_RETURNING_FIELD",
-            f"--returning got unknown field(s) {unknown}. Valid fields for "
-            f"this script: {', '.join(whitelist)}.",
-            valid_fields=list(whitelist),
-        )
+    validate_returning(requested, whitelist)
     return {field: full[field] for field in requested}
 
 

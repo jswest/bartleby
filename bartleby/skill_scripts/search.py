@@ -91,7 +91,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_file_like_arg, add_returning_arg, apply_preview, chunk_locations,
     comma_int_list, memory_enabled, positive_int, project_row, source_names,
-    text_qualified_fts,
+    text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -405,6 +405,9 @@ def _fetch_context(
 def work(*, conn, args, session_id) -> dict:
     if not args.query or not args.query.strip():
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
+    # Reject a typo'd --returning field up front, so a zero-hit search still
+    # returns UNKNOWN_RETURNING_FIELD rather than a silent empty result.
+    validate_returning(args.returning, RESULT_FIELDS)
 
     source_kinds = _resolve_source_kinds(args)
     modes = _resolve_modes(args)

@@ -1043,6 +1043,27 @@ def test_scan_returning_unknown_field_errors(scan_corpus, capsys):
     assert "document_id" in out["valid_fields"]
 
 
+def test_scan_returning_unknown_field_errors_on_zero_matches(scan_corpus, capsys):
+    """The whitelist check must fire even when the query matches no rows — else a
+    typo'd field reads as an empty result instead of a broken flag."""
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, ["zzzznomatchzzz", "--returning", "chunk_id,bogus"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
+def test_scan_count_by_document_returning_unknown_field_errors_on_zero_matches(
+    scan_corpus, capsys
+):
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, ["zzzznomatchzzz", "--count-by", "document",
+                           "--returning", "text"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
 def test_scan_default_projection_unchanged_without_returning(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)

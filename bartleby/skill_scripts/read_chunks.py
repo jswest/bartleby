@@ -113,6 +113,7 @@ from bartleby.skill_scripts._common import (
     add_returning_arg, apply_preview, assert_findings_accessible,
     chunk_locations, comma_int_list, memory_enabled, nonneg_int,
     owned_finding_ids, positive_int, project_row, source_names,
+    validate_returning,
 )
 
 
@@ -438,6 +439,9 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
 
 
 def work(*, conn, args, session_id) -> dict:
+    # Reject a typo'd --returning field up front, so a not-found id set still
+    # returns UNKNOWN_RETURNING_FIELD rather than a silent empty result.
+    validate_returning(args.returning, CHUNK_FIELDS)
     mem = memory_enabled(conn, session_id)
     if args.chunk_ids is not None:
         return _read_by_chunk_ids(

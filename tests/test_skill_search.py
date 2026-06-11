@@ -822,6 +822,19 @@ def test_search_returning_unknown_field_errors(seeded_project, capsys):
     assert "document_id" in out["valid_fields"]
 
 
+def test_search_returning_unknown_field_errors_on_zero_hits(seeded_project, capsys):
+    """A typo'd --returning must error even when the query matches nothing,
+    rather than coming back as a silent empty result set."""
+    with pytest.raises(SystemExit) as exc:
+        _run([
+            "--project", seeded_project["project"], "--full-text",
+            "zzzznomatchzzz", "--returning", "chunk_id,nope",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "UNKNOWN_RETURNING_FIELD"
+
+
 def test_search_completes_when_source_deleted_underneath(seeded_project, capsys):
     """A chunk whose (source_kind, source_id) pair no longer resolves — its
     source row deleted by a concurrent session between fetch and name resolution
