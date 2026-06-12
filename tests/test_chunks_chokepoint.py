@@ -24,12 +24,22 @@ ALLOWLIST = {PACKAGE_ROOT / "db" / "chunks.py"}
 
 # Match ``INSERT INTO <table>`` where <table> is exactly one of the chunks
 # tables. ``\s+`` between INTO and the table tolerates the newline-split SQL in
-# chunks.py. The trailing ``(?![\w.])`` is a precise right boundary: it rejects
-# longer identifiers (e.g. ``chunks_archive``) so ``chunks`` does not falsely
-# match a prefix of ``chunks_fts``/``chunks_vec`` or any other table, while
-# still allowing ``chunks(`` / ``chunks `` / end-of-string.
+# chunks.py. The ``(?![\w.])`` after the table name is a precise right boundary:
+# it rejects longer identifiers (e.g. ``chunks_archive``) so ``chunks`` does not
+# falsely match a prefix of ``chunks_fts``/``chunks_vec`` or any other table,
+# while still allowing ``chunks(`` / ``chunks `` / end-of-string.
+#
+# The ``(?!\s*\(\s*chunks_fts\s*,\s*rank\b)`` exclusion lets through *only* the
+# single load-bearing FTS5 command form Bartleby emits — the integrity-check
+# probe ``INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)``
+# in ``bartleby/integrity.py``. Naming the table as the first column with a
+# ``rank`` arg is the FTS5 command convention for that probe, a vacuous write
+# that inserts no chunk row. Every other command form (notably the destructive
+# ``chunks_fts(chunks_fts) VALUES('delete-all')``) and every real external-content
+# row write (``rowid``/``text`` columns) is still caught.
 CHUNKS_INSERT = re.compile(
-    r"INSERT\s+INTO\s+(?:chunks_fts|chunks_vec|chunks)(?![\w.])",
+    r"INSERT\s+INTO\s+(?:chunks_fts|chunks_vec|chunks)(?![\w.])"
+    r"(?!\s*\(\s*chunks_fts\s*,\s*rank\b)",
     re.IGNORECASE,
 )
 
@@ -68,6 +78,21 @@ def test_guard_detects_a_planted_violation() -> None:
     assert not CHUNKS_INSERT.search("INSERT INTO chunks_archive VALUES (?)")
     assert not CHUNKS_INSERT.search("# we never INSERT INTO chunkside tables")
     assert not CHUNKS_INSERT.search("INSERT INTO documents VALUES (?)")
+    # Only the integrity-check command form (table name first, ``rank`` arg) — a
+    # vacuous probe, not a chunk write — is exempt.
+    assert not CHUNKS_INSERT.search(
+        "INSERT INTO chunks_fts(chunks_fts, rank) VALUES('integrity-check', 1)"
+    )
+    # A real external-content row write into the same table is still caught.
+    assert CHUNKS_INSERT.search(
+        "INSERT INTO chunks_fts(rowid, text, section_heading) VALUES (?, ?, ?)"
+    )
+    # Negative control: the destructive ``delete-all`` command form names the
+    # table as its first column too, but lacks the ``rank`` arg, so the narrowed
+    # exemption must NOT admit it — it still trips the guard.
+    assert CHUNKS_INSERT.search(
+        "INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')"
+    )
 
 
 def test_helper_module_is_present_and_does_insert() -> None:

@@ -212,6 +212,56 @@ def test_project_info_command_renders_failed_units_row(projects_root, monkeypatc
     assert "1 capped, not retried" in out
 
 
+def test_resolve_project_name_rejects_traversal_before_path(projects_root):
+    """An explicit traversal `--project` is rejected at the resolve chokepoint.
+
+    `resolve_project_name` is the single funnel for `open_db`, the skill runner,
+    scribe, session, and logs. Validating here means a name like `../../x` raises
+    the invalid-name `ValueError` before any `PROJECTS_DIR / name` path is built,
+    mkdir runs, or a DB is opened — so no file lands at the traversed location.
+    """
+    from bartleby.db.connection import resolve_project_name
+
+    with pytest.raises(ValueError, match="Invalid project name"):
+        resolve_project_name("../../x")
+
+    # Nothing was created outside the projects root.
+    assert not (projects_root.parent / "x").exists()
+    # A valid name resolves through untouched (positive control).
+    assert resolve_project_name("alpha") == "alpha"
+
+
+def test_open_db_rejects_traversal_name(projects_root):
+    """`open_db` rejects a traversal name before touching the filesystem.
+
+    Covers the skill runner / session / scribe paths, which all reach the DB via
+    `open_db` → `resolve_project_name`.
+    """
+    from bartleby.db.connection import open_db
+
+    with pytest.raises(ValueError, match="Invalid project name"):
+        open_db("../../etc/passwd")
+
+
+def test_set_active_project_rejects_traversal_before_path(projects_root):
+    """`bartleby project use ../x` is rejected before the dir is even probed.
+
+    `set_active_project` used to only check `project_dir.exists()`, persisting a
+    traversal name into the active-project config. Validation up front raises the
+    invalid-name `ValueError` first, and the config is never written.
+    """
+    before = bartleby.project.get_active_project()
+    with pytest.raises(ValueError, match="Invalid project name"):
+        bartleby.project.set_active_project("../x")
+    assert bartleby.project.get_active_project() == before  # unchanged
+
+    # A valid, existing project still switches (positive control).
+    bartleby.project.create_project("alpha")
+    bartleby.project.create_project("beta")
+    bartleby.project.set_active_project("alpha")
+    assert bartleby.project.get_active_project() == "alpha"
+
+
 def test_delete_project_removes_dir_and_clears_active(projects_root):
     bartleby.project.create_project("alpha")
     bartleby.project.delete_project("alpha")
@@ -456,10 +506,7 @@ def test_upgrade_refuses_below_chain_first_step_without_mutation(
     `sqlite_master` DDL and the `schema_version` stamp are byte-identical
     before and after.
     """
-    import io
-
     import apsw
-    from rich.console import Console
 
     from bartleby.commands import project as project_cmd
     from bartleby.db import upgrades as upgrades_mod
@@ -499,13 +546,14 @@ def test_upgrade_refuses_below_chain_first_step_without_mutation(
     before = _snapshot()
     assert before[1] == str(below_first)
 
-    # CLI: refuses with exit 1 and the re-ingest guidance.
-    buf = io.StringIO()
-    monkeypatch.setattr(project_cmd, "_console", Console(file=buf, width=200))
+    # CLI: refuses with exit 1 and the re-ingest guidance, routed through
+    # console.error (stderr) per #491.
+    errors: list[str] = []
+    monkeypatch.setattr(project_cmd.console, "error", lambda m: errors.append(m))
     with pytest.raises(SystemExit) as exc:
         project_cmd.upgrade(name="alpha")
     assert exc.value.code == 1
-    assert "re-ingest" in buf.getvalue().lower()
+    assert any("re-ingest" in m.lower() for m in errors)
 
     # The refusal mutated nothing: full DDL and the version stamp are identical.
     after = _snapshot()

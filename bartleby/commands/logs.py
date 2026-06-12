@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from bartleby.db.connection import open_db, resolve_project_name
+from bartleby.lib import console
 from bartleby.session import read_active_session_id
 
 
@@ -38,7 +39,7 @@ def _resolve_session(conn, session: str | None, project_name: str):
             "SELECT session_id, name FROM sessions WHERE name = ?", (session,)
         ).fetchone()
         if row is None:
-            _console.print(f"[red]No session named '{session}'.[/red]")
+            console.error(f"No session named '{session}'.")
             sys.exit(1)
         return row
     active_id = read_active_session_id(project_name)
@@ -54,10 +55,15 @@ def _resolve_session(conn, session: str | None, project_name: str):
 
 
 def main(*, session: str | None = None, limit: int = 50, project: str | None = None) -> None:
+    # SQLite reads a negative LIMIT as "unbounded", so `logs --limit -5` would
+    # silently dump every row; 0 is meaningless. Reject anything below 1.
+    if limit < 1:
+        console.error("--limit must be a positive integer.")
+        sys.exit(1)
     try:
         project_name = resolve_project_name(project)
-    except RuntimeError as e:
-        _console.print(f"[red]{e}[/red]")
+    except (ValueError, RuntimeError) as e:
+        console.error(str(e))
         sys.exit(1)
 
     conn = open_db(project_name)

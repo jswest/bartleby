@@ -34,6 +34,7 @@ def get_active_project() -> str | None:
 
 
 def set_active_project(name: str):
+    validate_project_name(name)
     project_dir = get_project_dir(name)
     if not project_dir.exists():
         raise FileNotFoundError(

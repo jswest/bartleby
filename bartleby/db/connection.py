@@ -28,11 +28,15 @@ def resolve_project_name(project_name: str | None) -> str:
 
     The single resolve-or-fail path for an optional ``--project`` argument,
     shared by ``open_db`` and the CLI commands (``scribe``/``session``/
-    ``logs``).
+    ``logs``). Validates the name here, at the chokepoint, so a traversal
+    string is rejected before any path is built from it (``open_db``, the
+    skill runner, scribe archives, session pointers, logs).
     """
+    from bartleby.project import get_active_project, validate_project_name
+
     if project_name:
+        validate_project_name(project_name)
         return project_name
-    from bartleby.project import get_active_project
 
     active = get_active_project()
     if not active:

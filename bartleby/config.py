@@ -148,6 +148,12 @@ def ensure_provider_env(provider: str | None, config: dict) -> None:
         if config_value and not os.environ.get("GEMINI_API_KEY"):
             os.environ["GEMINI_API_KEY"] = config_value
     elif provider == "ollama":
-        os.environ["OLLAMA_API_BASE"] = config.get(
-            "ollama_base_url", "http://localhost:11434"
-        )
+        # Mirror the api-key branches: only populate the env var when it isn't
+        # already exported, so a user-set ``OLLAMA_API_BASE`` (e.g. a remote GPU
+        # box) survives instead of being clobbered with the config/localhost
+        # default. With nothing exported, the configured ``ollama_base_url``
+        # (else localhost) still applies.
+        if not os.environ.get("OLLAMA_API_BASE"):
+            os.environ["OLLAMA_API_BASE"] = config.get(
+                "ollama_base_url", "http://localhost:11434"
+            )

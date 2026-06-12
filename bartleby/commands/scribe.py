@@ -53,6 +53,7 @@ from bartleby.lib import timing
 from bartleby.lib.consts import (
     ALLOWED_HTML_CONVERTERS,
     ALLOWED_PDF_CONVERTERS,
+    ALLOWED_REASONING_EFFORTS,
     DEFAULT_CAPTION_WORKERS,
     DEFAULT_HTML_CONVERTER,
     DEFAULT_MAX_SUMMARIZE_TOKENS,
@@ -199,7 +200,19 @@ def main(
         timings=timings,
     )
     temperature = float(config.get("temperature", DEFAULT_TEMPERATURE))
+    # Validate the configured reasoning_effort once, here, before any summarize
+    # call reaches a provider. The wizard constrains this value, but a config can
+    # be hand-edited — an out-of-enum effort would otherwise crash mid-ingest with
+    # a bare KeyError on the anthropic _EFFORT_MAP lookup (and be forwarded verbatim
+    # to OpenAI). Reject it cleanly instead: named field + allowed values, exit 1
+    # on stderr, no traceback. Hard-fail — never silently fall back to a default.
     reasoning_effort = config.get("reasoning_effort")
+    if reasoning_effort is not None and reasoning_effort not in ALLOWED_REASONING_EFFORTS:
+        console.error(
+            f"Unknown reasoning_effort {reasoning_effort!r} in config; "
+            f"expected one of {', '.join(ALLOWED_REASONING_EFFORTS)}."
+        )
+        sys.exit(1)
     max_summarize_tokens = int(
         config.get("max_summarize_tokens", DEFAULT_MAX_SUMMARIZE_TOKENS)
     )

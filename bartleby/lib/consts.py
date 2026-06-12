@@ -32,6 +32,13 @@ DOCLING_HF_REPOS = (
 ALLOWED_PROVIDERS = ("anthropic", "openai", "ollama", "wsjpt")
 ALLOWED_PDF_CONVERTERS = ["pdfplumber", "docling"]
 ALLOWED_HTML_CONVERTERS = ["docling", "sec2md"]
+# Unified reasoning-effort enum mapped per-provider (OpenAI reasoning_effort,
+# Anthropic output_config.effort). Lives here — not in the wizard — so scribe can
+# reject a hand-edited config value before any provider call, in lockstep with
+# the wizard's choices. Cheap by default: summarization is mechanical work where
+# minimal/low reasoning is almost always enough.
+ALLOWED_REASONING_EFFORTS = ["minimal", "low", "medium", "high"]
+DEFAULT_REASONING_EFFORT = "low"
 DEFAULT_PDF_CONVERTER = "pdfplumber"
 DEFAULT_HTML_CONVERTER = "docling"
 DEFAULT_TEMPERATURE = 0.0
