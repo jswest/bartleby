@@ -32,6 +32,23 @@ from bartleby.share import s3
 PUBLISHED_DB_NAME = "bartleby.db"
 
 
+def _read_source_meta(source_db: Path, key: str) -> str | None:
+    """Read a single ``meta`` value from the source corpus, read-only.
+
+    Opens the source ``.db`` read-only (no vec extension, no mutation — the
+    corpus is never touched by publish) just to pre-flight the embedding-model
+    gate. Returns ``None`` if the key is absent.
+    """
+    conn = apsw.Connection(str(source_db), flags=apsw.SQLITE_OPEN_READONLY)
+    try:
+        row = conn.cursor().execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return None if row is None else str(row[0])
+
+
 def _vacuum_into(source_db: Path, dest_db: Path) -> None:
     """Write a clean, consistent ``.db`` snapshot of ``source_db`` to ``dest_db``.
 
@@ -117,6 +134,20 @@ def publish_project(name: str, to_url: str, *, client=None) -> dict:
     source_db = project_db_path(name)
     if not source_db.exists():
         raise FileNotFoundError(f"Project '{name}' has no database at {source_db}.")
+
+    # Refuse BEFORE the expensive VACUUM/upload if the source corpus doesn't
+    # record its embedding model. A published artifact lacking meta.embedding_model
+    # is dead on arrival: every importer hard-refuses it (the #520 gate), but only
+    # the importer sees that error — the publisher, the one person who can fix it,
+    # would otherwise get a green "Published". Point them at `project upgrade`,
+    # which backfills the key (and, post-critic-pass-1, is reachable on a v9 corpus).
+    if _read_source_meta(source_db, "embedding_model") is None:
+        raise ValueError(
+            f"Project '{name}' does not record its embedding model "
+            "(meta.embedding_model is absent), so any importer will hard-refuse "
+            f"the published artifact. Run `bartleby project upgrade {name}` to "
+            "backfill it, then publish again. Refusing to publish a dead artifact."
+        )
 
     target = s3.parse_s3_url(to_url)
     if client is None:
