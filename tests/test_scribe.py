@@ -313,7 +313,6 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     """A `.pdf` that is really an HTML error page is rejected at dispatch with a
     clear reason, before either PDF backend touches it (#235). The error rides
     the existing parse-failure path into failed_ingests via _parse_request."""
-    from bartleby.commands import scribe as scribe_module
     from bartleby.ingest.pdfplumber import NotAPdfError
 
     src = tmp_path / "ViewDoc.pdf"
@@ -1022,6 +1021,8 @@ def test_summarize_all_lane_callback_reports_document(
     isolated_project, tmp_path, mock_embed
 ):
     """phase.lane fires per summarized document with its file name and stage."""
+    import threading
+
     from bartleby.commands import scribe as scribe_module
 
     txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
@@ -1048,7 +1049,11 @@ def test_summarize_all_lane_callback_reports_document(
     finally:
         conn.close()
 
-    assert phase.lanes == [(phase.lanes[0][0], "doc.txt", "summarizing")]
+    # workers=1 runs inline on this thread, so the lane key is this thread's id —
+    # a known value, asserted explicitly. (The old tuple read the key back from
+    # phase.lanes[0][0], comparing it to itself, so a regression that dropped or
+    # mangled the lane key sailed through.)
+    assert phase.lanes == [(threading.get_ident(), "doc.txt", "summarizing")]
 
 
 def test_summarize_all_skips_capped_document(
@@ -1243,8 +1248,6 @@ def test_parse_document_stage_callback_fires_extract_then_embed(
     downstream in the main-process drain and summarize in its own later pass —
     not here; parse runs in a pool worker and only carries the parse-side
     stages.)"""
-    from bartleby.commands import scribe as scribe_module
-
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
@@ -1262,8 +1265,6 @@ def test_parse_document_reports_page_count(
     isolated_project, tmp_path, mock_embed
 ):
     """The parse result carries the converter's page count (issue #85)."""
-    from bartleby.commands import scribe as scribe_module
-
     pdf = tmp_path / "doc.pdf"
     _text_pdf(pdf)
 
@@ -1315,8 +1316,6 @@ def test_parse_document_threads_on_warn_to_the_leaf(
     """on_warn reaches the leaf through the full dispatch chain: a standalone
     image parsed with vision off surfaces the 'no vision provider' notice as a
     routed warning, not a console write."""
-    from bartleby.commands import scribe as scribe_module
-
     img = tmp_path / "pic.png"
     img.write_bytes(_png_bytes())
 
@@ -1410,6 +1409,8 @@ def test_caption_all_lane_callback_reports_owning_document(
 ):
     """phase.lane fires per analyzed image with the owning file and a stage label,
     so the renderer can show which worker is captioning what."""
+    import threading
+
     from bartleby.commands import scribe as scribe_module
     from bartleby.db.connection import open_db
 
@@ -1438,10 +1439,10 @@ def test_caption_all_lane_callback_reports_owning_document(
     finally:
         conn.close()
 
-    assert phase.lanes, "expected a lane update for the one embedded image"
-    assert all(
-        item == "img.pdf" and stage == "captioning" for _, item, stage in phase.lanes
-    )
+    # One image, captioned inline (workers=1) on this thread → the lane key is
+    # this thread's id. Asserting the exact tuple (not just item/stage with the
+    # key thrown away) pins the owning-document + thread-keyed-lane contract.
+    assert phase.lanes == [(threading.get_ident(), "img.pdf", "captioning")]
 
 
 def test_document_id_for_returns_parsed_document(

@@ -18,12 +18,21 @@ def test_chunk_text_empty_input_returns_empty_list():
 
 
 def test_chunk_text_overlap_is_honored():
-    text = "abcdefghij" * 100  # 1000 chars
+    # A non-periodic, whitespace-free body: the digit stream is monotonic, so
+    # every 50-char window is unique and appears exactly once. Finding prev's
+    # tail inside curr therefore proves a real overlap, not a coincidental
+    # repeat. (The old "abcdefghij"*100 input was periodic — prev[-50:]
+    # reappeared all over curr even with zero overlap, so the assertion could
+    # never fail. No spaces means the chunker's per-piece .strip() can't shift
+    # the boundary out from under the slice.)
+    text = "".join(f"{i:04d}" for i in range(500))  # 2000 chars, all distinct
     out = chunk_text(text, chunk_size=200, overlap=50)
     assert len(out) >= 2
-    # consecutive chunks should share their tail/head bytes
+    # With chunk_size=200/overlap=50, curr starts 150 chars into prev, so prev's
+    # last 50 chars are exactly curr's first 50 — present here only because the
+    # chunker copied them over.
     for prev, curr in zip(out, out[1:]):
-        assert prev[-25:] in curr or prev[-50:] in curr
+        assert prev[-50:] in curr
 
 
 def test_chunk_text_rejects_bad_overlap():
