@@ -67,9 +67,14 @@ def _read_marker(dest: Path) -> dict:
         return {}
 
 
-def _looks_like_skill_dir(dest: Path) -> bool:
-    """A guard against ``rmtree``-ing an unrelated directory passed as --dest."""
-    return (dest / "SKILL.md").is_file() or (dest / MARKER_NAME).is_file()
+def _is_ours(dest: Path) -> bool:
+    """Whether ``dest`` is one of our installs, by the ``.bartleby-skill`` marker.
+
+    A bare ``SKILL.md`` is *not* enough: a foreign skill (another tool's
+    ``~/.claude/skills/<name>``) carries one too, and we must never ``rmtree``
+    over it. Only the marker we stamp at install time proves ownership.
+    """
+    return (dest / MARKER_NAME).is_file()
 
 
 def _write_marker(dest: Path, src_hash: str) -> None:
@@ -135,10 +140,11 @@ def main(*, dest: Path | None = None, check: bool = False, force: bool = False) 
             console.complete(f"Skill already up to date (v{__version__}) at {dest}.")
         return
 
-    if dest.exists() and any(dest.iterdir()) and not _looks_like_skill_dir(dest):
+    if dest.exists() and any(dest.iterdir()) and not _is_ours(dest):
         console.error(
-            f"{dest} exists and doesn't look like a skill directory (no SKILL.md). "
-            "Refusing to overwrite it — pass a different --dest."
+            f"{dest} is non-empty and not ours (no {MARKER_NAME} marker — a stray "
+            "SKILL.md alone doesn't make it ours). Refusing to delete it; pass a "
+            "different --dest."
         )
         sys.exit(1)
 
