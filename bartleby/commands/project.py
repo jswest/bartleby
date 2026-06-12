@@ -229,6 +229,35 @@ def publish(*, name: str, to: str) -> None:
     _console.print(f"Files: {result['file_count']} uploaded (keyed by file_hash)")
 
 
+def import_(*, name: str, from_url: str, without_tags: bool) -> None:
+    """Import a published corpus from an S3 URL as a fresh local project.
+
+    Downloads the published ``.db`` + originals, verifies schema and embedding
+    model BEFORE trusting the corpus (a mismatch — or a missing embedding-model
+    key — is a hard refuse, no ``--force``), then adopts the ``.db`` as-is and
+    rewrites local file paths by ``file_hash``. ``--without-tags`` drops the
+    adopted tag definitions and assignments.
+    """
+    from bartleby.share.import_ import ImportRefused, import_project
+
+    try:
+        result = import_project(name, from_url, without_tags=without_tags)
+    except (ValueError, ImportRefused) as e:
+        console.error(str(e))
+        sys.exit(1)
+
+    _console.print(
+        f"[bold green]Imported '{result['project']}'[/bold green] from "
+        f"[cyan]{result['source']}[/cyan]"
+    )
+    _console.print(
+        f"Files: {result['file_count']} landed (keyed by file_hash)"
+    )
+    if result["tags_dropped"]:
+        _console.print("[yellow]Tags dropped (--without-tags)[/yellow]")
+    _console.print(f"Active project set to: [bold]{result['project']}[/bold]")
+
+
 def delete(*, name: str, yes: bool) -> None:
     if not yes:
         if not Confirm.ask(

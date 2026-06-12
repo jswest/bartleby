@@ -63,3 +63,15 @@ def put_file(client, target: S3Target, name: str, path) -> str:
     from pathlib import Path
 
     return put_bytes(client, target, name, Path(path).read_bytes())
+
+
+def get_bytes(client, target: S3Target, name: str) -> bytes:
+    """Download the object at ``target``'s prefix named ``name``, return its bytes.
+
+    The get side of the transport, mirroring :func:`put_bytes`. Used by
+    ``import`` to pull the published ``.db`` and the content-addressed originals
+    back down. Lets the caller surface a clean error if the key is absent.
+    """
+    key = target.key_for(name)
+    resp = client.get_object(Bucket=target.bucket, Key=key)
+    return resp["Body"].read()
