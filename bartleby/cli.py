@@ -69,7 +69,7 @@ def main():
     )
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
-    pd.add_argument("-y", "--yes", action="store_true")
+    pd.add_argument("--yes", action="store_true")
     pup = project_sub.add_parser(
         "upgrade",
         help="Apply additive schema upgrades to bring a project up to date",
@@ -98,9 +98,9 @@ def main():
         help="Drop tag definitions and assignments from the imported corpus",
     )
     pimp.add_argument(
-        "--force", action="store_true",
-        help="Overwrite an existing project of the same name "
-             "(drops its local findings)",
+        "--yes", action="store_true",
+        help="Overwrite an existing project of the same name without "
+             "prompting (drops its local findings)",
     )
 
     scribe_parser = subparsers.add_parser(
@@ -408,7 +408,7 @@ def _project(args, parser):
     elif args.project_command == "import":
         project_cmd.import_(
             name=args.name, from_url=args.from_url,
-            without_tags=args.without_tags, force=args.force,
+            without_tags=args.without_tags, yes=args.yes,
         )
 
 

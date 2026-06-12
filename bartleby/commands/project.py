@@ -18,6 +18,7 @@ from bartleby.project import (
     create_project,
     delete_project,
     get_active_project,
+    get_project_dir,
     get_project_info,
     list_projects,
     set_active_project,
@@ -246,7 +247,7 @@ def publish(*, name: str, to: str) -> None:
     _console.print(f"Files: {result['file_count']} uploaded (keyed by file_hash)")
 
 
-def import_(*, name: str, from_url: str, without_tags: bool, force: bool) -> None:
+def import_(*, name: str, from_url: str, without_tags: bool, yes: bool) -> None:
     """Import a published corpus from an S3 URL as a fresh local project.
 
     Downloads the published ``.db`` + originals, verifies schema and embedding
@@ -254,9 +255,9 @@ def import_(*, name: str, from_url: str, without_tags: bool, force: bool) -> Non
     embedding-model key — is an unconditional hard refuse), then adopts the
     ``.db`` as-is and rewrites local file paths by ``file_hash``.
     ``--without-tags`` drops the adopted tag definitions and assignments.
-    ``--force`` is required only to overwrite an existing project of the same
-    name (which drops its local findings); it never relaxes the compatibility
-    gates.
+    Overwriting an existing project of the same name (which drops its local
+    findings) is gated like ``project delete``: it prompts for confirmation
+    unless ``--yes`` is passed. Neither relaxes the compatibility gates.
     """
     from botocore.exceptions import (
         ClientError,
@@ -266,9 +267,24 @@ def import_(*, name: str, from_url: str, without_tags: bool, force: bool) -> Non
 
     from bartleby.share.import_ import ImportRefused, import_project
 
+    # A same-name import overwrites the existing project and drops its local
+    # findings, so it is confirmed like `project delete`: prompt unless --yes.
+    # The prompt is additive to the flag — unattended callers pass --yes and
+    # never reach it, preserving the GH-0526 no-silent-overwrite contract.
+    exists = get_project_dir(name).exists()
+    if exists and not yes:
+        if not Confirm.ask(
+            f"Project '{name}' already exists; importing overwrites it and "
+            f"drops its local findings. Continue?",
+            default=False,
+        ):
+            _console.print("Cancelled.")
+            return
+
     try:
+        # force only when overwriting an existing project; a fresh name needs none.
         result = import_project(name, from_url, without_tags=without_tags,
-                                force=force)
+                                force=exists)
     except (ValueError, ImportRefused) as e:
         console.error(str(e))
         sys.exit(1)
