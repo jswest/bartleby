@@ -75,6 +75,15 @@ def main():
         help="Apply additive schema upgrades to bring a project up to date",
     )
     pup.add_argument("name", type=str)
+    ppub = project_sub.add_parser(
+        "publish",
+        help="Publish a findings-free copy of a corpus (+ originals) to S3",
+    )
+    ppub.add_argument("name", type=str)
+    ppub.add_argument(
+        "--to", required=True, metavar="S3_URL",
+        help="Destination S3 URL, e.g. s3://my-bucket/corpora/acme",
+    )
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -376,6 +385,8 @@ def _project(args, parser):
         project_cmd.delete(name=args.name, yes=args.yes)
     elif args.project_command == "upgrade":
         project_cmd.upgrade(name=args.name)
+    elif args.project_command == "publish":
+        project_cmd.publish(name=args.name, to=args.to)
 
 
 def _session(args, parser):

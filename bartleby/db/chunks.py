@@ -129,6 +129,48 @@ def insert_image_chunks(
     return _insert(conn, "image", image_id, chunks, ingest_run_id)
 
 
+def delete_chunks_of_kind(conn: apsw.Connection, source_kind: str) -> list[int]:
+    """Delete every chunk of ``source_kind`` from chunks, chunks_fts, chunks_vec.
+
+    The whole-kind counterpart to :func:`delete_chunks_for` (which keys on a
+    single source). Used by corpus publish to drop all finding chunks at once.
+    Returns the deleted chunk ids so callers can re-point anything that anchored
+    at them (e.g. ``document_tags.chunk_id``).
+    """
+    if source_kind not in ALLOWED_SOURCE_KINDS:
+        raise ValueError(
+            f"invalid source_kind {source_kind!r}; "
+            f"expected one of {ALLOWED_SOURCE_KINDS}"
+        )
+
+    with conn:
+        cur = conn.cursor()
+        ids = [
+            row[0]
+            for row in cur.execute(
+                "SELECT chunk_id FROM chunks WHERE source_kind = ?",
+                (source_kind,),
+            )
+        ]
+        for cid in ids:
+            cur.execute("DELETE FROM chunks_fts WHERE rowid = ?", (cid,))
+            cur.execute("DELETE FROM chunks_vec WHERE rowid = ?", (cid,))
+        cur.execute("DELETE FROM chunks WHERE source_kind = ?", (source_kind,))
+    return ids
+
+
+def rebuild_fts(conn: apsw.Connection) -> None:
+    """Rebuild the external-content ``chunks_fts`` index from ``chunks``.
+
+    The FTS5 ``'rebuild'`` command lives here, in the one module sanctioned to
+    issue raw writes against the chunks shadow tables (the chokepoint guard
+    exempts only this module). Callers that mutate ``chunks`` outside the
+    insert helpers — e.g. publish, which bulk-deletes finding chunks — call this
+    to bring the index back in sync.
+    """
+    conn.cursor().execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+
+
 def delete_chunks_for(
     conn: apsw.Connection,
     source_kind: str,
