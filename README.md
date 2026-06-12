@@ -259,6 +259,8 @@ The core tables (see [`bartleby/db/schema.py`](./bartleby/db/schema.py) for the 
 | `tags`, `document_tags` | A controlled vocabulary the user curates, with LLM-assisted assignment. Lets the agent slice the corpus by category (`search --tag ch`, `list_documents --tag nyseg --tag conedison`). |
 | `meta` | Schema version + embedding model fingerprint; the skill refuses to start against an incompatible DB. |
 
+Tag and finding curation lives on the skill surface, not the CLI: `bartleby skill <name>` (e.g. `bartleby skill add_tag`, `bartleby skill assign_tag`, `bartleby skill save_finding`) is the sanctioned human path for managing the vocabulary and the findings stored above.
+
 The `chunks` table is polymorphic on purpose: documents, summaries, findings, and images all produce searchable text, and folding them into one indexed table means one search query covers all of it. The trade-off is that `chunks.source_id` isn't a foreign key to any specific table — discipline lives in the typed insert helpers in [`bartleby/db/chunks.py`](./bartleby/db/chunks.py).
 
 ---
