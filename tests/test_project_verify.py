@@ -114,3 +114,32 @@ def test_verify_catches_orphaned_chunk(seeded, monkeypatch):
     assert "no_orphan_chunks" in out
     # The other checks still report (the audit runs the full battery).
     assert "tri_table_sync" in out
+
+
+def test_verify_survives_dropped_chunks_vec(seeded, monkeypatch):
+    """A corrupt DB (``chunks_vec`` dropped) reports a FAIL, never a traceback.
+
+    ``check_tri_table_sync``'s ``SELECT rowid FROM chunks_vec`` raises a raw
+    ``apsw.SQLError`` once the table is gone. The per-check guard in
+    ``run_all_checks`` must turn that into a FAILED result and let the remaining
+    checks still run, so ``--verify`` exits non-zero with a FAIL line rather than
+    dumping a traceback.
+    """
+    db_path = project_db_path(seeded)
+    conn = apsw.Connection(str(db_path))
+    try:
+        _attach(conn)
+        with conn:
+            conn.cursor().execute("DROP TABLE chunks_vec")
+    finally:
+        conn.close()
+
+    out, code = _run_verify(seeded, monkeypatch)
+    assert code == 1, f"expected non-zero exit on dropped vec, got {code}\n{out}"
+    assert "FAIL" in out
+    # The check that hit the missing table is reported as a failure...
+    assert "tri_table_sync" in out
+    # ...and the battery still ran the later checks past the failing one.
+    assert "failed_ingests_sanity" in out
+    # No raw traceback leaked into the rendered output.
+    assert "Traceback" not in out

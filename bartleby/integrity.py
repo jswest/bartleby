@@ -202,5 +202,16 @@ def run_all_checks(conn: apsw.Connection) -> list[IntegrityResult]:
     """Run every integrity check against ``conn`` and return their results.
 
     Read-only: never opens a transaction, never mutates corpus rows.
+
+    A check whose unguarded query hits a corrupt/missing object (e.g. a dropped
+    ``chunks_vec``) raises ``apsw.Error``; we catch it per-check so it becomes a
+    FAILED result instead of a raw traceback, and the remaining checks still run.
     """
-    return [check(conn) for check in _CHECKS]
+    results: list[IntegrityResult] = []
+    for check in _CHECKS:
+        name = check.__name__.removeprefix("check_")
+        try:
+            results.append(check(conn))
+        except apsw.Error as e:
+            results.append(IntegrityResult(name, False, str(e)))
+    return results
