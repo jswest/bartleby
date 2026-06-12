@@ -23,7 +23,7 @@ _console = Console()
 def _resolve_project(name: str | None) -> str:
     try:
         return resolve_project_name(name)
-    except RuntimeError as e:
+    except (ValueError, RuntimeError) as e:
         console.error(str(e))
         sys.exit(1)
 

@@ -19,6 +19,8 @@ from bartleby import cli
 from bartleby.commands import config as config_cmd
 from bartleby.commands import logs as logs_cmd
 from bartleby.commands import project as project_cmd
+from bartleby.commands import serve as serve_cmd
+from bartleby.commands import session as session_cmd
 from bartleby.ingest import resolve
 
 
@@ -86,6 +88,59 @@ def test_project_upgrade_bad_name_exits_one(monkeypatch):
         project_cmd.upgrade(name="../etc/passwd")
     assert e.value.code == 1
     assert len(errors) == 1
+
+
+# ---- bad --project name exits 1 on stderr at every resolve site (#488/#491) --
+#
+# resolve_project_name / set_active_project now raise ValueError on a traversal
+# name; logs / session / project-use must route that through console.error +
+# exit 1 like their RuntimeError/FileNotFoundError siblings, never a traceback.
+
+
+def test_logs_bad_project_name_exits_one(monkeypatch):
+    errors = _capture_error(monkeypatch, logs_cmd)
+    with pytest.raises(SystemExit) as e:
+        logs_cmd.main(session=None, limit=50, project="../../x")
+    assert e.value.code == 1
+    assert len(errors) == 1
+    assert "Invalid project name" in errors[0]
+
+
+def test_session_current_bad_project_name_exits_one(monkeypatch):
+    errors = _capture_error(monkeypatch, session_cmd)
+    with pytest.raises(SystemExit) as e:
+        session_cmd.current(project="../x")
+    assert e.value.code == 1
+    assert len(errors) == 1
+    assert "Invalid project name" in errors[0]
+
+
+def test_project_use_bad_project_name_exits_one(monkeypatch):
+    errors = _capture_error(monkeypatch, project_cmd)
+    with pytest.raises(SystemExit) as e:
+        project_cmd.use(name="../x")
+    assert e.value.code == 1
+    assert len(errors) == 1
+    assert "Invalid project name" in errors[0]
+
+
+# ---- serve --project routes through name validation before any path build ----
+
+
+def test_serve_bad_project_name_exits_one_before_path_build(monkeypatch):
+    """``serve --project '../x'`` must be rejected by validate_project_name at
+    the top of _override_project, before project_db_path is ever called."""
+    errors = _capture_error(monkeypatch, serve_cmd)
+
+    def _no_path(name):  # pragma: no cover - must not be reached
+        raise AssertionError("project_db_path called before name validation")
+
+    monkeypatch.setattr(serve_cmd, "project_db_path", _no_path)
+    with pytest.raises(SystemExit) as e:
+        serve_cmd._override_project("../x")
+    assert e.value.code == 1
+    assert len(errors) == 1
+    assert "Invalid project name" in errors[0]
 
 
 # ---- logs --limit must be a positive integer --------------------------------

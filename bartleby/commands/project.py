@@ -61,7 +61,7 @@ def list_(*, _: None = None) -> None:
 def use(*, name: str) -> None:
     try:
         set_active_project(name)
-    except FileNotFoundError as e:
+    except (ValueError, FileNotFoundError) as e:
         console.error(str(e))
         sys.exit(1)
     _console.print(f"Active project set to: [bold]{name}[/bold]")

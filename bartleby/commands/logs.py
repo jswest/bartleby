@@ -62,7 +62,7 @@ def main(*, session: str | None = None, limit: int = 50, project: str | None = N
         sys.exit(1)
     try:
         project_name = resolve_project_name(project)
-    except RuntimeError as e:
+    except (ValueError, RuntimeError) as e:
         console.error(str(e))
         sys.exit(1)
 

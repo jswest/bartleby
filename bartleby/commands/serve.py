@@ -33,6 +33,7 @@ from pathlib import Path
 from bartleby.config import bartleby_dir
 from bartleby.db.connection import project_db_path
 from bartleby.lib import console
+from bartleby.project import validate_project_name
 
 
 # The SvelteKit UI is packaged as data inside the ``bartleby`` package, so it
@@ -110,6 +111,11 @@ def _override_project(name: str) -> None:
     side throw later, then export the override into the environment os.execvp
     inherits. The persisted ``active_project`` in config.yaml is left untouched.
     """
+    try:
+        validate_project_name(name)
+    except ValueError as e:
+        console.error(str(e))
+        sys.exit(1)
     db = project_db_path(name)
     if not db.exists():
         console.error(f"Project '{name}' has no database at {db}.")
