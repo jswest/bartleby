@@ -321,11 +321,13 @@ def main(argv: list[str] | None = None) -> int:
                 ["gh", "release", "create", new_tag, "--title", new_tag, "--notes", notes],
                 cwd=REPO_ROOT, check=True,
             )
-        except subprocess.CalledProcessError:
-            # The tag is already pushed; only the GitHub Release failed. Stash the
-            # notes to a file and hand back the exact `gh` command so publishing is
-            # a copy-paste away — never a dangling remote tag with no Release and no
-            # recovery affordance.
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # The tag is already pushed; only the GitHub Release failed — either
+            # `gh` exited non-zero (CalledProcessError) or it isn't installed at
+            # all (FileNotFoundError, the most likely first-time failure). Stash
+            # the notes to a file and hand back the exact `gh` command so
+            # publishing is a copy-paste away — never a dangling remote tag with
+            # no Release and no recovery affordance.
             print(gh_recovery_message(new_tag, notes), file=sys.stderr)
             return 1
         print(f"Pushed {new_tag} and published the GitHub Release.", file=sys.stderr)

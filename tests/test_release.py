@@ -239,6 +239,37 @@ def test_main_publish_failure_is_recoverable_and_nonzero(tmp_path, monkeypatch, 
     assert notes_file.exists()
 
 
+def test_main_publish_recoverable_when_gh_not_installed(tmp_path, monkeypatch, capsys):
+    # A missing `gh` binary is the most likely first-time failure: subprocess.run
+    # raises FileNotFoundError, not CalledProcessError. It hits the same
+    # tag-pushed-but-no-Release window, so it must be just as recoverable — not a
+    # traceback that loses the notes.
+    monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(release, "last_release_tag", lambda: "v0.9.6")
+    monkeypatch.setattr(release, "schema_source_at", lambda ref: _schema_source(9))
+    monkeypatch.setattr(release, "commits_since", lambda ref: ["Fix a thing"])
+    monkeypatch.setattr(release, "working_tree_dirty", lambda: False)
+    monkeypatch.setattr(release, "current_branch", lambda: "main")
+    monkeypatch.setattr(release, "_git", lambda *a: "")
+
+    schema_file = tmp_path / release.SCHEMA_PATH
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(_schema_source(9))
+
+    def fake_run(cmd, *args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory: 'gh'")
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+
+    rc = release.main(["--push"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    notes_file = tmp_path / ".claude" / "scratch" / "release-notes-v0.9.7.md"
+    assert "gh release create v0.9.7" in err
+    assert notes_file.exists()
+
+
 # --- bartleby --version ----------------------------------------------------
 
 def test_version_flag_prints_and_exits_zero(capsys, monkeypatch):
