@@ -35,6 +35,10 @@ _NO_EFFORT_PREFIXES = (
     "claude-sonnet-4-0", "claude-sonnet-4-5",
     "claude-opus-4-0", "claude-opus-4-1",
     "claude-haiku-4-5",
+    # Dated 4.0-generation snapshots: the alias prefixes above don't cover them
+    # (e.g. "claude-opus-4-0" is not a prefix of "claude-opus-4-20250514"), and a
+    # bare "claude-opus-4-" would wrongly swallow 4.5–4.8. Match the exact IDs.
+    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
 )
 # temperature is removed on Opus 4.7+, Fable 5, and every later model (400 if
 # sent). The older models that still accept it — Opus 4.5/4.6, Sonnet 4.5/4.6,
@@ -45,6 +49,8 @@ _KEEPS_TEMPERATURE_PREFIXES = (
     "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6",
     "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
     "claude-haiku-4-5",
+    # Dated 4.0-generation snapshots (see _NO_EFFORT_PREFIXES note above).
+    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
 )
 # Our unified enum has "minimal" (an OpenAI level); Anthropic's lowest is "low".
 _EFFORT_MAP = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}

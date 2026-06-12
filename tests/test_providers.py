@@ -162,14 +162,18 @@ def test_anthropic_denylisted_older_model_keeps_temperature_no_effort(monkeypatc
 
 @pytest.mark.parametrize(
     "model",
-    ["claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0", "claude-3-haiku"],
+    [
+        "claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0", "claude-3-haiku",
+        # Dated snapshot IDs must be covered too — the alias prefixes don't match them.
+        "claude-opus-4-20250514", "claude-sonnet-4-20250514",
+    ],
 )
 def test_anthropic_pre_4_5_models_keep_temperature_and_skip_effort(monkeypatch, model):
     # The deny-lists say "Sonnet 4.5 / Haiku 4.5 AND EARLIER" — still-reachable
-    # pre-4.5 models (Opus 4.0/4.1, Sonnet 4.0, claude-3) also 400 on
-    # output_config.effort and still accept temperature. They must inherit the
-    # OLD behavior: temperature forwarded for determinism, effort never sent
-    # (sending it would 400 every summarize call on these models).
+    # pre-4.5 models (Opus 4.0/4.1, Sonnet 4.0, claude-3, and their dated
+    # snapshot IDs) also 400 on output_config.effort and still accept
+    # temperature. They must inherit the OLD behavior: temperature forwarded for
+    # determinism, effort never sent (sending it would 400 every summarize call).
     fake = _summarize_with_effort(monkeypatch, model=model, effort="high")
     assert fake.last_call["temperature"] == 0.0
     assert "output_config" not in fake.last_call
