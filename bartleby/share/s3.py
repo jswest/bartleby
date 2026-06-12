@@ -75,27 +75,3 @@ def get_bytes(client, target: S3Target, name: str) -> bytes:
     key = target.key_for(name)
     resp = client.get_object(Bucket=target.bucket, Key=key)
     return resp["Body"].read()
-
-
-def list_keys(client, target: S3Target, prefix: str = "") -> list[str]:
-    """List object keys under ``target``'s prefix joined with ``prefix``.
-
-    Returns full S3 keys (including ``target.prefix``). ``import`` does not use
-    this for the data path — it derives each file's key from a ``file_hash`` row
-    — so this is a thin convenience kept paginated for correctness if ever used
-    on a large prefix.
-    """
-    full_prefix = target.key_for(prefix) if prefix else target.prefix
-    keys: list[str] = []
-    token = None
-    while True:
-        kwargs = {"Bucket": target.bucket, "Prefix": full_prefix}
-        if token:
-            kwargs["ContinuationToken"] = token
-        resp = client.list_objects_v2(**kwargs)
-        for obj in resp.get("Contents", []):
-            keys.append(obj["Key"])
-        if not resp.get("IsTruncated"):
-            break
-        token = resp.get("NextContinuationToken")
-    return keys

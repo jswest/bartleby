@@ -242,10 +242,7 @@ def import_(*, name: str, from_url: str, without_tags: bool) -> None:
 
     try:
         result = import_project(name, from_url, without_tags=without_tags)
-    except (ValueError,) as e:
-        console.error(str(e))
-        sys.exit(1)
-    except ImportRefused as e:
+    except (ValueError, ImportRefused) as e:
         console.error(str(e))
         sys.exit(1)
 

@@ -43,9 +43,9 @@ class _Body:
 class FakeS3Client:
     """In-memory stand-in for a boto3 S3 client.
 
-    Records every ``put_object`` and serves them back via ``get_object`` /
-    ``list_objects_v2`` so a publish -> import round-trip works against the same
-    stub. No moto, no real boto3.
+    Records every ``put_object`` and serves them back via ``get_object`` so a
+    publish -> import round-trip works against the same stub. No moto, no real
+    boto3.
     """
 
     def __init__(self):
@@ -61,12 +61,6 @@ class FakeS3Client:
         except KeyError:
             raise KeyError(f"NoSuchKey: s3://{Bucket}/{Key}")
         return {"Body": _Body(data)}
-
-    def list_objects_v2(self, *, Bucket: str, Prefix: str = "", **_) -> dict:
-        contents = [
-            {"Key": k} for (b, k) in self.objects if b == Bucket and k.startswith(Prefix)
-        ]
-        return {"Contents": contents, "IsTruncated": False}
 
 
 @pytest.fixture
