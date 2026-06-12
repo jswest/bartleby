@@ -1,29 +1,30 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """The deterministic core of ``/ultraship`` — manifest parsing, structural
 validation, and wave (DAG) derivation.
 
-``/ultraship`` (see ``.claude/skills/ultraship/SKILL.md``) assembles a whole
-omnibus bundle unattended: a stage-manager fans the sub-issues out to headless
-players, integrates them through a serialized merge train, runs a bounded critic
-loop, and leaves a finished ``omnibus/vX.Y.Z`` branch plus a morning report. All
-of that is *agentic* — it lives in the skill prose the orchestrator executes.
+``/ultraship`` (see ``SKILL.md``) assembles a whole omnibus bundle unattended: a
+stage-manager fans the sub-issues out to player subagents, integrates them
+through a serialized merge train, runs a bounded critic loop, and leaves a
+finished omnibus branch plus a morning report. All of that is *agentic* — it
+lives in the skill prose the orchestrator executes.
 
 This script is the part that must **not** be left to a model: reading the
 omnibus issue body into a structured manifest, proving it is well-formed before
 any player is dispatched, and computing the wave schedule. A malformed manifest
 discovered at 2 a.m. after three issues landed is the worst outcome, so the
-parse/validate path is strict and fail-loud, exactly like ``scripts/release.py``
-guards the release path. It has no agents and no git/gh side effects — pure
-functions over the issue body string, unit-tested in ``tests/test_ultraship.py``.
+parse/validate path is strict and fail-loud. It has no agents and no git/gh side
+effects — pure functions over the issue body string. It imports only the standard
+library (``argparse``, ``json``, ``re``, ``sys``, ``dataclasses``), so it runs
+under a plain system ``python3`` in any repo — no ``uv``, no venv, no deps.
 
 The manifest lives in the omnibus body's narrative ``### Sub-issues`` section
-(which the #297/#265 tracking regime preserves), one strictly-parsed block per
+(which the omnibus-tracking regime preserves), one strictly-parsed block per
 sub-issue::
 
     ### Sub-issues
-    - #236 — *(bug)* PER_WORKER_GB undercounts parse-worker RSS.
-      - **objective:** per-worker estimate tracks measured peak RSS; no swap freeze
-      - **touches:** `bartleby/scribe/sizing.py`, `bartleby/scribe/workers.py`
+    - #236 — *(bug)* <one-line label>
+      - **objective:** <one line; the critic/director grade scope against this>
+      - **touches:** `path/a.py`, `path/b.py`
       - **depends-on:** —
 
 plus one required header line — ``**goal:** <a checkable statement>`` — and an
@@ -39,11 +40,11 @@ serialization), **depends-on** (hard ordering edges). Parallelism is *derived*
 from depends-on + touches-overlap — there is deliberately no ``parallel`` field
 to contradict the computed answer.
 
-Usage (the skill pipes the omnibus body in on stdin)::
+Usage (the skill pipes the omnibus body in on stdin, by absolute path)::
 
-    gh issue view <omnibus> --json body --jq .body | uv run python scripts/ultraship.py validate
-    gh issue view <omnibus> --json body --jq .body | uv run python scripts/ultraship.py plan
-    gh issue view <omnibus> --json body --jq .body | uv run python scripts/ultraship.py plan --json
+    gh issue view <omnibus> --json body --jq .body | python3 .claude/skills/ultraship/ultraship.py validate
+    gh issue view <omnibus> --json body --jq .body | python3 .claude/skills/ultraship/ultraship.py plan
+    gh issue view <omnibus> --json body --jq .body | python3 .claude/skills/ultraship/ultraship.py plan --json
 """
 
 from __future__ import annotations
