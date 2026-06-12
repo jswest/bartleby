@@ -205,6 +205,30 @@ def upgrade(*, name: str) -> None:
     )
 
 
+def publish(*, name: str, to: str) -> None:
+    """Publish a findings-free copy of a corpus (+ originals) to an S3 URL.
+
+    Writes a ``VACUUM INTO`` snapshot of the corpus DB, strips the session layer
+    on that copy, gathers the original files content-addressed by ``file_hash``,
+    and uploads the ``.db`` + files to ``--to``. The source corpus is never
+    mutated.
+    """
+    from bartleby.share.publish import publish_project
+
+    try:
+        result = publish_project(name, to)
+    except (ValueError, FileNotFoundError) as e:
+        console.error(str(e))
+        sys.exit(1)
+
+    _console.print(
+        f"[bold green]Published '{name}'[/bold green] to "
+        f"[cyan]{result['destination']}[/cyan]"
+    )
+    _console.print(f"Database: [cyan]{result['db_url']}[/cyan]")
+    _console.print(f"Files: {result['file_count']} uploaded (keyed by file_hash)")
+
+
 def delete(*, name: str, yes: bool) -> None:
     if not yes:
         if not Confirm.ask(
