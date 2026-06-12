@@ -1,0 +1,7 @@
+# Bless `bartleby skill …` as the sanctioned human path for tag/finding curation, with one README sentence rather than a new CLI alias (issue #507)
+
+> Source: [#507](https://github.com/jswest/bartleby/issues/507)
+
+The README's schema table calls `tags` "a controlled vocabulary the user curates" and `findings` agent-authored notes, but never told the human *how* to curate them — and the `bartleby` CLI deliberately surfaces no `tag`/`finding` command, because that work lives on the skill surface (`bartleby skill add_tag`, `assign_tag`, `save_finding`, etc.). The docs promised human curation the CLI doesn't carry. This adds one sentence under the schema table stating plainly that `bartleby skill <name>` *is* that path. No behavior change, no code, no new command, no `SCHEMA_VERSION` bump — a docs-only reconciliation of the promise with reality.
+
+We chose the sentence over the obvious alternative — a `bartleby tag …` CLI alias that would make the promise literally true from the user's primary surface. That was considered and rejected for this bundle: curation already has a complete, tested home on the skill surface, and a parallel CLI alias would duplicate that surface, double the maintenance, and blur the CLI-writes / skill-romps split the README's two-pieces framing rests on. The honest fix is to point the human at the existing path, not grow a second one. `SKILL.md` needed no reconciling: it already invokes everything as `bartleby skill <name>` and says "humans drive tag creation," implying no CLI path that doesn't exist. Suite green at 1037 passing.
