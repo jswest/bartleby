@@ -74,9 +74,16 @@ def open_db(project_name: str | None = None) -> apsw.Connection:
     conn = apsw.Connection(str(db_path))
     _attach(conn)
 
-    row = conn.cursor().execute(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    ).fetchone()
+    try:
+        row = conn.cursor().execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+    except apsw.SQLError:
+        # No `meta` table at all (a truncated/partial DB from an interrupted
+        # create, or a foreign SQLite file). Give it the same friendly
+        # "recreate the project" guidance as the missing-row case below rather
+        # than leaking a raw "no such table" SQLError.
+        row = None
     if row is None:
         raise RuntimeError(
             f"Database at {db_path} has no schema_version. Recreate the project."
@@ -126,5 +133,13 @@ def init_db(project_name: str) -> None:
             "INSERT INTO meta (key, value) VALUES (?, ?)",
             meta_rows,
         )
+    except BaseException:
+        # A half-built DB is worse than none: the next `create` would hit the
+        # FileExistsError guard above and refuse to retry, leaving the user
+        # stuck. Unlink it so a retried create starts clean. The connection
+        # must close first, or the file (and its WAL sidecars) stays locked.
+        conn.close()
+        db_path.unlink(missing_ok=True)
+        raise
     finally:
         conn.close()
