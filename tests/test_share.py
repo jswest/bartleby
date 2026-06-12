@@ -30,8 +30,23 @@ def _emb(seed: float = 0.0) -> list[float]:
     return [seed + 0.001 * j for j in range(EMBEDDING_DIM)]
 
 
+class _Body:
+    """boto3's StreamingBody stand-in: a .read() that returns the stored bytes."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
 class FakeS3Client:
-    """In-memory stand-in for a boto3 S3 client: records every put_object."""
+    """In-memory stand-in for a boto3 S3 client.
+
+    Records every ``put_object`` and serves them back via ``get_object`` /
+    ``list_objects_v2`` so a publish -> import round-trip works against the same
+    stub. No moto, no real boto3.
+    """
 
     def __init__(self):
         self.objects: dict[tuple[str, str], bytes] = {}
@@ -39,6 +54,19 @@ class FakeS3Client:
     def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> dict:
         self.objects[(Bucket, Key)] = Body
         return {}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict:
+        try:
+            data = self.objects[(Bucket, Key)]
+        except KeyError:
+            raise KeyError(f"NoSuchKey: s3://{Bucket}/{Key}")
+        return {"Body": _Body(data)}
+
+    def list_objects_v2(self, *, Bucket: str, Prefix: str = "", **_) -> dict:
+        contents = [
+            {"Key": k} for (b, k) in self.objects if b == Bucket and k.startswith(Prefix)
+        ]
+        return {"Contents": contents, "IsTruncated": False}
 
 
 @pytest.fixture
@@ -242,3 +270,175 @@ def test_parse_s3_url():
         parse_s3_url("https://example.com/x")
     with pytest.raises(ValueError):
         parse_s3_url("s3:///no-bucket")
+
+
+# --------------------------------------------------------------------------- #
+# import (issue #520) — round-trips against the same stubbed S3 client.
+# --------------------------------------------------------------------------- #
+
+from bartleby.lib.consts import EMBEDDING_MODEL  # noqa: E402
+from bartleby.share import import_ as import_mod  # noqa: E402
+
+
+def _publish_to_stub(project: str, url: str) -> FakeS3Client:
+    """Publish ``project`` to ``url`` on a fresh stub, return the loaded stub."""
+    client = FakeS3Client()
+    publish_mod.publish_project(project, url, client=client)
+    return client
+
+
+def _rewrite_db_meta(client: FakeS3Client, bucket: str, key: str,
+                     mutate, tmp_path: Path) -> None:
+    """Materialize the stored ``.db`` blob, run ``mutate(conn)``, re-store it."""
+    blob = client.objects[(bucket, key)]
+    out = tmp_path / "mutate.db"
+    out.write_bytes(blob)
+    conn = apsw.Connection(str(out))
+    try:
+        with conn:
+            mutate(conn.cursor())
+    finally:
+        conn.close()
+    client.objects[(bucket, key)] = out.read_bytes()
+
+
+def test_import_adopts_published_corpus_as_new_project(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+
+    result = import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                       client=client)
+
+    assert result["project"] == "imported"
+    assert bartleby.project.get_active_project() == "imported"
+    # The adopted DB opens under the strict gate (schema + vec attach) and
+    # carries the document corpus as-is — no id rekey.
+    conn = open_db("imported")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        assert cur.execute(
+            "SELECT COUNT(*) FROM chunks WHERE source_kind = 'document'"
+        ).fetchone()[0] == 2
+        # Findings-free (publish stripped them); nothing to adopt there.
+        assert cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_import_refuses_embedding_model_mismatch(published_corpus, tmp_path, capsys):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    _rewrite_db_meta(
+        client, "bucket", "corpora/pub/bartleby.db",
+        lambda cur: cur.execute(
+            "UPDATE meta SET value = 'some/other-model' WHERE key = 'embedding_model'"
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(import_mod.ImportRefused) as exc:
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+
+    msg = str(exc.value)
+    assert "some/other-model" in msg
+    assert EMBEDDING_MODEL in msg
+    # No side effects: the project was never registered.
+    assert "imported" not in {p["name"] for p in bartleby.project.list_projects()}
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_import_refuses_missing_embedding_model_key(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    _rewrite_db_meta(
+        client, "bucket", "corpora/pub/bartleby.db",
+        lambda cur: cur.execute("DELETE FROM meta WHERE key = 'embedding_model'"),
+        tmp_path,
+    )
+
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_import_refuses_schema_version_mismatch(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    _rewrite_db_meta(
+        client, "bucket", "corpora/pub/bartleby.db",
+        lambda cur: cur.execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'"
+        ),
+        tmp_path,
+    )
+
+    with pytest.raises(import_mod.ImportRefused) as exc:
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+    assert "v1" in str(exc.value)
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_import_rewrites_file_paths_and_is_idempotent(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+
+    result = import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                       client=client)
+    assert result["file_count"] == 2
+
+    archive = import_mod.get_project_dir("imported") / "archive"
+
+    def landed_state():
+        conn = open_db("imported")
+        try:
+            rows = conn.cursor().execute(
+                "SELECT file_hash, file_path FROM documents ORDER BY file_hash"
+            ).fetchall()
+        finally:
+            conn.close()
+        return rows
+
+    first = landed_state()
+    for file_hash, file_path in first:
+        p = Path(file_path)
+        # Rewritten under the imported project's archive, addressed by file_hash.
+        assert p.is_file()
+        assert str(archive) in file_path
+        assert file_hash in file_path
+        # Bytes match what was published for that hash.
+        published = client.objects[("bucket", f"corpora/pub/files/{file_hash}.pdf")]
+        assert p.read_bytes() == published
+
+    # Re-import: same hashes -> same landed paths -> identical state.
+    import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                              client=client)
+    assert landed_state() == first
+
+
+def test_import_without_tags_drops_tags(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+
+    # Default: tags ride along.
+    import_mod.import_project("with-tags", "s3://bucket/corpora/pub",
+                              client=client)
+    conn = open_db("with-tags")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 1
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_tags"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+    # --without-tags: tag definitions and assignments both gone.
+    import_mod.import_project("no-tags", "s3://bucket/corpora/pub",
+                              client=client, without_tags=True)
+    conn = open_db("no-tags")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM document_tags"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()

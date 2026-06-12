@@ -63,3 +63,39 @@ def put_file(client, target: S3Target, name: str, path) -> str:
     from pathlib import Path
 
     return put_bytes(client, target, name, Path(path).read_bytes())
+
+
+def get_bytes(client, target: S3Target, name: str) -> bytes:
+    """Download the object at ``target``'s prefix named ``name``, return its bytes.
+
+    The get side of the transport, mirroring :func:`put_bytes`. Used by
+    ``import`` to pull the published ``.db`` and the content-addressed originals
+    back down. Lets the caller surface a clean error if the key is absent.
+    """
+    key = target.key_for(name)
+    resp = client.get_object(Bucket=target.bucket, Key=key)
+    return resp["Body"].read()
+
+
+def list_keys(client, target: S3Target, prefix: str = "") -> list[str]:
+    """List object keys under ``target``'s prefix joined with ``prefix``.
+
+    Returns full S3 keys (including ``target.prefix``). ``import`` does not use
+    this for the data path — it derives each file's key from a ``file_hash`` row
+    — so this is a thin convenience kept paginated for correctness if ever used
+    on a large prefix.
+    """
+    full_prefix = target.key_for(prefix) if prefix else target.prefix
+    keys: list[str] = []
+    token = None
+    while True:
+        kwargs = {"Bucket": target.bucket, "Prefix": full_prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            keys.append(obj["Key"])
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return keys

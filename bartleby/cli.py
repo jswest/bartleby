@@ -84,6 +84,19 @@ def main():
         "--to", required=True, metavar="S3_URL",
         help="Destination S3 URL, e.g. s3://my-bucket/corpora/acme",
     )
+    pimp = project_sub.add_parser(
+        "import",
+        help="Import a published corpus from S3 as a new local project",
+    )
+    pimp.add_argument("name", type=str)
+    pimp.add_argument(
+        "--from", required=True, metavar="S3_URL", dest="from_url",
+        help="Source S3 URL, e.g. s3://my-bucket/corpora/acme",
+    )
+    pimp.add_argument(
+        "--without-tags", action="store_true",
+        help="Drop tag definitions and assignments from the imported corpus",
+    )
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -387,6 +400,11 @@ def _project(args, parser):
         project_cmd.upgrade(name=args.name)
     elif args.project_command == "publish":
         project_cmd.publish(name=args.name, to=args.to)
+    elif args.project_command == "import":
+        project_cmd.import_(
+            name=args.name, from_url=args.from_url,
+            without_tags=args.without_tags,
+        )
 
 
 def _session(args, parser):
