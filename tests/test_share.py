@@ -408,6 +408,154 @@ def test_import_rewrites_file_paths_and_is_idempotent(published_corpus, tmp_path
     assert landed_state() == first
 
 
+def _meta_lacks_key(client: FakeS3Client, bucket: str, key: str,
+                    meta_key: str, tmp_path: Path) -> None:
+    """Delete ``meta_key`` from the stored ``.db`` blob (simulate a pre-#517 src)."""
+    _rewrite_db_meta(
+        client, bucket, key,
+        lambda cur: cur.execute(
+            "DELETE FROM meta WHERE key = ?", (meta_key,)
+        ),
+        tmp_path,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Critic pass 1 regressions (#494): robust import file-landing, publish
+# pre-flight, and clean refusals on corrupt downloads / boto3 errors.
+# --------------------------------------------------------------------------- #
+
+from botocore.exceptions import ClientError  # noqa: E402
+
+
+def test_import_aborts_on_non_missing_get_error_no_dangling_project(
+    published_corpus, tmp_path
+):
+    """A non-NoSuchKey GET failure mid-landing aborts the import cleanly.
+
+    A transient S3 error (reset, throttle, expired creds) on a file GET used to
+    be swallowed by a bare `except Exception: continue`, so the import "succeeded"
+    while that row's `file_path` still pointed at the PUBLISHER's absolute path —
+    a dangling reference the web view and search trust. The narrowed handler now
+    re-raises any non-absent-key error; the freshly-created project is torn down.
+    """
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+
+    # Wrap the stub so the FIRST file (not the .db) GET raises an internal error.
+    base_get = client.get_object
+    state = {"file_gets": 0}
+
+    def flaky_get(*, Bucket: str, Key: str):
+        if "/files/" in Key:
+            state["file_gets"] += 1
+            if state["file_gets"] == 1:
+                raise ClientError(
+                    {"Error": {"Code": "InternalError",
+                               "Message": "we encountered an internal error"}},
+                    "GetObject",
+                )
+        return base_get(Bucket=Bucket, Key=Key)
+
+    client.get_object = flaky_get
+
+    with pytest.raises(ClientError):
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+
+    # No half-registered project, and no row kept a publisher path (the project
+    # dir is gone entirely).
+    assert "imported" not in {p["name"] for p in bartleby.project.list_projects()}
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_import_refuses_artifact_missing_advertised_file(published_corpus, tmp_path):
+    """A published artifact missing a file it advertised is treated as corrupt.
+
+    Publish only uploads files it found on disk, so an absent object (NoSuchKey)
+    means the artifact is broken. Rather than silently leave a dangling row, the
+    import refuses and tears the fresh project back down.
+    """
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+
+    base_get = client.get_object
+
+    def absent_first_file(*, Bucket: str, Key: str):
+        if "/files/" in Key:
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "no such key"}},
+                "GetObject",
+            )
+        return base_get(Bucket=Bucket, Key=Key)
+
+    client.get_object = absent_first_file
+
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_publish_refuses_source_without_embedding_model(tmp_path, capsys):
+    """Publishing a corpus whose meta lacks embedding_model refuses, no upload.
+
+    A pre-#517 corpus would publish a dead artifact (every importer hard-refuses)
+    while the publisher saw a green "Published". Publish now pre-flights the
+    source meta and refuses, pointing at `project upgrade`.
+    """
+    bartleby.project.create_project("nomodel")
+    # Simulate a pre-#517 corpus: drop the embedding_model key from the source.
+    src = project_db_path("nomodel")
+    conn = apsw.Connection(str(src))
+    try:
+        conn.cursor().execute("DELETE FROM meta WHERE key = 'embedding_model'")
+    finally:
+        conn.close()
+
+    client = FakeS3Client()
+    with pytest.raises(ValueError) as exc:
+        publish_mod.publish_project("nomodel", "s3://bucket/p", client=client)
+
+    assert "project upgrade" in str(exc.value)
+    # Nothing was uploaded.
+    assert client.objects == {}
+
+
+def test_import_refuses_non_sqlite_blob(tmp_path):
+    """A garbage (non-SQLite) downloaded blob refuses cleanly, no project.
+
+    `_read_meta` catches only apsw.SQLError before; a non-DB blob raises
+    apsw.NotADBError (an apsw.Error, NOT a SQLError), which used to escape as a
+    traceback. Now it routes through the clean missing-schema refusal.
+    """
+    client = FakeS3Client()
+    target = parse_s3_url("s3://bucket/corpora/pub")
+    # Store a non-SQLite blob where the .db is expected.
+    client.put_object(Bucket="bucket", Key=target.key_for("bartleby.db"),
+                      Body=b"this is definitely not a sqlite database")
+
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+    assert not import_mod.get_project_dir("imported").exists()
+
+
+def test_publish_command_handler_maps_boto3_error_to_exit(tmp_path, monkeypatch):
+    """The publish command handler turns a boto3 ClientError into a clean exit 1."""
+    from bartleby.commands import project as project_cmd
+
+    bartleby.project.create_project("alpha")
+
+    def boom(name, to):
+        raise ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "PutObject"
+        )
+
+    monkeypatch.setattr("bartleby.share.publish.publish_project", boom)
+    with pytest.raises(SystemExit) as exc:
+        project_cmd.publish(name="alpha", to="s3://bucket/p")
+    assert exc.value.code == 1
+
+
 def test_import_without_tags_drops_tags(published_corpus, tmp_path):
     client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
 

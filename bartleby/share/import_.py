@@ -35,6 +35,7 @@ import shutil
 from pathlib import Path
 
 import apsw
+from botocore.exceptions import ClientError
 
 from bartleby.db.connection import _attach, project_db_path
 from bartleby.db.schema import SCHEMA_VERSION
@@ -65,7 +66,12 @@ def _read_meta(db_path: Path, key: str) -> str | None:
             row = conn.cursor().execute(
                 "SELECT value FROM meta WHERE key = ?", (key,)
             ).fetchone()
-        except apsw.SQLError:
+        except apsw.Error:
+            # A garbage / non-SQLite blob raises apsw.NotADBError, which is an
+            # apsw.Error but NOT an apsw.SQLError — catching only the latter let
+            # a corrupt download escape as a traceback instead of the clean
+            # missing-key refusal path. Treat any DB-level error as "no value",
+            # so _verify_compatible refuses it as a non-Bartleby corpus.
             return None
     finally:
         conn.close()
@@ -121,10 +127,21 @@ def _land_files(conn: apsw.Connection, target: s3.S3Target, archive: Path,
     landed path. Idempotent: the landing path depends only on ``file_hash`` (and
     suffix), so a re-import overwrites in place to identical bytes.
 
-    A row whose published object is absent (e.g. an anchor-split container row
-    that publish skipped because it holds no file of its own) is left with its
-    ``file_path`` untouched — its sections carry derived hashes pointing back at
-    the same original. Returns the count of files actually landed.
+    Error handling is deliberately strict: a row whose ``file_path`` is NOT
+    rewritten still points at the *publisher's* absolute path, which is dangling
+    on this machine — and the web view and search trust that column. So:
+
+    * A genuinely-absent object (boto3 ``NoSuchKey``/404 ``ClientError``) is
+      itself a sign of a corrupt artifact: publish only uploads files it
+      actually found on disk, so a published artifact missing a file it
+      advertised is broken. We refuse the whole import rather than silently
+      leave a dangling row.
+    * Any other failure (a transient S3 error, throttling, expired credentials,
+      or a disk-write failure — all brought inside the protected region) aborts
+      the import by re-raising, so the CLI maps it to a non-zero exit and the
+      half-built project is cleaned up.
+
+    Returns the count of files landed (every row, on success).
     """
     landed = 0
     cur = conn.cursor()
@@ -137,23 +154,35 @@ def _land_files(conn: apsw.Connection, target: s3.S3Target, archive: Path,
             name = f"files/{file_hash}{ext}"
             try:
                 data = s3.get_bytes(client, target, name)
-            except Exception:
-                # Object absent (a container row, or a partial publish). Leave
-                # the path as-is rather than fail the whole import.
-                continue
-            if subdir is None:
-                dest_dir = archive / file_hash
-            else:
-                dest_dir = archive / subdir
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / f"{file_hash}{ext}"
-            dest.write_bytes(data)
+                if subdir is None:
+                    dest_dir = archive / file_hash
+                else:
+                    dest_dir = archive / subdir
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / f"{file_hash}{ext}"
+                dest.write_bytes(data)
+            except ClientError as e:
+                if _is_missing_key(e):
+                    raise ImportRefused(
+                        f"Published artifact is missing a file it advertised "
+                        f"(object {name!r} for {table} file_hash {file_hash}). "
+                        "The artifact is corrupt — refusing to import a corpus "
+                        "with dangling file references."
+                    ) from e
+                raise
             cur.execute(
                 f"UPDATE {table} SET file_path = ? WHERE file_hash = ?",
                 (str(dest), file_hash),
             )
             landed += 1
     return landed
+
+
+def _is_missing_key(err: ClientError) -> bool:
+    """True if a boto3 ``ClientError`` is an absent-object (NoSuchKey / 404)."""
+    error = err.response.get("Error", {}) if hasattr(err, "response") else {}
+    code = str(error.get("Code", ""))
+    return code in ("NoSuchKey", "404", "NoSuchBucket")
 
 
 def _drop_tags(conn: apsw.Connection) -> None:
@@ -190,6 +219,11 @@ def import_project(name: str, from_url: str, *, client=None,
         client = s3._client()
 
     project_dir = get_project_dir(name)
+    # Whether this project already existed before the import. A re-import
+    # overwrites in place, so we must NOT delete a pre-existing project if
+    # landing fails; a freshly-created one, however, is cleaned up so an aborted
+    # import never leaves a half-registered project behind.
+    preexisting = project_dir.exists()
 
     # Download + verify in scratch first, so a refused import touches nothing.
     scratch = project_dir.parent / f".import-tmp-{name}"
@@ -218,15 +252,25 @@ def import_project(name: str, from_url: str, *, client=None,
             leftover.unlink()
         scratch.rmdir()
 
-    conn = apsw.Connection(str(dest_db))
+    # Landing can fail (a refused absent-key artifact, a transient S3 error, a
+    # disk-write failure). The DB is registered now, so on ANY landing failure
+    # tear the freshly-created project back down before re-raising — otherwise a
+    # failed import leaves a project whose rows still point at the publisher's
+    # dangling paths.
     try:
-        _attach(conn)
-        if without_tags:
-            _drop_tags(conn)
-        with conn:
-            file_count = _land_files(conn, target, archive, client)
-    finally:
-        conn.close()
+        conn = apsw.Connection(str(dest_db))
+        try:
+            _attach(conn)
+            if without_tags:
+                _drop_tags(conn)
+            with conn:
+                file_count = _land_files(conn, target, archive, client)
+        finally:
+            conn.close()
+    except BaseException:
+        if not preexisting and project_dir.exists():
+            shutil.rmtree(project_dir)
+        raise
 
     set_active_project(name)
 

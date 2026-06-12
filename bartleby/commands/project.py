@@ -178,12 +178,6 @@ def upgrade(*, name: str) -> None:
             console.error("Database has no schema_version. Recreate the project.")
             sys.exit(1)
         current = int(row[0])
-        if current == SCHEMA_VERSION:
-            _console.print(
-                f"Project '{name}' is already at schema v{SCHEMA_VERSION}. "
-                "Nothing to do."
-            )
-            return
         if current > SCHEMA_VERSION:
             console.error(
                 f"Database is at v{current}, newer than code's "
@@ -191,6 +185,12 @@ def upgrade(*, name: str) -> None:
             )
             sys.exit(1)
 
+        # Always call upgrades.upgrade — even when already at SCHEMA_VERSION. The
+        # version-step loop won't run, but the always-runs tail (idempotent
+        # `INSERT OR IGNORE embedding_model` + `upgraded_at`) still does. A v9
+        # corpus created before #517 has no embedding_model key, and this is the
+        # only CLI path that backfills it; skipping the call here (the old bug)
+        # left those corpora forever unable to publish an importable artifact.
         try:
             upgrades_mod.upgrade(conn, current)
         except (RuntimeError, apsw.Error) as e:
@@ -199,10 +199,16 @@ def upgrade(*, name: str) -> None:
     finally:
         conn.close()
 
-    _console.print(
-        f"[bold green]Upgraded '{name}'[/bold green] "
-        f"from v{current} to v{SCHEMA_VERSION}."
-    )
+    if current == SCHEMA_VERSION:
+        _console.print(
+            f"Project '{name}' is already at schema v{SCHEMA_VERSION}; "
+            "ensured metadata is current."
+        )
+    else:
+        _console.print(
+            f"[bold green]Upgraded '{name}'[/bold green] "
+            f"from v{current} to v{SCHEMA_VERSION}."
+        )
 
 
 def publish(*, name: str, to: str) -> None:
@@ -213,12 +219,23 @@ def publish(*, name: str, to: str) -> None:
     and uploads the ``.db`` + files to ``--to``. The source corpus is never
     mutated.
     """
+    from botocore.exceptions import (
+        ClientError,
+        EndpointConnectionError,
+        NoCredentialsError,
+    )
+
     from bartleby.share.publish import publish_project
 
     try:
         result = publish_project(name, to)
     except (ValueError, FileNotFoundError) as e:
         console.error(str(e))
+        sys.exit(1)
+    except (ClientError, NoCredentialsError, EndpointConnectionError) as e:
+        # A bad bucket/URL, missing/expired credentials, or an unreachable
+        # endpoint should be a clean error, not a boto3 traceback.
+        console.error(f"S3 error: {e}")
         sys.exit(1)
 
     _console.print(
@@ -238,12 +255,24 @@ def import_(*, name: str, from_url: str, without_tags: bool) -> None:
     rewrites local file paths by ``file_hash``. ``--without-tags`` drops the
     adopted tag definitions and assignments.
     """
+    from botocore.exceptions import (
+        ClientError,
+        EndpointConnectionError,
+        NoCredentialsError,
+    )
+
     from bartleby.share.import_ import ImportRefused, import_project
 
     try:
         result = import_project(name, from_url, without_tags=without_tags)
     except (ValueError, ImportRefused) as e:
         console.error(str(e))
+        sys.exit(1)
+    except (ClientError, NoCredentialsError, EndpointConnectionError) as e:
+        # A wrong URL, a missing bartleby.db at the prefix, missing/expired
+        # credentials, or an unreachable endpoint should be a clean error, not a
+        # boto3 traceback. import_project already tore down any half-built project.
+        console.error(f"S3 error: {e}")
         sys.exit(1)
 
     _console.print(
