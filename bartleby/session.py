@@ -98,7 +98,15 @@ def read_active_session_id(project_name: str) -> int | None:
 def write_active_session_id(project_name: str, session_id: int) -> None:
     f = _active_session_file(project_name)
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(str(session_id), encoding="utf-8")
+    # Write to a sibling temp file, then atomically rename over the pointer.
+    # A concurrent reader (read_active_session_id) either sees the old id or
+    # the new one in full — never a half-written line. os.replace is atomic
+    # on the same filesystem; the temp file sits beside the target to stay
+    # there. A leftover .tmp from a crash mid-write is harmless: the rename is
+    # the only step that publishes the value.
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(str(session_id), encoding="utf-8")
+    os.replace(tmp, f)
 
 
 def clear_active_session(project_name: str) -> None:
