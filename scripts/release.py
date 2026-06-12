@@ -228,9 +228,7 @@ def gh_recovery_message(tag: str, notes: str) -> str:
     scratch.mkdir(parents=True, exist_ok=True)
     notes_file = scratch / f"release-notes-{tag}.md"
     notes_file.write_text(notes)
-    resume = (
-        f"gh release create {tag} --title {tag} --notes-file {notes_file}"
-    )
+    resume = f"gh release create {tag} --title {tag} --notes-file {notes_file}"
     return (
         f"error: tag {tag} was pushed but `gh release create` failed.\n"
         f"The remote tag is up; do NOT re-run this script. Resume the publish with:\n\n"
