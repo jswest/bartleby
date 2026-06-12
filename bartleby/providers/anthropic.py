@@ -30,14 +30,20 @@ _CLASSIFY_TOOL = "save_classification"
 # do NOT pair it with a thinking block: Anthropic rejects an enabled-thinking
 # request that also forces a specific tool, and summarize() forces save_summary.
 # Effort alone still lowers reasoning spend, which is the whole point.
-_NO_EFFORT_PREFIXES = ("claude-sonnet-4-5", "claude-haiku-4-5")
+_NO_EFFORT_PREFIXES = (
+    "claude-3",
+    "claude-sonnet-4-0", "claude-sonnet-4-5",
+    "claude-opus-4-0", "claude-opus-4-1",
+    "claude-haiku-4-5",
+)
 # temperature is removed on Opus 4.7+, Fable 5, and every later model (400 if
 # sent). The older models that still accept it — Opus 4.5/4.6, Sonnet 4.5/4.6,
 # Haiku 4.5, and earlier — are the deny-list: we keep forwarding temperature
 # there for determinism and drop it everywhere else (current + future models).
 _KEEPS_TEMPERATURE_PREFIXES = (
-    "claude-opus-4-5", "claude-opus-4-6",
-    "claude-sonnet-4-5", "claude-sonnet-4-6",
+    "claude-3",
+    "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6",
+    "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
     "claude-haiku-4-5",
 )
 # Our unified enum has "minimal" (an OpenAI level); Anthropic's lowest is "low".
