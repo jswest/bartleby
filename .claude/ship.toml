@@ -1,0 +1,30 @@
+# .claude/ship.toml — bartleby's per-repo config for the pressed `ship` skill.
+# Editable by hand; commit it. The pressed SKILL.md reads every repo-specific
+# value from here and hard-codes nothing. See ship.toml.example (in the skill
+# dir) for the full field reference.
+
+base_branch      = "main"                          # default branch / promotion target
+branch_prefix    = "omnibus"                       # omnibus branch stem (shared with ultraship)
+version_scheme   = "leading-v"                      # omnibus issues titled `vX.Y.Z — …` → `omnibus/vX.Y.Z`
+worktree_pattern = "../{repo}-issue-{n}-{slug}"    # sibling, never nested
+
+test_cmd          = "uv run pytest"                # the whole suite
+test_source_globs = ["*.py", "pyproject.toml"]     # a diff touching any of these is "test-affecting"
+docs_only_globs   = ["*.md", "LICENSE*", "docs/**"] # a diff wholly within these auto-skips the suite
+skip_tests_token  = true                           # honor a `skip-tests` opt-in
+gate_agent        = "simplify-refactor"            # per-commit quality pass
+
+architecture_doc  = "ARCHITECTURE.md"              # current-state doc swept in step 9
+decisions_dir     = "docs/decisions"               # one decision per file
+decisions_index   = "docs/decisions/README.md"     # newest-first index
+
+guard_hook        = ".claude/hooks/guard-main-write.sh"  # blocks commits/pushes on main
+
+# Injected VERBATIM into the step-8 implementation guidance — bartleby's live-data redline.
+live_data_note = "Verify only against tests/fixtures. Never point ingest/serve/upgrade/decant at a live corpus or the user's Ollama; never run `bartleby project upgrade` on a corpus DB mid-session — build a throwaway sandbox if you must exercise those paths."
+
+# Present ⇒ `with-playwright` is available. Keep this table LAST.
+[playwright]
+frontend_glob = "bartleby/web/**"                  # with-playwright fires only if the diff touches this
+dev_server    = "npm run dev"                      # vite dev server, launched in the worktree
+url           = "http://127.0.0.1:5173"            # where to point the browser

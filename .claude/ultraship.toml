@@ -1,0 +1,22 @@
+# .claude/ultraship.toml — bartleby's per-repo config for the pressed `ultraship`
+# skill. Editable by hand; commit it. The pressed SKILL.md reads every
+# repo-specific value from here and hard-codes nothing.
+
+base_branch      = "main"                        # promotion target (default branch)
+branch_prefix    = "omnibus"                      # shared with ship
+version_scheme   = "leading-v"                    # omnibus titled `vX.Y.Z — …` → `omnibus/vX.Y.Z`
+worktree_pattern = "../{repo}-issue-{n}-{slug}"  # sibling, never nested
+
+test_cmd         = "uv run pytest"               # the whole suite
+gate_agent       = "simplify-refactor"           # quality agent over each sub-PR diff
+ship_skill       = "ship"                         # per-issue skill (informational)
+
+decisions_dir    = "docs/decisions"              # one decision per file
+decisions_index  = "docs/decisions/README.md"    # newest-first index
+
+guard_hook       = ".claude/hooks/guard-main-write.sh"  # blocks commits/pushes on main
+docs_only_globs  = ["*.md", "LICENSE*", "docs/**"]      # auto-skip the suite when wholly docs
+skip_tests_token = true                                 # honor a `skip-tests` opt-in
+
+# Injected VERBATIM into every player's instructions — bartleby's live-data redline.
+player_guardrails = "Verify only against tests/fixtures. Never point ingest/serve/upgrade/decant at a live corpus or the user's Ollama; never run `bartleby project upgrade` on a corpus DB mid-session — build a throwaway sandbox if you must exercise those paths."

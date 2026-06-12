@@ -25,9 +25,16 @@ the tooling encodes the conventions so you don't have to keep them all in your h
 
 | Piece | What it does |
 | --- | --- |
-| `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR (the loop below). |
-| `skills/ultraship/SKILL.md` | The `/ultraship` command — assembles a whole omnibus bundle unattended (see [Assembling a bundle unattended](#assembling-a-bundle-unattended-ultraship)). Backed by `scripts/ultraship.py`. |
-| `skills/release/SKILL.md` | The `/release` command — dry-run → confirm → publish a release (see [Cutting a release](#cutting-a-release)). |
+| `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR (the loop below). **Vendored** (see note). |
+| `skills/ultraship/SKILL.md` | The `/ultraship` command — assembles a whole omnibus bundle unattended (see [Assembling a bundle unattended](#assembling-a-bundle-unattended-ultraship)). Backed by `skills/ultraship/ultraship.py`. **Vendored** (see note). |
+| `skills/release/SKILL.md` | The `/release` command — dry-run → confirm → publish a release (see [Cutting a release](#cutting-a-release)). Repo-local (not vendored). |
+
+> **Vendored skills.** `ship` and `ultraship` are *pressed* verbatim from a local
+> skill drawer (one source, many repos), so don't hand-edit their `SKILL.md` or
+> `ultraship.py` here — edit the drawer and re-press. Everything bartleby-specific
+> lives in `.claude/ship.toml` / `.claude/ultraship.toml` (committed; the press
+> never touches them). `tests/test_skill_drift.py` fails if a pressed copy drifts
+> from the drawer, and skips when the drawer is absent (a clone / CI).
 | `hooks/guard-main-write.sh` | A safety rail that refuses commits/pushes on `main`. |
 | `agents/simplify-refactor.md` | A subagent that does a quality/simplification pass over changed code. |
 | `agents/git-workflow-manager.md` | A subagent that turns a pile of changes into clean, atomic commits. |
@@ -159,7 +166,7 @@ attended moment:
 - **`/ultraship plan #<omnibus>`** — a **director** interviews you to sharpen each
   sub-issue's `objective` and the omnibus `goal`, writes those back into the
   issue's `### Sub-issues` manifest, validates the manifest is well-formed
-  (`scripts/ultraship.py`), prints the wave DAG, and **stops.** This is the only
+  (`.claude/skills/ultraship/ultraship.py`), prints the wave DAG, and **stops.** This is the only
   step that asks you anything.
 - **`/ultraship run #<omnibus>`** — fully unattended. A **stage-manager** fans the
   sub-issues out (in dependency waves derived from `depends-on` + `touches`-
@@ -173,7 +180,7 @@ attended moment:
   promotion-PR body.
 
 The manifest, validation, and wave scheduling are deterministic and live in
-`scripts/ultraship.py` (pure, unit-tested) — only the orchestration is agentic.
+`.claude/skills/ultraship/ultraship.py` (pure, unit-tested) — only the orchestration is agentic.
 The state is reconstructed from GitHub on every restart (merged sub-PR = done,
 open = parked, neither = untouched), so a run that dies at 3 a.m. resumes by
 re-reading GitHub rather than replaying a journal.
