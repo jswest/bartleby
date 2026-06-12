@@ -75,6 +75,33 @@ def main():
         help="Apply additive schema upgrades to bring a project up to date",
     )
     pup.add_argument("name", type=str)
+    ppub = project_sub.add_parser(
+        "publish",
+        help="Publish a findings-free copy of a corpus (+ originals) to S3",
+    )
+    ppub.add_argument("name", type=str)
+    ppub.add_argument(
+        "--to", required=True, metavar="S3_URL",
+        help="Destination S3 URL, e.g. s3://my-bucket/corpora/acme",
+    )
+    pimp = project_sub.add_parser(
+        "import",
+        help="Import a published corpus from S3 as a new local project",
+    )
+    pimp.add_argument("name", type=str)
+    pimp.add_argument(
+        "--from", required=True, metavar="S3_URL", dest="from_url",
+        help="Source S3 URL, e.g. s3://my-bucket/corpora/acme",
+    )
+    pimp.add_argument(
+        "--without-tags", action="store_true",
+        help="Drop tag definitions and assignments from the imported corpus",
+    )
+    pimp.add_argument(
+        "--force", action="store_true",
+        help="Overwrite an existing project of the same name "
+             "(drops its local findings)",
+    )
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -376,6 +403,13 @@ def _project(args, parser):
         project_cmd.delete(name=args.name, yes=args.yes)
     elif args.project_command == "upgrade":
         project_cmd.upgrade(name=args.name)
+    elif args.project_command == "publish":
+        project_cmd.publish(name=args.name, to=args.to)
+    elif args.project_command == "import":
+        project_cmd.import_(
+            name=args.name, from_url=args.from_url,
+            without_tags=args.without_tags, force=args.force,
+        )
 
 
 def _session(args, parser):

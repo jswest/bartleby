@@ -16,6 +16,8 @@ from bartleby.db.chunks import (
 )
 from bartleby.db.connection import init_db, open_db
 from bartleby.db.schema import EMBEDDING_DIM, SCHEMA_VERSION
+from bartleby.db.upgrades import upgrade
+from bartleby.lib.consts import EMBEDDING_MODEL
 
 
 class _BoomDatetime:
@@ -57,6 +59,61 @@ def test_meta_populated_on_init(conn):
     assert rows["sqlite_vec_version"]
     assert rows["bartleby_version"]
     assert rows["created_at"]
+
+
+def test_init_records_pinned_embedding_model(conn):
+    # A freshly-initialized DB records the pinned embedding model verbatim, so
+    # the import side (#520) can verify a corpus was built with the model it
+    # expects.
+    value = conn.cursor().execute(
+        "SELECT value FROM meta WHERE key = 'embedding_model'"
+    ).fetchone()[0]
+    assert value == EMBEDDING_MODEL
+
+
+def test_upgrade_backfills_embedding_model_idempotently(conn):
+    # Simulate a pre-#517 corpus that never recorded the key, then confirm the
+    # upgrade tail backfills the pinned value — and that re-running is a no-op
+    # rather than a churning rewrite. The DB is already at SCHEMA_VERSION, so no
+    # version step fires; only the unconditional tail block runs.
+    cur = conn.cursor()
+    cur.execute("DELETE FROM meta WHERE key = 'embedding_model'")
+    assert cur.execute(
+        "SELECT COUNT(*) FROM meta WHERE key = 'embedding_model'"
+    ).fetchone()[0] == 0
+
+    upgrade(conn, SCHEMA_VERSION)
+    value = cur.execute(
+        "SELECT value FROM meta WHERE key = 'embedding_model'"
+    ).fetchone()[0]
+    assert value == EMBEDDING_MODEL
+
+    # Idempotent: a second pass leaves exactly one row, unchanged.
+    upgrade(conn, SCHEMA_VERSION)
+    rows = cur.execute(
+        "SELECT value FROM meta WHERE key = 'embedding_model'"
+    ).fetchall()
+    assert rows == [(EMBEDDING_MODEL,)]
+
+
+def test_upgrade_does_not_overwrite_existing_embedding_model(conn):
+    # The backfill is INSERT OR IGNORE: a corpus that already carries a value
+    # (e.g. one built on a different pinned model) keeps it through an upgrade.
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE meta SET value = ? WHERE key = 'embedding_model'",
+        ("some/other-model",),
+    )
+    upgrade(conn, SCHEMA_VERSION)
+    value = cur.execute(
+        "SELECT value FROM meta WHERE key = 'embedding_model'"
+    ).fetchone()[0]
+    assert value == "some/other-model"
+
+
+def test_schema_version_pinned_at_nine():
+    # The v0.9.x line is pinned at schema 9; this whole omnibus is additive.
+    assert SCHEMA_VERSION == 9
 
 
 def test_attach_disables_load_extension(conn):

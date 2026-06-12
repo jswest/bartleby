@@ -26,6 +26,7 @@ from typing import Callable
 import apsw
 
 from bartleby.db.schema import SCHEMA_VERSION
+from bartleby.lib.consts import EMBEDDING_MODEL
 
 
 def _upgrade_v4_to_v5(conn: apsw.Connection) -> None:
@@ -188,6 +189,16 @@ def upgrade(conn: apsw.Connection, current_version: int) -> None:
         v += 1
 
     with conn:
+        # Backfill the pinned embedding model for corpora created before init_db
+        # started recording it (#517). INSERT OR IGNORE makes this idempotent and
+        # additive: it never overwrites a value a corpus already carries, so it's
+        # safe to re-run and needs no SCHEMA_VERSION bump. Import-side
+        # verification of the recorded value lives in #520, not here.
+        conn.cursor().execute(
+            "INSERT OR IGNORE INTO meta (key, value) "
+            "VALUES ('embedding_model', ?)",
+            (EMBEDDING_MODEL,),
+        )
         conn.cursor().execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('upgraded_at', ?)",
             (datetime.now(timezone.utc).isoformat(),),

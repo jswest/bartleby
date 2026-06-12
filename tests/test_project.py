@@ -606,3 +606,56 @@ def test_upgrade_refuses_db_newer_than_code(projects_root):
     with pytest.raises(SystemExit) as exc:
         project_cmd.upgrade(name="alpha")
     assert exc.value.code == 1
+
+
+def test_upgrade_backfills_embedding_model_on_current_v9(projects_root):
+    """`project upgrade` on an already-v9 corpus still backfills embedding_model.
+
+    A corpus created before #517 is at schema v9 but carries no
+    `meta.embedding_model` key, so `project publish` produces an artifact every
+    importer hard-refuses. The CLI `upgrade` handler used to `return` early when
+    `current == SCHEMA_VERSION`, BEFORE calling `upgrades.upgrade()` — so the
+    always-runs backfill tail never ran and those corpora could never be fixed
+    through the CLI. This goes through the public command path (not
+    `upgrades.upgrade` directly, which the unit tests already cover) to prove the
+    seam is reachable, and that a second run is idempotent.
+    """
+    import apsw
+
+    from bartleby.commands import project as project_cmd
+    from bartleby.db.connection import project_db_path
+    from bartleby.lib.consts import EMBEDDING_MODEL
+
+    bartleby.project.create_project("alpha")
+    db_path = project_db_path("alpha")
+
+    # Simulate a pre-#517 v9 corpus: at SCHEMA_VERSION but no embedding_model key.
+    conn = apsw.Connection(str(db_path))
+    try:
+        conn.cursor().execute("DELETE FROM meta WHERE key = 'embedding_model'")
+        meta = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+        assert "embedding_model" not in meta
+    finally:
+        conn.close()
+
+    # CLI upgrade on an already-current DB now backfills the key.
+    project_cmd.upgrade(name="alpha")
+
+    conn = apsw.Connection(str(db_path))
+    try:
+        meta = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert meta["embedding_model"] == EMBEDDING_MODEL
+        assert meta["schema_version"] == str(SCHEMA_VERSION)
+        first_upgraded_at = meta.get("upgraded_at")
+    finally:
+        conn.close()
+
+    # Idempotent: a second run neither errors nor overwrites the existing value.
+    project_cmd.upgrade(name="alpha")
+    conn = apsw.Connection(str(db_path))
+    try:
+        meta = dict(conn.cursor().execute("SELECT key, value FROM meta"))
+        assert meta["embedding_model"] == EMBEDDING_MODEL
+    finally:
+        conn.close()

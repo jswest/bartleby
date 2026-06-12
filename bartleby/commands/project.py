@@ -178,12 +178,6 @@ def upgrade(*, name: str) -> None:
             console.error("Database has no schema_version. Recreate the project.")
             sys.exit(1)
         current = int(row[0])
-        if current == SCHEMA_VERSION:
-            _console.print(
-                f"Project '{name}' is already at schema v{SCHEMA_VERSION}. "
-                "Nothing to do."
-            )
-            return
         if current > SCHEMA_VERSION:
             console.error(
                 f"Database is at v{current}, newer than code's "
@@ -191,6 +185,12 @@ def upgrade(*, name: str) -> None:
             )
             sys.exit(1)
 
+        # Always call upgrades.upgrade — even when already at SCHEMA_VERSION. The
+        # version-step loop won't run, but the always-runs tail (idempotent
+        # `INSERT OR IGNORE embedding_model` + `upgraded_at`) still does. A v9
+        # corpus created before #517 has no embedding_model key, and this is the
+        # only CLI path that backfills it; skipping the call here (the old bug)
+        # left those corpora forever unable to publish an importable artifact.
         try:
             upgrades_mod.upgrade(conn, current)
         except (RuntimeError, apsw.Error) as e:
@@ -199,10 +199,96 @@ def upgrade(*, name: str) -> None:
     finally:
         conn.close()
 
-    _console.print(
-        f"[bold green]Upgraded '{name}'[/bold green] "
-        f"from v{current} to v{SCHEMA_VERSION}."
+    if current == SCHEMA_VERSION:
+        _console.print(
+            f"Project '{name}' is already at schema v{SCHEMA_VERSION}; "
+            "ensured metadata is current."
+        )
+    else:
+        _console.print(
+            f"[bold green]Upgraded '{name}'[/bold green] "
+            f"from v{current} to v{SCHEMA_VERSION}."
+        )
+
+
+def publish(*, name: str, to: str) -> None:
+    """Publish a findings-free copy of a corpus (+ originals) to an S3 URL.
+
+    Writes a ``VACUUM INTO`` snapshot of the corpus DB, strips the session layer
+    on that copy, gathers the original files content-addressed by ``file_hash``,
+    and uploads the ``.db`` + files to ``--to``. The source corpus is never
+    mutated.
+    """
+    from botocore.exceptions import (
+        ClientError,
+        EndpointConnectionError,
+        NoCredentialsError,
     )
+
+    from bartleby.share.publish import publish_project
+
+    try:
+        result = publish_project(name, to)
+    except (ValueError, FileNotFoundError) as e:
+        console.error(str(e))
+        sys.exit(1)
+    except (ClientError, NoCredentialsError, EndpointConnectionError) as e:
+        # A bad bucket/URL, missing/expired credentials, or an unreachable
+        # endpoint should be a clean error, not a boto3 traceback.
+        console.error(f"S3 error: {e}")
+        sys.exit(1)
+
+    _console.print(
+        f"[bold green]Published '{name}'[/bold green] to "
+        f"[cyan]{result['destination']}[/cyan]"
+    )
+    _console.print(f"Database: [cyan]{result['db_url']}[/cyan]")
+    _console.print(f"Files: {result['file_count']} uploaded (keyed by file_hash)")
+
+
+def import_(*, name: str, from_url: str, without_tags: bool, force: bool) -> None:
+    """Import a published corpus from an S3 URL as a fresh local project.
+
+    Downloads the published ``.db`` + originals, verifies schema and embedding
+    model BEFORE trusting the corpus (a compatibility mismatch — or a missing
+    embedding-model key — is an unconditional hard refuse), then adopts the
+    ``.db`` as-is and rewrites local file paths by ``file_hash``.
+    ``--without-tags`` drops the adopted tag definitions and assignments.
+    ``--force`` is required only to overwrite an existing project of the same
+    name (which drops its local findings); it never relaxes the compatibility
+    gates.
+    """
+    from botocore.exceptions import (
+        ClientError,
+        EndpointConnectionError,
+        NoCredentialsError,
+    )
+
+    from bartleby.share.import_ import ImportRefused, import_project
+
+    try:
+        result = import_project(name, from_url, without_tags=without_tags,
+                                force=force)
+    except (ValueError, ImportRefused) as e:
+        console.error(str(e))
+        sys.exit(1)
+    except (ClientError, NoCredentialsError, EndpointConnectionError) as e:
+        # A wrong URL, a missing bartleby.db at the prefix, missing/expired
+        # credentials, or an unreachable endpoint should be a clean error, not a
+        # boto3 traceback. import_project already tore down any half-built project.
+        console.error(f"S3 error: {e}")
+        sys.exit(1)
+
+    _console.print(
+        f"[bold green]Imported '{result['project']}'[/bold green] from "
+        f"[cyan]{result['source']}[/cyan]"
+    )
+    _console.print(
+        f"Files: {result['file_count']} landed (keyed by file_hash)"
+    )
+    if result["tags_dropped"]:
+        _console.print("[yellow]Tags dropped (--without-tags)[/yellow]")
+    _console.print(f"Active project set to: [bold]{result['project']}[/bold]")
 
 
 def delete(*, name: str, yes: bool) -> None:
