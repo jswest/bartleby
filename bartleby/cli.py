@@ -311,17 +311,25 @@ def _scribe(args):
     from bartleby.lib import console
 
     console.splash()
-    scribe_main(
-        project=args.project,
-        files=args.files,
-        only=args.only,
-        model=args.model,
-        provider=args.provider,
-        pdf_converter=args.pdf_converter,
-        html_converter=args.html_converter,
-        verbose=args.verbose,
-        timings=args.timings,
-    )
+    # Scribe's expected failure modes — no active project (RuntimeError), an
+    # invalid configured converter or a typo'd --only (ValueError), a missing
+    # path (FileNotFoundError) — are user errors, not bugs. Surface them as a
+    # one-line message on stderr and exit 1 instead of dumping a traceback.
+    try:
+        scribe_main(
+            project=args.project,
+            files=args.files,
+            only=args.only,
+            model=args.model,
+            provider=args.provider,
+            pdf_converter=args.pdf_converter,
+            html_converter=args.html_converter,
+            verbose=args.verbose,
+            timings=args.timings,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        console.error(str(e))
+        sys.exit(1)
 
 
 def _embed(args):

@@ -7,6 +7,7 @@ import sys
 from rich.console import Console
 
 from bartleby.db.connection import resolve_project_name
+from bartleby.lib import console
 from bartleby.session import (
     SessionInfo,
     end_active_session,
@@ -23,7 +24,7 @@ def _resolve_project(name: str | None) -> str:
     try:
         return resolve_project_name(name)
     except RuntimeError as e:
-        _console.print(f"[red]{e}[/red]")
+        console.error(str(e))
         sys.exit(1)
 
 
@@ -75,7 +76,7 @@ def set_provenance(
 ) -> None:
     project_name = _resolve_project(project)
     if harness is None and model is None:
-        _console.print("[red]Pass --model and/or --harness to set.[/red]")
+        console.error("Pass --model and/or --harness to set.")
         sys.exit(1)
     info = set_session_provenance(project_name, model=model, harness=harness)
     if info is None:
