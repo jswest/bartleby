@@ -93,18 +93,13 @@ def gather_files(conn: apsw.Connection) -> dict[str, Path]:
     """
     files: dict[str, Path] = {}
     cur = conn.cursor()
-    for file_hash, file_path in cur.execute(
-        "SELECT file_hash, file_path FROM documents"
-    ):
-        p = Path(file_path)
-        if p.is_file():
-            files[file_hash] = p
-    for file_hash, file_path in cur.execute(
-        "SELECT file_hash, file_path FROM images"
-    ):
-        p = Path(file_path)
-        if p.is_file():
-            files[file_hash] = p
+    for table in ("documents", "images"):
+        for file_hash, file_path in cur.execute(
+            f"SELECT file_hash, file_path FROM {table}"
+        ):
+            p = Path(file_path)
+            if p.is_file():
+                files[file_hash] = p
     return files
 
 
