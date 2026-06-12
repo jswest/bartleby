@@ -27,8 +27,9 @@ _VLM_INPUT = {"description": "A cat sitting.", "notes": ""}
 
 
 class _FakeAnthropicResponse:
-    def __init__(self, blocks):
+    def __init__(self, blocks, stop_reason="tool_use"):
         self.content = blocks
+        self.stop_reason = stop_reason
 
 
 def _block(type_, name=None, input_=None):
@@ -133,6 +134,32 @@ def test_anthropic_minimal_effort_maps_to_low(monkeypatch):
     assert fake.last_call["output_config"] == {"effort": "low"}
 
 
+def test_anthropic_current_model_drops_temperature_and_uses_effort(monkeypatch):
+    # Deny-list inversion: a current model not on either older deny-list
+    # (claude-fable-5) must default SAFE — no temperature sent (it would 400, the
+    # #250 regression), effort applied. An allowlist that predates this model
+    # would have done the opposite.
+    fake = _summarize_with_effort(monkeypatch, model="claude-fable-5", effort="high")
+    assert "temperature" not in fake.last_call
+    assert fake.last_call["output_config"] == {"effort": "high"}
+
+
+def test_anthropic_future_model_defaults_safe(monkeypatch):
+    # Any model released after this code (here a stand-in unknown id) is off both
+    # deny-lists, so it inherits the safe path: temperature dropped, effort sent.
+    fake = _summarize_with_effort(monkeypatch, model="claude-opus-5-0", effort="medium")
+    assert "temperature" not in fake.last_call
+    assert fake.last_call["output_config"] == {"effort": "medium"}
+
+
+def test_anthropic_denylisted_older_model_keeps_temperature_no_effort(monkeypatch):
+    # The pre-effort, temperature-accepting deny-list (Sonnet 4.5 here) must keep
+    # its existing behavior exactly: temperature forwarded, no effort knob sent.
+    fake = _summarize_with_effort(monkeypatch, model="claude-sonnet-4-5", effort="high")
+    assert fake.last_call["temperature"] == 0.0
+    assert "output_config" not in fake.last_call
+
+
 def _classify_on(monkeypatch, model):
     class _Schema(BaseModel):
         ok: bool
@@ -188,6 +215,20 @@ def test_anthropic_missing_tool_use_raises(monkeypatch):
     p = AnthropicProvider()
     with pytest.raises(RuntimeError, match="did not include"):
         p.analyze_image(b"\x00", model="m")
+
+
+def test_anthropic_max_tokens_truncation_raises_named_error(monkeypatch):
+    # A max_tokens truncation cuts the response off before the forced tool block
+    # lands, so the tool call is missing. The error must NAME the max_tokens
+    # truncation rather than the opaque "did not include" message — the fix
+    # (raise max_tokens) is different from a genuinely tool-less response.
+    response = _FakeAnthropicResponse([_block("text")], stop_reason="max_tokens")
+    _install_anthropic(monkeypatch, response)
+    from bartleby.providers.anthropic import AnthropicProvider
+    p = AnthropicProvider()
+    with pytest.raises(RuntimeError, match="max_tokens") as exc:
+        p.analyze_image(b"\x00", model="m")
+    assert "did not include" not in str(exc.value)
 
 
 def test_anthropic_invalid_tool_input_raises(monkeypatch):
