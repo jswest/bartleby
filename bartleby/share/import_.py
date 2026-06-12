@@ -200,7 +200,7 @@ def _drop_tags(conn: apsw.Connection) -> None:
 
 
 def import_project(name: str, from_url: str, *, client=None,
-                   without_tags: bool = False) -> dict:
+                   without_tags: bool = False, force: bool = False) -> dict:
     """Import the corpus published at ``from_url`` as local project ``name``.
 
     Downloads the published ``.db`` + originals from the ``s3://bucket/prefix``
@@ -210,8 +210,10 @@ def import_project(name: str, from_url: str, *, client=None,
     tests pass a stubbed boto3 client; production builds a real one.
 
     Raises :class:`ImportRefused` on a failed compatibility gate (no side
-    effects), ``ValueError`` on a bad name/URL. Re-importing an existing project
-    overwrites it idempotently.
+    effects), or when ``name`` already exists and ``force`` is not set (a
+    same-name overwrite is opt-in because it drops the existing project's local
+    findings); ``ValueError`` on a bad name/URL. With ``force``, re-importing an
+    existing project overwrites it idempotently.
     """
     validate_project_name(name)
     target = s3.parse_s3_url(from_url)
@@ -224,6 +226,17 @@ def import_project(name: str, from_url: str, *, client=None,
     # landing fails; a freshly-created one, however, is cleaned up so an aborted
     # import never leaves a half-registered project behind.
     preexisting = project_dir.exists()
+
+    # A same-name collision is a hard stop unless ``force``: overwriting adopts a
+    # new corpus over the existing project, dropping its local findings (which a
+    # findings-free artifact cannot restore). Decide this up front, before any
+    # download, so a refusal touches neither the network nor the existing project.
+    if preexisting and not force:
+        raise ImportRefused(
+            f"Project '{name}' already exists; importing would overwrite it and "
+            f"drop its local findings (a published artifact cannot restore them). "
+            f"Pass --force to overwrite, or import under a different name."
+        )
 
     # Download + verify in scratch first, so a refused import touches nothing.
     scratch = project_dir.parent / f".import-tmp-{name}"
