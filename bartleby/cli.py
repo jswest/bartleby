@@ -97,6 +97,11 @@ def main():
         "--without-tags", action="store_true",
         help="Drop tag definitions and assignments from the imported corpus",
     )
+    pimp.add_argument(
+        "--force", action="store_true",
+        help="Overwrite an existing project of the same name "
+             "(drops its local findings)",
+    )
 
     scribe_parser = subparsers.add_parser(
         "scribe",
@@ -403,7 +408,7 @@ def _project(args, parser):
     elif args.project_command == "import":
         project_cmd.import_(
             name=args.name, from_url=args.from_url,
-            without_tags=args.without_tags,
+            without_tags=args.without_tags, force=args.force,
         )
 
 

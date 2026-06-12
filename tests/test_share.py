@@ -402,10 +402,51 @@ def test_import_rewrites_file_paths_and_is_idempotent(published_corpus, tmp_path
         published = client.objects[("bucket", f"corpora/pub/files/{file_hash}.pdf")]
         assert p.read_bytes() == published
 
-    # Re-import: same hashes -> same landed paths -> identical state.
+    # Re-import: same hashes -> same landed paths -> identical state. A re-import
+    # over an existing project is now an explicit --force operation (#526).
     import_mod.import_project("imported", "s3://bucket/corpora/pub",
-                              client=client)
+                              client=client, force=True)
     assert landed_state() == first
+
+
+# --------------------------------------------------------------------------- #
+# #526 — a same-name import is a hard stop unless --force (no silent overwrite).
+# (A fresh, non-colliding name needs no flag — see
+# test_import_adopts_published_corpus_as_new_project above.)
+# --------------------------------------------------------------------------- #
+
+
+def test_import_refuses_existing_name_without_force(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    import_mod.import_project("imported", "s3://bucket/corpora/pub", client=client)
+
+    before = project_db_path("imported").read_bytes()
+
+    with pytest.raises(import_mod.ImportRefused, match="already exists"):
+        import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                  client=client)
+
+    # The existing project is left byte-for-byte untouched, and the refusal is
+    # decided up front: no scratch dir is left behind either.
+    assert project_db_path("imported").read_bytes() == before
+    assert not (import_mod.get_project_dir("imported").parent
+                / ".import-tmp-imported").exists()
+
+
+def test_import_force_overwrites_existing_name(published_corpus, tmp_path):
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    import_mod.import_project("imported", "s3://bucket/corpora/pub", client=client)
+
+    result = import_mod.import_project("imported", "s3://bucket/corpora/pub",
+                                       client=client, force=True)
+    assert result["file_count"] == 2
+    # The overwritten project is intact and openable.
+    conn = open_db("imported")
+    try:
+        n = conn.cursor().execute("SELECT count(*) FROM documents").fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 2
 
 
 def _meta_lacks_key(client: FakeS3Client, bucket: str, key: str,
