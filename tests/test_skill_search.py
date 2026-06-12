@@ -388,9 +388,12 @@ def test_rrf_unit_known_lists():
     expected_10 = 1.0 / 61 + 1.0 / 62
     assert by_id[30] == pytest.approx(expected_30)
     assert by_id[10] == pytest.approx(expected_10)
-    # Order: highest-score first.
+    # Order: highest-score first, fully deterministic. 10 (1/61 + 1/62) just
+    # edges out 30 (1/63 + 1/61), then 20/40 (a-only) and 50 (b-only) by their
+    # single-list RRF contributions. Asserting the whole order — not just
+    # "0th is 10 or 30" — catches a regression that reverses or reshuffles ties.
     ids_in_order = [cid for cid, _ in scored]
-    assert ids_in_order[0] in (10, 30)
+    assert ids_in_order == [10, 30, 20, 50, 40]
 
 
 def test_fts_query_quotes_each_token():
@@ -738,7 +741,6 @@ def test_search_hits_include_file_name_and_page_number(seeded_project, capsys):
 def test_search_image_source_name_notes_multiple_docs(seeded_project, capsys):
     """An image attached to two documents shows '+1 other docs' in source_name."""
     from tests._skill_fixtures import seed_image
-    from bartleby.db.chunks import ChunkInput, insert_image_chunks
     conn = open_db(seeded_project["project"])
     try:
         image_id = seed_image(
