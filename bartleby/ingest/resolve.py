@@ -30,6 +30,14 @@ def _resolve_llm_provider(
     model_override: str | None,
 ) -> tuple[Provider | None, str | None]:
     if config.get("summary_depth", "none") != "one-shot":
+        # Summaries are off, so a --provider/--model override can't take effect.
+        # Don't discard it silently — say so, so a user who passed one isn't left
+        # wondering why their model never ran.
+        if provider_override is not None or model_override is not None:
+            console.warn(
+                "summary_depth is not 'one-shot', so summaries are off — "
+                "ignoring --provider/--model."
+            )
         return None, None
 
     name = provider_override or config.get("provider")

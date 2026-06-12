@@ -123,6 +123,37 @@ def _prompt_positive_int(prompt: str, default: int, *, help_text: str) -> int:
         console.print("[red]Must be a positive integer[/red]")
 
 
+def _prompt_bounded_int(
+    prompt: str, default: int, *, min_value: int, max_value: int, help_text: str
+) -> int:
+    """Prompt for an int in [min_value, max_value], looping until it's in range.
+
+    Unlike ``_prompt_positive_int`` (n > 0), this admits a meaningful 0 and caps
+    the top end — e.g. ocr_min_confidence is a 0–100 percentage where 0 ("always
+    trust OCR") is valid and 250 is not.
+    """
+    _help(help_text)
+    while True:
+        n = IntPrompt.ask(prompt, default=default)
+        if min_value <= n <= max_value:
+            return n
+        console.print(f"[red]Must be between {min_value} and {max_value}[/red]")
+
+
+def _api_key_help(provider: str) -> str:
+    """The default api-key help, naming the env-var fallback for this provider.
+
+    wsjpt authenticates against the Gemini API, so its key lands in
+    GEMINI_API_KEY (via ensure_provider_env), not the WSJPT_API_KEY the
+    generic ``{PROVIDER}_API_KEY`` rule would otherwise advertise.
+    """
+    env_var = "GEMINI_API_KEY" if provider == "wsjpt" else f"{provider.upper()}_API_KEY"
+    return (
+        "Saved to the config file. Leave blank to fall back to the "
+        f"{env_var} environment variable."
+    )
+
+
 def _prompt_max_workers(existing: dict) -> int | None:
     """Returns the worker count, or None for auto (omit the key from config)."""
     _help(
@@ -177,12 +208,9 @@ def main():
         )
 
         if provider in ("anthropic", "openai", "wsjpt"):
-            key = _prompt_api_key(provider, existing)
-            field = f"{provider}_api_key"
+            key = _prompt_api_key(provider, existing, help_text=_api_key_help(provider))
             if key:
-                config[field] = key
-            else:
-                config.pop(field, None)
+                config[f"{provider}_api_key"] = key
         elif provider == "ollama":
             config["ollama_base_url"] = _prompt_ollama_url(existing)
 
@@ -216,11 +244,9 @@ def main():
                 help_text="Caps how much document text is sent to the summarizer; "
                 "longer documents are truncated.\nHigher = more context, higher cost.",
             )
-            if provider == "ollama":
+            if provider != "ollama":
                 # Ollama serializes (OLLAMA_NUM_PARALLEL=1), so summarize workers
                 # auto-clamp to 1 (#243) — no count to prompt for.
-                config.pop("summarize_workers", None)
-            else:
                 config["summarize_workers"] = _prompt_positive_int(
                     "Summarize workers",
                     int(existing.get("summarize_workers", DEFAULT_SUMMARIZE_WORKERS)),
@@ -228,18 +254,8 @@ def main():
                     "parsing — LLM calls are network-bound, so this runs separately "
                     "from parse workers.\nRaise it for a rate-tolerant cloud provider.",
                 )
-        else:
-            config.pop("temperature", None)
-            config.pop("reasoning_effort", None)
-            config.pop("max_summarize_tokens", None)
-            config.pop("summarize_workers", None)
     else:
         # No LLM → no summarization.
-        for k in ("provider", "model", "summary_depth", "temperature",
-                 "reasoning_effort", "max_summarize_tokens", "summarize_workers",
-                 "ollama_base_url",
-                 "anthropic_api_key", "openai_api_key", "wsjpt_api_key"):
-            config.pop(k, None)
         config["summary_depth"] = "none"
 
     console.print("\n[bold]Converters[/bold]")
@@ -296,10 +312,11 @@ def main():
         # api key already prompted for above. Otherwise prompt fresh.
         if vprovider in ("anthropic", "openai", "wsjpt"):
             if vprovider != config.get("provider"):
-                key = _prompt_api_key(vprovider, existing)
-                field = f"{vprovider}_api_key"
+                key = _prompt_api_key(
+                    vprovider, existing, help_text=_api_key_help(vprovider)
+                )
                 if key:
-                    config[field] = key
+                    config[f"{vprovider}_api_key"] = key
         elif vprovider == "ollama":
             # Reuse ollama_base_url if already set; otherwise prompt.
             if "ollama_base_url" not in config:
@@ -316,17 +333,17 @@ def main():
             help_text="Images with an edge smaller than this are skipped — "
             "avoids wasting VLM calls (and crashes) on thin slivers.",
         )
-        config["ocr_min_confidence"] = _prompt_positive_int(
+        config["ocr_min_confidence"] = _prompt_bounded_int(
             "Tesseract min confidence",
             int(existing.get("ocr_min_confidence", DEFAULT_OCR_MIN_CONFIDENCE)),
+            min_value=0, max_value=100,
             help_text="Tesseract average confidence (0-100); pages scoring below "
-            "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more.",
+            "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more "
+            "(0 = always trust OCR).",
         )
-        if vprovider == "ollama":
+        if vprovider != "ollama":
             # Ollama serializes (OLLAMA_NUM_PARALLEL=1), so caption workers
             # auto-clamp to 1 (#243) — no count to prompt for.
-            config.pop("caption_workers", None)
-        else:
             config["caption_workers"] = _prompt_positive_int(
                 "Caption workers",
                 int(existing.get("caption_workers", DEFAULT_CAPTION_WORKERS)),
@@ -334,11 +351,6 @@ def main():
                 "calls are network-bound, so this runs separately from parse "
                 "workers.\nRaise it for a rate-tolerant cloud provider.",
             )
-    else:
-        for k in ("vision_provider", "vision_model",
-                 "vision_max_dimension", "vision_min_dimension",
-                 "ocr_min_confidence", "caption_workers"):
-            config.pop(k, None)
 
     console.print("\n[bold]Document reading[/bold]")
     config["max_read_tokens"] = _prompt_positive_int(
