@@ -80,6 +80,20 @@ def test_header_shows_dash_until_known_then_the_tally():
     assert "caption —" in header and "summarize —" in header
 
 
+def test_zero_work_phase_reads_as_finished_not_unknown():
+    # A phase with no work (#503): an all-text ingest has no images to caption and
+    # may owe no summaries, so its loop early-returns with start(0). That must read
+    # as "0/0" (finished) — not "—" (never ran) — so the header doesn't imply the
+    # phase was skipped.
+    sp = ScribeProgress(n_lanes=2)
+    sp.phase("caption").start(0)
+    sp.phase("summarize").start(0)
+
+    header = sp._header().plain
+    assert "caption 0/0" in header and "summarize 0/0" in header
+    assert "caption —" not in header and "summarize —" not in header
+
+
 def test_lanes_are_sticky_per_key_and_reset_between_phases():
     sp = ScribeProgress(n_lanes=2)
     par = sp.phase("parse")
