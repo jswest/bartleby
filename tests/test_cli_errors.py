@@ -60,7 +60,6 @@ def _scribe_args(**over):
 def test_scribe_expected_errors_exit_one_on_stderr(monkeypatch, exc):
     """RuntimeError / ValueError / FileNotFoundError out of scribe become a
     one-line stderr message + exit 1, not an uncaught traceback."""
-    monkeypatch.setattr(cli, "_scribe", cli._scribe)  # ensure real fn
     from bartleby.lib import console
 
     errors: list[str] = []
