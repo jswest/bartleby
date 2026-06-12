@@ -16,6 +16,27 @@ from bartleby.lib import quiet
 from bartleby.lib.consts import DOCLING_HF_REPOS, EMBEDDING_MODEL
 
 
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Snapshot and restore ``os.environ`` around every test in this module.
+
+    ``setup_quiet_third_party`` writes the offline flags and the noise-control
+    vars straight into ``os.environ`` (``setdefault`` / ``os.environ[...] =``),
+    which monkeypatch does not track. Without this, a test that flips
+    ``HF_HUB_OFFLINE``/``TRANSFORMERS_OFFLINE`` to ``"1"`` leaves them set for
+    every later test — ``offline_blocked`` then reads a stale ``"1"`` it never
+    set, and ``_model_cached`` probes can be skewed. Restoring the pre-test
+    environment keeps each case hermetic so the offline assertions stay
+    falsifiable rather than passing on a leaked value.
+    """
+    saved = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 def _cache_model(root, repo_id: str) -> None:
     """Materialise a non-empty HF-cache snapshot for ``repo_id`` under ``root``."""
     folder = "models--" + repo_id.replace("/", "--")
@@ -41,7 +62,7 @@ def test_model_cached_detects_presence(hf_cache):
     assert quiet._model_cached(EMBEDDING_MODEL) is True
 
 
-def test_offline_not_set_when_required_model_missing(hf_cache, monkeypatch):
+def test_offline_not_set_when_required_model_missing(hf_cache):
     # Only the embedding model is cached; a docling model is still missing.
     _cache_model(hf_cache, EMBEDDING_MODEL)
     required = (EMBEDDING_MODEL, *DOCLING_HF_REPOS)
@@ -49,7 +70,7 @@ def test_offline_not_set_when_required_model_missing(hf_cache, monkeypatch):
     assert "HF_HUB_OFFLINE" not in os.environ
 
 
-def test_offline_set_when_all_required_cached(hf_cache, monkeypatch):
+def test_offline_set_when_all_required_cached(hf_cache):
     required = (EMBEDDING_MODEL, *DOCLING_HF_REPOS)
     for repo in required:
         _cache_model(hf_cache, repo)

@@ -144,3 +144,47 @@ def test_refuses_to_overwrite_unrelated_directory(dest):
         ready.main(dest=dest)
     assert exc.value.code == 1
     assert bystander.exists()  # left untouched
+
+
+def test_refuses_foreign_skill_dir_without_marker(dest, monkeypatch):
+    # Another tool's skill: it has a SKILL.md but no .bartleby-skill marker.
+    # A bare SKILL.md must not be enough to make us rmtree it.
+    dest.mkdir(parents=True)
+    (dest / "SKILL.md").write_text("a different tool's skill")
+    bystander = dest / "data.json"
+    bystander.write_text("someone else's files")
+
+    errors = []
+    monkeypatch.setattr(ready.console, "error", lambda m: errors.append(m))
+
+    with pytest.raises(SystemExit) as exc:
+        ready.main(dest=dest)
+
+    assert exc.value.code == 1
+    assert bystander.exists()  # not deleted
+    assert (dest / "SKILL.md").read_text() == "a different tool's skill"
+    assert ready.MARKER_NAME in errors[0]  # message names the marker, says not ours
+
+
+def test_refreshes_dir_we_own(dest, monkeypatch):
+    # A dir with our marker is ours; a plain rerun after drift refreshes it.
+    ready.main(dest=dest)
+    (dest / "SKILL.md").write_text("hand-edited, now stale")
+    assert ready._is_ours(dest)
+
+    calls = []
+    real_install = ready._install
+    monkeypatch.setattr(
+        ready, "_install", lambda *a, **k: (calls.append(1), real_install(*a, **k))[1]
+    )
+    ready.main(dest=dest)
+
+    assert calls == [1]  # reinstalled over our own dir
+    assert ready._hash_dir(dest) == ready._hash_dir(ready._source_dir())
+
+
+def test_empty_dest_dir_installs(dest):
+    dest.mkdir(parents=True)  # pre-existing but empty
+    ready.main(dest=dest)
+    assert (dest / "SKILL.md").is_file()
+    assert (dest / ready.MARKER_NAME).is_file()

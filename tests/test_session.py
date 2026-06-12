@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import bartleby.project
@@ -188,6 +190,36 @@ def test_ensure_named_session_never_touches_active_pointer(project):
     assert web != agent["session_id"]
     # ...without disturbing the agent's active-session pointer.
     assert session_mod.read_active_session_id(project) == agent["session_id"]
+
+
+def test_write_active_session_id_is_atomic_no_partial_read(project, monkeypatch):
+    # write_active_session_id must publish via an atomic rename: a concurrent
+    # reader interleaved mid-write sees either the old id or the new one in
+    # full, never a truncated line. We intercept os.replace to run a read at
+    # exactly the moment the new content exists in a temp file but the pointer
+    # hasn't been swapped yet.
+    session_mod.write_active_session_id(project, 11)
+
+    observed = []
+    orig_replace = os.replace
+
+    def spy_replace(src, dst):
+        # Mid-write: reader still sees the OLD committed value, never a partial.
+        observed.append(session_mod.read_active_session_id(project))
+        orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    session_mod.write_active_session_id(project, 22)
+
+    assert observed == [11]  # old value still visible until the rename lands
+    assert session_mod.read_active_session_id(project) == 22
+
+
+def test_write_active_session_id_leaves_no_tmp_file(project):
+    session_mod.write_active_session_id(project, 7)
+    pointer = bartleby.project.get_project_dir(project) / ".active_session"
+    assert not pointer.with_name(pointer.name + ".tmp").exists()
+    assert session_mod.read_active_session_id(project) == 7
 
 
 def test_generate_name_is_kebab_pair():

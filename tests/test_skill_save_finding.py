@@ -154,7 +154,7 @@ def test_save_finding_dedupes_repeated_markers(seeded_project, tmp_path, capsys)
 
 
 def test_save_finding_citations_include_page_number_when_available(
-    seeded_project, tmp_path, capsys, monkeypatch
+    seeded_project, tmp_path, capsys
 ):
     """A first-class page_number on the chunk surfaces in citations."""
     from bartleby.db.connection import open_db

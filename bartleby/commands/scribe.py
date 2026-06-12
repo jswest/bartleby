@@ -342,7 +342,12 @@ def main(
             # thread.
             if summaries_enabled:
                 pending = writer.documents_needing_summary()
-                if pending:
+                if not pending:
+                    # Nothing to summarize (e.g. every doc already summarized, or
+                    # a fully resumed run): reveal a 0/0 tally so the run-of-show
+                    # header reads "summarize 0/0" (finished) rather than "—".
+                    progress.phase("summarize").start(0)
+                else:
                     owed, summarize_times = summary._summarize_all(
                         writer, pending,
                         llm_provider=llm_provider, llm_model=llm_model,

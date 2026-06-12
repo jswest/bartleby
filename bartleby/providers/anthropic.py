@@ -19,19 +19,39 @@ _SUMMARY_TOOL = "save_summary"
 _IMAGE_TOOL = "save_image_description"
 _CLASSIFY_TOOL = "save_classification"
 
-# Reasoning effort is GA via output_config.effort on Opus 4.5+ and Sonnet 4.6;
-# it 400s on Sonnet 4.5 / Haiku 4.5 and earlier, so we only send it for the
-# models below and leave older models on their default behavior. We deliberately
+# Both knobs are deny-lists of the OLDER models, so a current model
+# (claude-fable-5) and any future model take the safe path automatically — an
+# allowlist would silently mis-handle every model released after this code,
+# reintroducing the #250 400 and dropping effort.
+#
+# Effort (output_config.effort) is GA on Opus 4.5+, Sonnet 4.6, Fable 5, and
+# every later model; it 400s only on Sonnet 4.5 / Haiku 4.5 and earlier. So we
+# deny-list the pre-effort models and send effort everywhere else. We deliberately
 # do NOT pair it with a thinking block: Anthropic rejects an enabled-thinking
 # request that also forces a specific tool, and summarize() forces save_summary.
 # Effort alone still lowers reasoning spend, which is the whole point.
-_EFFORT_MODEL_PREFIXES = (
-    "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
-    "claude-sonnet-4-6",
+_NO_EFFORT_PREFIXES = (
+    "claude-3",
+    "claude-sonnet-4-0", "claude-sonnet-4-5",
+    "claude-opus-4-0", "claude-opus-4-1",
+    "claude-haiku-4-5",
+    # Dated 4.0-generation snapshots: the alias prefixes above don't cover them
+    # (e.g. "claude-opus-4-0" is not a prefix of "claude-opus-4-20250514"), and a
+    # bare "claude-opus-4-" would wrongly swallow 4.5–4.8. Match the exact IDs.
+    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
 )
-# temperature is removed on Opus 4.7+ (400 if sent); on the older effort-capable
-# models it's still accepted, so we keep forwarding it there for determinism.
-_NO_TEMPERATURE_PREFIXES = ("claude-opus-4-7", "claude-opus-4-8")
+# temperature is removed on Opus 4.7+, Fable 5, and every later model (400 if
+# sent). The older models that still accept it — Opus 4.5/4.6, Sonnet 4.5/4.6,
+# Haiku 4.5, and earlier — are the deny-list: we keep forwarding temperature
+# there for determinism and drop it everywhere else (current + future models).
+_KEEPS_TEMPERATURE_PREFIXES = (
+    "claude-3",
+    "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6",
+    "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
+    "claude-haiku-4-5",
+    # Dated 4.0-generation snapshots (see _NO_EFFORT_PREFIXES note above).
+    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
+)
 # Our unified enum has "minimal" (an OpenAI level); Anthropic's lowest is "low".
 _EFFORT_MAP = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
 
@@ -53,11 +73,14 @@ def _map_effort(reasoning_effort: str) -> str:
 
 
 def _supports_effort(model: str) -> bool:
-    return model.startswith(_EFFORT_MODEL_PREFIXES)
+    # Default safe: everything except the pre-effort deny-list takes effort.
+    return not model.startswith(_NO_EFFORT_PREFIXES)
 
 
 def _drops_temperature(model: str) -> bool:
-    return model.startswith(_NO_TEMPERATURE_PREFIXES)
+    # Default safe: drop temperature everywhere except the older models that
+    # still accept it, so a current/future temperature-rejecting model can't 400.
+    return not model.startswith(_KEEPS_TEMPERATURE_PREFIXES)
 
 
 def _warn_dropped_temperature(temperature: float, model: str) -> None:
@@ -100,9 +123,10 @@ class AnthropicProvider:
         )
         if reasoning_effort and _supports_effort(model):
             kwargs["output_config"] = {"effort": _map_effort(reasoning_effort)}
-        # Opus 4.7+ rejects temperature outright — a property of the model, not of
-        # whether we sent effort — so drop it wherever it would 400, independent of
-        # reasoning_effort. The older effort-capable models still accept it.
+        # Current temperature-rejecting models (Opus 4.7+, Fable 5, future) 400 on
+        # temperature outright — a property of the model, not of whether we sent
+        # effort — so drop it wherever it would 400, independent of
+        # reasoning_effort. Only the older deny-listed models still accept it.
         if _drops_temperature(model):
             _warn_dropped_temperature(temperature, model)
             del kwargs["temperature"]
@@ -129,9 +153,9 @@ class AnthropicProvider:
             }],
             tool_choice={"type": "tool", "name": _CLASSIFY_TOOL},
         )
-        # Opus 4.7+ rejects temperature outright (see summarize) — drop it wherever
-        # it would 400. Tag classification reuses the summarizer's model, so a
-        # 4.7+ config would otherwise 400 on every classify call.
+        # Temperature-rejecting models 400 on temperature (see summarize) — drop it
+        # wherever it would 400. Tag classification reuses the summarizer's model, so
+        # a Fable-5/Opus-4.7+ config would otherwise 400 on every classify call.
         if _drops_temperature(model):
             _warn_dropped_temperature(temperature, model)
             del kwargs["temperature"]
@@ -182,6 +206,14 @@ def _extract_tool_input(response, tool_name, model_cls):
                 raise RuntimeError(
                     f"Anthropic tool {tool_name!r} input failed schema validation: {e}"
                 ) from e
+    # A max_tokens truncation cuts the response off before the forced tool call
+    # lands, so it surfaces here as a missing tool block. Name it instead of the
+    # opaque "no tool use" error — the fix (raise max_tokens) is different.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise RuntimeError(
+            f"Anthropic response was truncated by max_tokens before the "
+            f"{tool_name!r} tool call completed; raise max_tokens and retry."
+        )
     raise RuntimeError(
         f"Anthropic response did not include the {tool_name!r} tool call."
     )

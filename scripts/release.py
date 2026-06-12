@@ -211,6 +211,32 @@ def current_branch() -> str:
     return _git("rev-parse", "--abbrev-ref", "HEAD")
 
 
+def gh_recovery_message(tag: str, notes: str) -> str:
+    """Persist ``notes`` and return the resume instructions for a failed publish.
+
+    The publish path pushes the tag *before* ``gh release create``, so a ``gh``
+    failure leaves a remote tag with no Release. Rather than swallow the notes in
+    a traceback, write them to a gitignored scratch file and return the exact
+    ``gh release create … --notes-file <path>`` command so the maintainer resumes
+    by copy-paste — the tag is already up, so re-running this whole script is the
+    wrong move.
+
+    The file lands under the repo's ``.claude/scratch/`` (already gitignored,
+    user-only by convention) rather than world-readable ``/tmp``.
+    """
+    scratch = REPO_ROOT / ".claude" / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    notes_file = scratch / f"release-notes-{tag}.md"
+    notes_file.write_text(notes)
+    resume = f"gh release create {tag} --title {tag} --notes-file {notes_file}"
+    return (
+        f"error: tag {tag} was pushed but `gh release create` failed.\n"
+        f"The remote tag is up; do NOT re-run this script. Resume the publish with:\n\n"
+        f"    {resume}\n\n"
+        f"(release notes saved to {notes_file})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -290,10 +316,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.push:
         _git("push", "origin", new_tag)
-        subprocess.run(
-            ["gh", "release", "create", new_tag, "--title", new_tag, "--notes", notes],
-            cwd=REPO_ROOT, check=True,
-        )
+        try:
+            subprocess.run(
+                ["gh", "release", "create", new_tag, "--title", new_tag, "--notes", notes],
+                cwd=REPO_ROOT, check=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # The tag is already pushed; only the GitHub Release failed — either
+            # `gh` exited non-zero (CalledProcessError) or it isn't installed at
+            # all (FileNotFoundError, the most likely first-time failure). Stash
+            # the notes to a file and hand back the exact `gh` command so
+            # publishing is a copy-paste away — never a dangling remote tag with
+            # no Release and no recovery affordance.
+            print(gh_recovery_message(new_tag, notes), file=sys.stderr)
+            return 1
         print(f"Pushed {new_tag} and published the GitHub Release.", file=sys.stderr)
 
     return 0

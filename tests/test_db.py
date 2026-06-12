@@ -18,6 +18,16 @@ from bartleby.db.connection import init_db, open_db
 from bartleby.db.schema import EMBEDDING_DIM, SCHEMA_VERSION
 
 
+class _BoomDatetime:
+    """Stand-in for ``datetime`` whose ``now()`` raises, to simulate a create
+    failing after the DDL has run (file on disk) but before ``meta`` is
+    populated."""
+
+    @staticmethod
+    def now(*args, **kwargs):
+        raise RuntimeError("simulated mid-create failure")
+
+
 def _emb(seed: float = 0.0) -> list[float]:
     return [seed + i * 0.001 for i in range(EMBEDDING_DIM)]
 
@@ -121,6 +131,50 @@ def test_schema_mismatch_points_at_upgrade_first():
     # `project upgrade` is the first remedy, re-ingest the fallback (issue #95).
     assert "bartleby project upgrade proj" in msg
     assert msg.index("project upgrade") < msg.index("re-ingest")
+
+
+def test_init_db_unlinks_on_failure_so_retry_recovers(monkeypatch):
+    # Simulate a create that dies after the file is on disk and the DDL has run
+    # but before meta is fully populated. The partial file must be unlinked so
+    # the next create isn't blocked by the FileExistsError guard.
+    import bartleby.db.connection as conn_mod
+    from bartleby.db.connection import project_db_path
+
+    real_datetime = conn_mod.datetime
+    monkeypatch.setattr(conn_mod, "datetime", _BoomDatetime)
+    with pytest.raises(RuntimeError, match="simulated mid-create failure"):
+        init_db("retry_proj")
+    assert not project_db_path("retry_proj").exists()
+
+    # The retried create now succeeds and yields a usable DB. Restore only the
+    # patched datetime — never monkeypatch.undo(), which would also tear down
+    # the autouse BARTLEBY_HOME sandbox and let init_db hit the real home.
+    monkeypatch.setattr(conn_mod, "datetime", real_datetime)
+    init_db("retry_proj")
+    c = open_db("retry_proj")
+    try:
+        assert c.cursor().execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0] == str(SCHEMA_VERSION)
+    finally:
+        c.close()
+
+
+def test_open_db_missing_meta_table_gives_recreate_guidance():
+    # A DB file with no `meta` table at all (truncated/partial create, or a
+    # foreign SQLite file) must get the friendly "recreate" message, not a raw
+    # "no such table: meta" SQLError.
+    from bartleby.db.connection import project_db_path
+
+    init_db("nometa")
+    c = open_db("nometa")
+    c.cursor().execute("DROP TABLE meta")
+    c.close()
+
+    with pytest.raises(RuntimeError, match="Recreate the project"):
+        open_db("nometa")
+    # And it really was the friendly path, not a leaked apsw error.
+    assert project_db_path("nometa").exists()
 
 
 def test_insert_document_chunks_keeps_fts_and_vec_in_sync(conn):

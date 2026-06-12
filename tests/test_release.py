@@ -1,14 +1,16 @@
 """Tests for the release helper (scripts/release.py) and `bartleby --version`.
 
 The release script lives under scripts/ (not an installed package), so it's
-loaded by path. Only the pure functions — version arithmetic, schema parsing,
-the drift guard, and notes assembly — are exercised here; the git/gh side
-effects are left to manual use.
+loaded by path. The pure functions — version arithmetic, schema parsing, the
+drift guard, and notes assembly — are exercised here, plus the recovery path for
+a `gh` publish that fails after the tag is already pushed (subprocess/git/gh
+calls are mocked; nothing is tagged, pushed, or released for real).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -181,6 +183,91 @@ def test_notes_baseline_when_no_commits():
         [], schema_from=None, schema_to=None,
     )
     assert "Baseline release" in notes
+
+
+# --- gh publish recovery ---------------------------------------------------
+
+def test_gh_recovery_message_writes_notes_and_returns_command(tmp_path, monkeypatch):
+    # Redirect the scratch root so the test never touches the real repo tree.
+    monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+    msg = release.gh_recovery_message("v0.9.7", "## Changes\n- A thing\n")
+
+    notes_file = tmp_path / ".claude" / "scratch" / "release-notes-v0.9.7.md"
+    assert notes_file.read_text() == "## Changes\n- A thing\n"
+    # The message hands back the exact resume command and points at the file.
+    assert f"gh release create v0.9.7 --title v0.9.7 --notes-file {notes_file}" in msg
+    assert "do NOT re-run this script" in msg
+    assert str(notes_file) in msg
+
+
+def test_main_publish_failure_is_recoverable_and_nonzero(tmp_path, monkeypatch, capsys):
+    # Mock every git/gh side effect: the run reaches the publish step without
+    # tagging, pushing, or releasing for real, and `gh release create` fails.
+    monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(release, "last_release_tag", lambda: "v0.9.6")
+    monkeypatch.setattr(release, "schema_source_at", lambda ref: _schema_source(9))
+    monkeypatch.setattr(release, "commits_since", lambda ref: ["Fix a thing"])
+    monkeypatch.setattr(release, "working_tree_dirty", lambda: False)
+    monkeypatch.setattr(release, "current_branch", lambda: "main")
+
+    git_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(release, "_git", lambda *a: git_calls.append(a) or "")
+
+    # schema_version is read from REPO_ROOT/SCHEMA_PATH — stage a schema 9 file.
+    schema_file = tmp_path / release.SCHEMA_PATH
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(_schema_source(9))
+
+    def fake_run(cmd, *args, **kwargs):
+        # Only the gh publish goes through subprocess.run in the push path.
+        assert cmd[:3] == ["gh", "release", "create"]
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+
+    rc = release.main(["--push"])
+
+    assert rc == 1  # non-zero exit on the failed publish
+    # The tag was pushed before gh ran (the failure window the recovery covers).
+    assert ("tag", "-a", "v0.9.7", "-m", "Release v0.9.7") in git_calls
+    assert ("push", "origin", "v0.9.7") in git_calls
+
+    err = capsys.readouterr().err
+    notes_file = tmp_path / ".claude" / "scratch" / "release-notes-v0.9.7.md"
+    assert "gh release create v0.9.7" in err
+    assert "--notes-file" in err
+    assert notes_file.exists()
+
+
+def test_main_publish_recoverable_when_gh_not_installed(tmp_path, monkeypatch, capsys):
+    # A missing `gh` binary is the most likely first-time failure: subprocess.run
+    # raises FileNotFoundError, not CalledProcessError. It hits the same
+    # tag-pushed-but-no-Release window, so it must be just as recoverable — not a
+    # traceback that loses the notes.
+    monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(release, "last_release_tag", lambda: "v0.9.6")
+    monkeypatch.setattr(release, "schema_source_at", lambda ref: _schema_source(9))
+    monkeypatch.setattr(release, "commits_since", lambda ref: ["Fix a thing"])
+    monkeypatch.setattr(release, "working_tree_dirty", lambda: False)
+    monkeypatch.setattr(release, "current_branch", lambda: "main")
+    monkeypatch.setattr(release, "_git", lambda *a: "")
+
+    schema_file = tmp_path / release.SCHEMA_PATH
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(_schema_source(9))
+
+    def fake_run(cmd, *args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory: 'gh'")
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+
+    rc = release.main(["--push"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    notes_file = tmp_path / ".claude" / "scratch" / "release-notes-v0.9.7.md"
+    assert "gh release create v0.9.7" in err
+    assert notes_file.exists()
 
 
 # --- bartleby --version ----------------------------------------------------
