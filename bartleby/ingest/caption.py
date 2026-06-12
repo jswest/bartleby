@@ -102,13 +102,23 @@ def _caption_all(
             if pi.image_id not in pending:
                 pending[pi.image_id] = pi
                 owner[pi.image_id] = unit
+    # Reveal a tally even on the zero-work paths so the run-of-show header reads
+    # "caption 0/0" (finished) rather than "—" (never ran). start() maps a zero
+    # total to a known, already-complete phase.
     if not pending:
+        if phase is not None:
+            phase.start(0)
         return
     if not vision_enabled:
         console.warn(
             f"Skipping {len(pending)} uncaptioned image(s) — no vision provider "
             f"configured."
         )
+        # No work will run, but the rows exist — reveal the denominator and mark
+        # them resolved-as-skipped so the phase finishes at N/N, not a stuck 0/N.
+        if phase is not None:
+            phase.start(len(pending))
+            phase.advance(len(pending))
         return
 
     if phase is not None:

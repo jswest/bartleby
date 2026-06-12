@@ -18,6 +18,7 @@ from bartleby.ingest import classify
 from bartleby.ingest import caption
 from bartleby.ingest import parse
 from bartleby.ingest import summary
+from bartleby.ingest.progress import ScribeProgress
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.lib.consts import DEFAULT_CAPTION_WORKERS, DEFAULT_SUMMARIZE_WORKERS
@@ -421,6 +422,32 @@ def test_scribe_summarizes_existing_document_on_later_run(
         assert cur.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_scribe_zero_summary_work_reveals_a_zero_total(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#503: a re-run where every document is already summarized has nothing for
+    the summarize pass, so scribe early-returns past _summarize_all — but still
+    calls start(0), so the header reads "summarize 0/0" (finished) not "—"."""
+    starts: list[tuple[str, int]] = []
+    real_start = ScribeProgress._start
+
+    def _spy_start(self, name, total):
+        starts.append((name, total))
+        return real_start(self, name, total)
+
+    monkeypatch.setattr(ScribeProgress, "_start", _spy_start)
+
+    src = _write_txt(tmp_path / "doc.txt", "Hello world summarized.")
+
+    # First run summarizes the doc; second run finds nothing left to summarize.
+    _summary_pipeline(monkeypatch, model="test-model")
+    scribe.main(project="test_proj", files=str(src))
+    starts.clear()
+    scribe.main(project="test_proj", files=str(src))
+
+    assert ("summarize", 0) in starts        # zero-work total revealed, not skipped
 
 
 def test_scribe_ingests_pdf_via_pdfplumber_with_embedded_image(
@@ -1339,6 +1366,43 @@ def test_caption_all_progress_callback_fires_per_image(
 
     assert phase.started == [1]          # total revealed once
     assert phase.advances == 1           # advanced once for the one image
+
+
+def test_caption_all_zero_work_reveals_a_zero_total(
+    isolated_project, tmp_path, mock_embed
+):
+    """#503: an all-text unit has no images, so the caption pass early-returns —
+    but still calls start(0), so the run-of-show header reads "caption 0/0"
+    (finished) rather than "—" (never ran)."""
+    from bartleby.commands import scribe as scribe_module
+    from bartleby.db.connection import open_db
+
+    src = _write_txt(tmp_path / "doc.txt", "Plain text, no images to caption.")
+
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    conn = open_db("test_proj")
+    try:
+        writer = scribe_module.Writer(conn)
+        parsed = parsers._parse_document(
+            src, ".txt", _parse_config(archive_root, vision_enabled=True),
+            file_hash="h", file_name="doc.txt",
+        )
+        document_id = writer.persist_parse(parsed)
+
+        phase = _StubPhase()
+        caption._caption_all(
+            writer,
+            [parse.DocUnit(document_id, "doc.txt", "h")],
+            vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_enabled=True, caption_workers=1, timings=False,
+            phase=phase,
+        )
+    finally:
+        conn.close()
+
+    assert phase.started == [0]          # zero-work total revealed
+    assert phase.advances == 0           # nothing to caption
 
 
 def test_caption_all_lane_callback_reports_owning_document(
