@@ -235,7 +235,7 @@ def import_project(name: str, from_url: str, *, client=None,
         raise ImportRefused(
             f"Project '{name}' already exists; importing would overwrite it and "
             f"drop its local findings (a published artifact cannot restore them). "
-            f"Pass --force to overwrite, or import under a different name."
+            f"Pass --yes to overwrite, or import under a different name."
         )
 
     # Download + verify in scratch first, so a refused import touches nothing.

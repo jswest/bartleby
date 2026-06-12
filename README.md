@@ -337,7 +337,7 @@ bartleby project create <name>    # Create and activate a new project
 bartleby project list             # List all projects
 bartleby project use <name>       # Switch active project
 bartleby project info [name]      # Show project details
-bartleby project delete <name>    # Delete a project and all its data (-y to skip prompt)
+bartleby project delete <name>    # Delete a project and all its data (--yes to skip prompt)
 bartleby project upgrade <name>   # Apply additive schema upgrades to an existing DB
 ```
 

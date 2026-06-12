@@ -16,7 +16,7 @@ split to stderr, and emits an aggregate as one JSON object to stdout.
 
 ```sh
 # Fresh project — ingest dedups, so a re-run on a used project times nothing.
-bartleby project delete bench -y && bartleby project create bench
+bartleby project delete bench --yes && bartleby project create bench
 bartleby scribe --project bench --files <sample> --timings > bench.json
 ```
 

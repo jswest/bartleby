@@ -230,3 +230,74 @@ def test_wsjpt_api_key_help_names_gemini():
 def test_non_wsjpt_api_key_help_names_provider_var():
     assert "ANTHROPIC_API_KEY" in config_cmd._api_key_help("anthropic")
     assert "OPENAI_API_KEY" in config_cmd._api_key_help("openai")
+
+
+# ---- project import overwrite: prompt unless --yes, like project delete (#528) -
+
+
+def _stub_import(monkeypatch):
+    """Replace the S3-touching import_project with a recorder.
+
+    Returns the call log; each entry is the ``force`` value the handler passed.
+    The handler imports ``import_project`` at call time from
+    ``bartleby.share.import_``, so patching it there is enough.
+    """
+    calls: list[bool] = []
+
+    def fake(name, from_url, *, client=None, without_tags=False, force=False):
+        calls.append(force)
+        return {"project": name, "source": from_url, "file_count": 2,
+                "tags_dropped": without_tags}
+
+    monkeypatch.setattr("bartleby.share.import_.import_project", fake)
+    return calls
+
+
+def _arm_confirm(monkeypatch, answer):
+    """Stub the interactive confirm; return the list of prompts it received."""
+    asked: list[str] = []
+
+    def fake_ask(prompt, *a, **k):
+        asked.append(prompt)
+        return answer
+
+    monkeypatch.setattr(project_cmd.Confirm, "ask", staticmethod(fake_ask))
+    return asked
+
+
+def _do_import(name, yes):
+    project_cmd.import_(name=name, from_url="s3://bucket/corpora/pub",
+                        without_tags=False, yes=yes)
+
+
+def test_import_yes_overwrites_existing_without_prompt(project, monkeypatch):
+    calls = _stub_import(monkeypatch)
+    asked = _arm_confirm(monkeypatch, True)  # would say yes, but must not be asked
+    _do_import("alpha", yes=True)  # "alpha" exists (project fixture)
+    assert asked == []  # --yes skips the prompt entirely
+    assert calls == [True]  # ...and overwrites
+
+
+def test_import_existing_prompts_and_overwrites_on_confirm(project, monkeypatch):
+    calls = _stub_import(monkeypatch)
+    asked = _arm_confirm(monkeypatch, True)
+    _do_import("alpha", yes=False)
+    assert len(asked) == 1  # the same-name overwrite is confirmed
+    assert calls == [True]
+
+
+def test_import_existing_cancels_on_decline(project, monkeypatch):
+    calls = _stub_import(monkeypatch)
+    asked = _arm_confirm(monkeypatch, False)
+    _do_import("alpha", yes=False)
+    assert len(asked) == 1
+    assert calls == []  # declined -> import_project never runs
+
+
+def test_import_fresh_name_needs_no_prompt(monkeypatch):
+    # No project created: a non-colliding name imports straight through.
+    calls = _stub_import(monkeypatch)
+    asked = _arm_confirm(monkeypatch, True)
+    _do_import("brandnew", yes=False)
+    assert asked == []  # nothing to overwrite -> no confirm
+    assert calls == [False]
