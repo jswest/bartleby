@@ -63,7 +63,7 @@ end — grading against a goal it sharpened *with you*, never one it invented.
 **Models are suggested, not pinned.** Pick the best currently-available model for
 each role's *job* — a strong reasoning model for the director/critic grading
 roles, a strong coding model for the stage-manager/players. As of this writing
-**Fable 5** is strongest for the judgment roles and **Opus** for the coding roles,
+**Opus** is a strong choice for both the judgment and coding roles,
 but do not hard-code a model id as a contract: when a better model ships, prefer
 it. Players are dispatched as subagents (below), so pass their model through the
 Agent tool's `model` parameter; pass any other role's model through its own
