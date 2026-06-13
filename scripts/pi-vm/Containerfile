@@ -36,6 +36,7 @@ RUN BARTLEBY_REF="$(git ls-remote --tags --refs https://github.com/jswest/bartle
 
 # Install the Bartleby skill where Pi discovers skills.
 RUN bartleby ready --dest /root/.pi/agent/skills --force
+RUN HF_HUB_OFFLINE=0 bartleby embed "warmup" >/dev/null
 
 # Bake decant's distill model into the image (pure build = reproducible/offline).
 ARG DECANT_MODEL=gemma4:e2b
