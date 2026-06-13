@@ -519,6 +519,10 @@ No prompts, source text, or research notes leave the machine.
 
 If you can't fit either tier, the middle path is **local ingest + cloud research**: keep `provider: ollama` for the deterministic ingest pipeline, but point Goose or Pi (or Claude Code) at a frontier API for the agent layer. Source documents still never leave the machine; only the agent's queries do.
 
+### Sandboxing Pi in an isolated VM
+
+Pi is a minimal harness with an unsandboxed `bash` tool — handing a local model a shell on your machine. To keep that off your Mac, [`docs/pi-vm-runbook.md`](docs/pi-vm-runbook.md) walks through running Pi (plus `decant` for web fetches) inside an isolated Apple `container` VM that mounts only your corpus: the big agent model stays on the host GPU, `decant`'s small distill model runs CPU-only inside the box, and helper scripts live in [`scripts/pi-vm/`](scripts/pi-vm/).
+
 ### Model downloads and offline mode
 
 Bartleby pulls a few models from the Hugging Face Hub on demand: the embedding model (always), and — when you ingest with the Docling converter — Docling's layout and table models (the first time a conversion needs them). They cache under `~/.cache/huggingface/hub` and download once.

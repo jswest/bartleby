@@ -1,0 +1,49 @@
+# Pure-build research VM: Pi + Bartleby + decant + a VM-local Ollama (CPU) for
+# decant's distill model. The big agent model runs on the HOST GPU; see
+# docs/pi-vm-runbook.md. The build context is assembled by build.sh, which
+# stages the Bartleby and decant source trees next to this file.
+FROM debian:trixie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git iproute2 tesseract-ocr \
+      python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv (Python tooling) — installs to /root/.local/bin
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Ollama (Linux). CPU-only inside the VM — used solely for decant's small model.
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Pi coding agent. NOTE: confirm `pi` lands on PATH; see runbook shakeout notes.
+# (Alternative: npm install -g --ignore-scripts @earendil-works/pi-coding-agent)
+RUN curl -fsSL https://pi.dev/install.sh | sh
+
+# --- Bartleby + decant from staged local source (pure build) ---
+COPY bartleby/ /opt/bartleby/
+COPY decant/   /opt/decant/
+RUN uv tool install /opt/bartleby \
+    && uv tool install /opt/decant
+
+# Install the Bartleby skill where Pi discovers skills.
+RUN bartleby ready --dest /root/.pi/agent/skills --force
+
+# Bake decant's distill model into the image (pure build = reproducible/offline).
+ARG DECANT_MODEL=gemma4:e2b
+RUN ollama serve >/tmp/ollama-build.log 2>&1 & \
+    until ollama list >/dev/null 2>&1; do sleep 0.5; done; \
+    ollama pull "${DECANT_MODEL}"
+
+# Config templates + entrypoint.
+COPY pi-vm/models.json        /opt/pi-vm/models.json
+COPY pi-vm/decant-config.yaml /opt/pi-vm/decant-config.yaml
+COPY pi-vm/entrypoint.sh      /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Bartleby's corpus root inside the VM (mounted by run.sh).
+ENV BARTLEBY_HOME=/corpus
+WORKDIR /corpus
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
