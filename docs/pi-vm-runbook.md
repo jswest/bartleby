@@ -219,11 +219,12 @@ pi --help            # confirm `pi` is on PATH; see shakeout note if not
 
 ## Shakeout notes (things to confirm on first run)
 
-- **`pi` on `PATH`.** The curl installer (`https://pi.dev/install.sh`) may drop
-  the binary somewhere not on the default `PATH`. If `pi` isn't found, either
-  symlink it into `/usr/local/bin` in the `Containerfile` or switch to the npm
-  install (`npm install -g --ignore-scripts @earendil-works/pi-coding-agent`,
-  which needs Node in the image).
+- **`pi` on `PATH`.** The image installs Pi via npm
+  (`npm install -g --ignore-scripts @earendil-works/pi-coding-agent`) on a
+  `node:22` base — the `pi.dev/install.sh` script needs a TTY and won't run in a
+  non-interactive build. The global npm install puts `pi` in `/usr/local/bin`
+  (on `PATH`). If `pi` isn't found at runtime, confirm the global npm bin dir is
+  on `PATH` (`npm root -g` / `npm bin -g`).
 - **In-build model pull.** The `Containerfile` runs `ollama serve` in the
   background during build to `ollama pull gemma4:e2b`. If that's flaky, move the
   pull to `entrypoint.sh` (first-run) backed by a persistent volume — at the
