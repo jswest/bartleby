@@ -259,8 +259,9 @@ def work(*, conn, args, session_id) -> dict:
         f"{' AND' if w else ' WHERE'} document_id IN "
         f"(SELECT parent_document_id FROM documents "
         f"WHERE parent_document_id IS NOT NULL) "
-        f"AND document_id NOT IN (SELECT document_id FROM summaries)",
-        wp,
+        f"AND document_id NOT IN "
+        f"(SELECT document_id FROM summaries WHERE model != ?)",
+        [*wp, BACKFILL_MODEL],
     ).fetchone()[0]
 
     w, wp = doc_where("d.document_id")

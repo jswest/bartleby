@@ -188,8 +188,11 @@ def work(*, conn, args, session_id) -> dict:
 
     match_rate = matched / population if population else 0.0
 
+    # Only suggest a backfill command for a filename probe: `backfill-dates`
+    # matches file_name/file_path, never body text, so a body probe that clears
+    # the bar must not hand the human a `--from-filename` line that dates nothing.
     suggested_command = None
-    if match_rate >= MATCH_THRESHOLD:
+    if match_rate >= MATCH_THRESHOLD and args.field == "filename":
         project = args.project or get_active_project()
         suggested_command = (
             f"bartleby scribe backfill-dates {project} "

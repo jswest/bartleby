@@ -205,3 +205,19 @@ def test_read_document_exposes_authored_date_for_real_summary(dated_corpus, caps
     out = json.loads(capsys.readouterr().out)
     assert out["summary"] == "real summary text"
     assert out["document"]["authored_date"] == "2021-03-15"
+
+
+def test_backfill_does_not_reclassify_container_as_unsummarized(dated_corpus, capsys):
+    # A backfill stub on a #254 *container* must not shift it into the
+    # unsummarized tally: the container still owes no real summary, so the
+    # container exclusion keys off the same `model != 'backfill'` sentinel as
+    # summary_coverage. (Regression: a bare `NOT IN (summaries)` saw the stub and
+    # *deflated* coverage — the opposite of the honest-stub goal.)
+    def _unsummarized():
+        capsys.readouterr()
+        describe_corpus.main(["--project", dated_corpus["project"]])
+        return json.loads(capsys.readouterr().out)["summary_coverage"]["unsummarized"]
+
+    before = _unsummarized()
+    backfill.main(project=dated_corpus["project"], from_filename=ISO_RE)
+    assert _unsummarized() == before

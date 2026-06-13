@@ -184,3 +184,20 @@ def test_probe_writes_nothing(dated_corpus, capsys):
     capsys.readouterr()
     after = _snapshot_db(dated_corpus["project"])
     assert before == after
+
+
+def test_body_field_never_suggests_command_even_at_full_match(dated_corpus, capsys):
+    # `backfill-dates` matches file_name/file_path, never body text — so a body
+    # probe that clears the threshold must NOT hand the human a `--from-filename`
+    # command that would date ~nothing. Scope to dated prefixes so body match is
+    # high, then assert no command despite clearing the bar.
+    patterns = ["A001%", "B002%", "C003%", "E005%", "F006%"]
+    argv = ["--project", dated_corpus["project"], "--regex", _DATE_RE,
+            "--field", "body"]
+    for p in patterns:
+        argv += ["--file-like", p]
+    _run(argv)
+    out = _out(capsys)
+    assert out["field"] == "body"
+    assert out["match_rate"] >= MATCH_THRESHOLD
+    assert out["suggested_command"] is None
