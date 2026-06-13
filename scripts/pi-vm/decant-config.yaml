@@ -1,0 +1,14 @@
+# decant config rendered into ~/.decant/config.yaml by entrypoint.sh.
+# Points at the VM-LOCAL Ollama (CPU) so raw web content never leaves the box.
+contact_email: bartleby-pi-vm@localhost
+ollama:
+  host: http://127.0.0.1:11434
+  model: gemma4:e2b
+  request_timeout_s: 300
+cache:
+  ttl_hours: 24
+fetch:
+  request_timeout_s: 60
+search:
+  # Rendered from $BRAVE_SEARCH_API_KEY at container start; `null` = no web search.
+  brave_api_key: __BRAVE_KEY__

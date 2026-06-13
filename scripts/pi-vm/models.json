@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "ollama-agent": {
+      "baseUrl": "__HOST_OLLAMA__",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": { "supportsDeveloperRole": false },
+      "models": [
+        { "id": "qwen3.6:35b" }
+      ]
+    }
+  }
+}
