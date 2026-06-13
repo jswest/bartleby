@@ -22,7 +22,7 @@ BRAVE_SEARCH_API_KEY=brv-... ./run.sh              # mount ~/.bartleby, launch P
 | File | Side | Role |
 | --- | --- | --- |
 | `host-agent-ollama.sh` | host | Dedicated agent Ollama on `:11435` (GPU), separate from your daily `:11434` |
-| `build.sh` | host | Stage Bartleby + decant source, build `bartleby-pi:latest` |
+| `build.sh` | host | Build `bartleby-pi:latest` (pulls Bartleby release + decant main from GitHub) |
 | `Containerfile` | — | The research-VM image (Pi + Bartleby + decant + VM-local Ollama) |
 | `run.sh` | host | Run the VM, mount the corpus read-write |
 | `entrypoint.sh` | VM | Start local Ollama, render configs, launch Pi |

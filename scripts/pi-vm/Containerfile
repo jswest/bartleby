@@ -1,7 +1,7 @@
 # Pure-build research VM: Pi + Bartleby + decant + a VM-local Ollama (CPU) for
 # decant's distill model. The big agent model runs on the HOST GPU; see
-# docs/pi-vm-runbook.md. The build context is assembled by build.sh, which
-# stages the Bartleby and decant source trees next to this file.
+# docs/pi-vm-runbook.md. Bartleby and decant are pulled from GitHub (not local
+# source), so the build context is just this directory (scripts/pi-vm/).
 # Node base: guarantees Node >=22.19 + npm for the Pi install, and is still
 # Debian/apt underneath so the rest of this file is unchanged.
 FROM node:22-bookworm-slim
@@ -24,11 +24,15 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # at /usr/local/bin. --ignore-scripts is what Pi's own docs recommend.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
-# --- Bartleby + decant from staged local source (pure build) ---
-COPY bartleby/ /opt/bartleby/
-COPY decant/   /opt/decant/
-RUN uv tool install /opt/bartleby \
-    && uv tool install /opt/decant
+# --- Bartleby (latest release tag) + decant (main), pulled from GitHub ---
+# Both repos are public over HTTPS, so no auth in the build. Ingestion runs on
+# the HOST, so the VM needs no [docling]/[sec2md] extras — the agent only
+# searches/reads/cites an already-ingested corpus.
+RUN BARTLEBY_REF="$(git ls-remote --tags --refs https://github.com/jswest/bartleby.git 'v*' \
+                    | awk -F/ '{print $NF}' | sort -V | tail -1)" \
+    && echo "Installing bartleby ${BARTLEBY_REF}, decant@main" \
+    && uv tool install "git+https://github.com/jswest/bartleby.git@${BARTLEBY_REF}" \
+    && uv tool install "git+https://github.com/jswest/decant.git@main"
 
 # Install the Bartleby skill where Pi discovers skills.
 RUN bartleby ready --dest /root/.pi/agent/skills --force
@@ -39,10 +43,10 @@ RUN ollama serve >/tmp/ollama-build.log 2>&1 & \
     until ollama list >/dev/null 2>&1; do sleep 0.5; done; \
     ollama pull "${DECANT_MODEL}"
 
-# Config templates + entrypoint.
-COPY pi-vm/models.json        /opt/pi-vm/models.json
-COPY pi-vm/decant-config.yaml /opt/pi-vm/decant-config.yaml
-COPY pi-vm/entrypoint.sh      /usr/local/bin/entrypoint.sh
+# Config templates + entrypoint (build context is scripts/pi-vm/ itself).
+COPY models.json        /opt/pi-vm/models.json
+COPY decant-config.yaml /opt/pi-vm/decant-config.yaml
+COPY entrypoint.sh      /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Bartleby's corpus root inside the VM (mounted by run.sh).
