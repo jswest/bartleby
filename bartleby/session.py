@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
@@ -99,15 +100,27 @@ def read_active_session_id(project_name: str) -> int | None:
 def write_active_session_id(project_name: str, session_id: int) -> None:
     f = _active_session_file(project_name)
     f.parent.mkdir(parents=True, exist_ok=True)
-    # Write to a sibling temp file, then atomically rename over the pointer.
-    # A concurrent reader (read_active_session_id) either sees the old id or
-    # the new one in full — never a half-written line. os.replace is atomic
-    # on the same filesystem; the temp file sits beside the target to stay
-    # there. A leftover .tmp from a crash mid-write is harmless: the rename is
-    # the only step that publishes the value.
-    tmp = f.with_name(f.name + ".tmp")
-    tmp.write_text(str(session_id), encoding="utf-8")
-    os.replace(tmp, f)
+    # Write to a *unique* sibling temp file, then atomically rename over the
+    # pointer. A concurrent reader (read_active_session_id) either sees the old
+    # id or the new one in full — never a half-written line. os.replace is atomic
+    # on the same filesystem; the temp sits beside the target to stay there.
+    #
+    # The temp name must be unique per writer: a shared ".active_session.tmp" let
+    # two concurrent writers clobber one temp and race on the rename — the second
+    # os.replace then raised FileNotFoundError because the first already renamed
+    # it away. Last writer wins, which is fine (all ids are valid). Clean up our
+    # own temp on failure so a crash doesn't leave it behind.
+    fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=f.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(str(session_id))
+        os.replace(tmp, f)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def clear_active_session(project_name: str) -> None:
