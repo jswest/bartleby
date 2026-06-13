@@ -38,6 +38,45 @@ def normalize_authored_date(raw: str | None) -> str | None:
     return raw
 
 
+class FilenameDateError(ValueError):
+    """A `--from-filename` regex that can't extract dates (no `date` group / bad
+    pattern). A *usage* error — distinct from a per-document non-match, which is
+    just a count. Raised once, up front, before any document is examined."""
+
+
+def compile_filename_date_regex(pattern: str) -> "re.Pattern[str]":
+    """Compile a `--from-filename` regex, requiring a named ``date`` group.
+
+    Colocated with :func:`normalize_authored_date` so a later metadata sub-issue
+    (#48 seeds) can reuse this named-capture mechanism for non-date facets.
+    Raises :class:`FilenameDateError` on a malformed pattern or a pattern with no
+    ``date`` group — both are operator mistakes worth refusing before a 174k-doc
+    scan rather than silently matching nothing.
+    """
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        raise FilenameDateError(f"Invalid regex {pattern!r}: {e}") from e
+    if "date" not in compiled.groupindex:
+        raise FilenameDateError(
+            f"Regex {pattern!r} has no named group 'date'; "
+            r"use e.g. '(?P<date>\d{4}-\d{2}-\d{2})'."
+        )
+    return compiled
+
+
+def extract_filename_date(compiled: "re.Pattern[str]", name: str) -> str | None:
+    """Return the raw substring captured by the ``date`` group, or None if the
+    regex doesn't match ``name``. The raw value is *not* normalized here — the
+    caller runs it through :func:`normalize_authored_date` so a match that
+    captures a non-date is counted as invalid, never silently stored as NULL.
+    """
+    m = compiled.search(name)
+    if m is None:
+        return None
+    return m.group("date")
+
+
 @dataclass
 class SummaryResult:
     title: str

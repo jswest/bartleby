@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 
+from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_date_filter_args, add_file_like_arg, add_returning_arg, comma_int_list,
@@ -206,9 +207,15 @@ def work(*, conn, args, session_id) -> dict:
 
     rows = cur.execute(
         "SELECT d.document_id, d.file_name, d.page_count, d.token_count, d.created_at, "
-        "       s.title AS summary_title, s.description AS summary_description, "
+        # A backfill stub (#536) carries a date but no real summary: its title/
+        # description are empty and has_summary must read false. Suppress its
+        # title/description to NULL here so coverage and the listed fields stay
+        # honest; authored_date still rides along from the same row. The three
+        # '?' bind BACKFILL_MODEL (leading, before any WHERE params).
+        "       (CASE WHEN s.model = ? THEN NULL ELSE s.title END) AS summary_title, "
+        "       (CASE WHEN s.model = ? THEN NULL ELSE s.description END) AS summary_description, "
         "       s.authored_date AS summary_authored_date, "
-        "       (s.summary_id IS NOT NULL) AS has_summary, "
+        "       (s.summary_id IS NOT NULL AND s.model != ?) AS has_summary, "
         "       COALESCE(cc.n, 0) AS chunk_count, "
         "       COALESCE(ic.n, 0) AS image_count "
         "FROM documents d "
@@ -221,7 +228,8 @@ def work(*, conn, args, session_id) -> dict:
         "  ON ic.document_id = d.document_id "
         f"{where_clause}"
         f"ORDER BY {_ORDER_BY[args.sort]} LIMIT ? OFFSET ?",
-        [*where_params, args.limit, args.offset],
+        [BACKFILL_MODEL, BACKFILL_MODEL, BACKFILL_MODEL,
+         *where_params, args.limit, args.offset],
     )
 
     documents = []
