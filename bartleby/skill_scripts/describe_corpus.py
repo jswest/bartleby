@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import math
 
+from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_date_filter_args, comma_int_list, positive_int,
@@ -234,9 +235,14 @@ def work(*, conn, args, session_id) -> dict:
             )
         ]
 
+    # summary_coverage counts *real* summaries only: a backfill stub (#536)
+    # carries a date but empty title/description/text, so it must not inflate
+    # coverage. (date_coverage above intentionally counts it — its date is real.)
     w, wp = doc_where("document_id")
     summarized = cur.execute(
-        f"SELECT COUNT(*) FROM summaries{w}", wp
+        f"SELECT COUNT(*) FROM summaries{w}"
+        f"{' AND' if w else ' WHERE'} model != ?",
+        [*wp, BACKFILL_MODEL],
     ).fetchone()[0]
 
     # Anchor-split containers (#254) own zero chunks and so owe no summary — they
@@ -253,8 +259,9 @@ def work(*, conn, args, session_id) -> dict:
         f"{' AND' if w else ' WHERE'} document_id IN "
         f"(SELECT parent_document_id FROM documents "
         f"WHERE parent_document_id IS NOT NULL) "
-        f"AND document_id NOT IN (SELECT document_id FROM summaries)",
-        wp,
+        f"AND document_id NOT IN "
+        f"(SELECT document_id FROM summaries WHERE model != ?)",
+        [*wp, BACKFILL_MODEL],
     ).fetchone()[0]
 
     w, wp = doc_where("d.document_id")

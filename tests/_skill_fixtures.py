@@ -194,6 +194,87 @@ def seeded_project(project_env):
     }
 
 
+@pytest.fixture
+def dated_corpus(project_env):
+    """A corpus whose filenames encode dates, for `scribe backfill-dates` (#536).
+
+    Wave-1 shared fixture: later authored-date sub-issues reuse it. Every
+    document's `file_name` is `<key>__YYYY-MM-DD__slug.md` so a single named-
+    capture regex (`(?P<date>\\d{4}-\\d{2}-\\d{2})`) matches all of them. The
+    documents exercise every backfill branch:
+
+    - ``summary_doc``   — has a *real* summary (model='test') with a NULL date;
+                          backfill should UPDATE the date on it.
+    - ``stub_doc``      — has NO summary row; backfill should INSERT a stub.
+    - ``dated_doc``     — has a real summary that ALREADY carries a date; backfill
+                          leaves it (idempotent) unless --overwrite.
+    - ``nomatch_doc``   — `file_name` has no date; backfill should not touch it.
+    - ``bad_date_doc``  — `file_name` matches the regex but the captured value is
+                          an impossible calendar date (2024-13-40); counted as
+                          invalid, never written.
+    - ``parent_doc`` / ``section_doc`` — a #254 anchor-split pair sharing one
+                          `file_name`; both should get the parent's date (the
+                          section via a stub).
+
+    Returns the project name and every document id under those keys.
+    """
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+
+        def _doc(file_hash, file_name, *, parent=None):
+            cur.execute(
+                "INSERT INTO documents "
+                "(file_hash, file_name, file_path, page_count, token_count, "
+                " parent_document_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (file_hash, file_name, f"/corpus/{file_name}", 1, 100, parent),
+            )
+            doc_id = conn.last_insert_rowid()
+            insert_document_chunks(conn, doc_id, [
+                ChunkInput(text=f"body of {file_name}", embedding=_emb(),
+                           chunk_index=0),
+            ])
+            return doc_id
+
+        def _summary(doc_id, *, authored_date, model="test"):
+            cur.execute(
+                "INSERT INTO summaries "
+                "(document_id, title, description, text, model, authored_date) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (doc_id, "T", "D", "real summary text", model, authored_date),
+            )
+            return conn.last_insert_rowid()
+
+        summary_doc = _doc("d1", "A001__2021-03-15__alpha.md")
+        _summary(summary_doc, authored_date=None)
+
+        stub_doc = _doc("d2", "B002__2022-07-04__beta.md")
+
+        dated_doc = _doc("d3", "C003__2023-01-09__gamma.md")
+        _summary(dated_doc, authored_date="2099-12-31")
+
+        nomatch_doc = _doc("d4", "D004__no-date-here__delta.md")
+
+        bad_date_doc = _doc("d5", "E005__2024-13-40__epsilon.md")
+
+        # #254 anchor-split pair: a section row shares the parent's file_name.
+        parent_doc = _doc("d6", "F006__2020-05-20__zeta.md")
+        section_doc = _doc("d6-sec", "F006__2020-05-20__zeta.md", parent=parent_doc)
+    finally:
+        conn.close()
+
+    return {
+        "project": project_env,
+        "summary_doc": summary_doc,
+        "stub_doc": stub_doc,
+        "dated_doc": dated_doc,
+        "nomatch_doc": nomatch_doc,
+        "bad_date_doc": bad_date_doc,
+        "parent_doc": parent_doc,
+        "section_doc": section_doc,
+    }
+
+
 def seed_image(conn, document_id: int, *, file_hash: str, file_path: str,
                description: str = "A test image scene.",
                ocr_text: str = "WELCOME",

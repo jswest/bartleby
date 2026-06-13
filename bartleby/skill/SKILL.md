@@ -36,6 +36,7 @@ bartleby skill read_chunks --around-chunk 1629 --window 5           # the target
 bartleby skill read_document --document 4 --summary
 bartleby skill save_finding --title "..." --description "..." --body-file ~/.bartleby/tmp/finding.md
 bartleby skill save_date --document 12 --date 2024-03-08              # backfill a date you read in the document
+bartleby skill probe_dates --regex '(?P<date>\d{4}-\d{2}-\d{2})'     # read-only: would this regex date the corpus? (verify before prompting a human)
 bartleby skill add_tag --name ch --description "Central Hudson rate-case filings"
 bartleby skill assign_tag --documents 9,12,30 --tag bad_ocr        # manual (no-LLM) batch assignment
 ```
@@ -101,6 +102,16 @@ Each result carries three signals you can use to triage:
 - `score` — the raw RRF score. These are tiny by design (around `0.015–0.033`) and only comparable within a single query's results, not across queries. Prefer `rank` and `normalized_score`.
 
 Every `search` hit and every `scan` match also carries `authored_date` — the originating document's summarizer-inferred date, or `null` when the document is undated (or, for findings, has no document). It rides along in **all** modes, including `--brief`, so you can triage or order matches by time without a second lookup. Don't parse dates out of filenames; read this field. (It's the same value `list_documents` reports and `--authored-after`/`--authored-before` filter on.)
+
+### Undated corpus, temporal task: verify before you prompt
+
+When your task needs dates (filtering, ordering, "what happened before X") and `describe_corpus` shows a high `undated_document_count`, the dates may still be recoverable from the filenames in bulk — but **don't prompt the human blindly**. Verify a candidate regex first with `probe_dates` (read-only — it writes nothing):
+
+1. Look at a few `file_name`s (via `list_documents`) and draft a regex with a named `date` group, e.g. `(?P<date>\d{4}-\d{2}-\d{2})`.
+2. Run `bartleby skill probe_dates --regex '<regex>'` and read `match_rate`, `normalized_ok`, `normalized_invalid`, `examples`, and `unmatched_examples`. Iterate on the regex against the `unmatched_examples` until the rate is high (or you conclude no regex fits).
+3. **Only prompt the human when the probe returns a `suggested_command`** (it does so only on a high `match_rate`). Hand them that exact line — it is `bartleby scribe backfill-dates … --from-filename '<regex>'`.
+4. **You cannot run the backfill yourself.** `bartleby scribe backfill-dates` is a human-run admin command — it is *not* a skill script and not on your surface. `probe_dates` is the agent-side discovery/validation; the human runs the write.
+5. **If no regex clears the bar** (dates aren't in the filenames in any regexable form, or every candidate matches poorly), say so and proceed *without* temporal filtering rather than send the human on a fix that won't help. A low `match_rate` or matches that land mostly in `normalized_invalid` both mean "not recoverable this way." `save_date` remains the per-document path when you've *read* a date in a specific document's text.
 
 ## Citing chunks correctly
 

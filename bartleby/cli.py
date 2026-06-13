@@ -107,8 +107,36 @@ def main():
         "scribe",
         help="Ingest PDF, HTML, MD, TXT, and image files into a project",
     )
+    # Bare `scribe` ingests; `scribe backfill-dates ...` is a sibling admin op
+    # (#536). The ingest flags stay on the top parser (so `bartleby scribe
+    # --files ...` is unchanged); the subcommand is optional, and `--files` is
+    # validated in dispatch for the bare form rather than via argparse
+    # `required=True` (which would also fire under a subcommand).
+    scribe_sub = scribe_parser.add_subparsers(dest="scribe_command")
+    bfd = scribe_sub.add_parser(
+        "backfill-dates",
+        help="Bulk-set authored_date from a filename regex (human-run admin op)",
+    )
+    bfd.add_argument("project", type=str, nargs="?", default=None)
+    bfd.add_argument(
+        "--from-filename", required=True, dest="from_filename", metavar="REGEX",
+        help=r"Regex with a named group 'date' matched against each file_name, "
+             r"e.g. '(?P<date>\d{4}-\d{2}-\d{2})'.",
+    )
+    bfd.add_argument(
+        "--match-path", action="store_true",
+        help="Match the regex against the full file_path, not just the basename.",
+    )
+    bfd.add_argument(
+        "--overwrite", action="store_true",
+        help="Replace an existing authored_date (default fills only NULLs).",
+    )
+    bfd.add_argument(
+        "--dry-run", action="store_true",
+        help="Report counts + sample matches; write nothing.",
+    )
     scribe_parser.add_argument(
-        "--files", required=True, type=str, nargs="+", metavar="PATH",
+        "--files", type=str, nargs="+", metavar="PATH",
         help="One or more files and/or directories to ingest. Directories are "
              "walked recursively; a file reachable from more than one path is "
              "ingested once.",
@@ -334,10 +362,31 @@ def _ready(args):
 
 
 def _scribe(args):
-    from bartleby.commands.scribe import main as scribe_main
     from bartleby.lib import console
 
+    if getattr(args, "scribe_command", None) == "backfill-dates":
+        from bartleby.commands.backfill import main as backfill_main
+
+        console.splash()
+        try:
+            backfill_main(
+                project=args.project,
+                from_filename=args.from_filename,
+                match_path=args.match_path,
+                overwrite=args.overwrite,
+                dry_run=args.dry_run,
+            )
+        except (ValueError, RuntimeError) as e:
+            console.error(str(e))
+            sys.exit(1)
+        return
+
+    from bartleby.commands.scribe import main as scribe_main
+
     console.splash()
+    if not args.files:
+        console.error("scribe requires --files (or use a subcommand, e.g. backfill-dates).")
+        sys.exit(1)
     # Scribe's expected failure modes — no active project (RuntimeError), an
     # invalid configured converter or a typo'd --only (ValueError), a missing
     # path (FileNotFoundError) — are user errors, not bugs. Surface them as a

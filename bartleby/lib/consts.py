@@ -9,6 +9,15 @@ CHUNK_OVERLAP = 100
 
 EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
 
+# Sentinel `summaries.model` value for date-only stub rows written by
+# `bartleby scribe backfill-dates` (#536). A stub carries a real `authored_date`
+# but empty title/description/text and NO summary chunks — it exists solely to
+# hang a backfilled date off a document the summarizer never ran on. The read
+# side keys off this value so a stub never inflates summary coverage or reads as
+# a real summary (`describe_corpus`, `list_documents.has_summary`,
+# `read_document --summary`).
+BACKFILL_MODEL = "backfill"
+
 # Hugging Face repos Docling lazily fetches for its default PDF/HTML pipeline:
 # the layout model (analysed on every page) and the TableFormer model (pages
 # with tables). Both download on demand, the layout model not until the first
