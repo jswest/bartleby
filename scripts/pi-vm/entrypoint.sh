@@ -22,9 +22,11 @@ if [ -z "${HOST_IP}" ]; then
   HOST_IP="127.0.0.1"
 fi
 
-# 3a. Pi -> host agent Ollama.
+# 3a. Pi -> host agent Ollama (model id overridable via AGENT_MODEL).
+AGENT_MODEL="${AGENT_MODEL:-qwen3.6:35b}"
 mkdir -p /root/.pi/agent
-sed "s|__HOST_OLLAMA__|http://${HOST_IP}:${AGENT_PORT}/v1|g" \
+sed -e "s|__HOST_OLLAMA__|http://${HOST_IP}:${AGENT_PORT}/v1|g" \
+    -e "s|__AGENT_MODEL__|${AGENT_MODEL}|g" \
     /opt/pi-vm/models.json > /root/.pi/agent/models.json
 
 # 3b. decant -> VM-local Ollama. Brave key from env if provided, else null.
@@ -32,7 +34,7 @@ mkdir -p /root/.decant
 sed "s|__BRAVE_KEY__|${BRAVE_SEARCH_API_KEY:-null}|g" \
     /opt/pi-vm/decant-config.yaml > /root/.decant/config.yaml
 
-echo "Pi agent model -> http://${HOST_IP}:${AGENT_PORT}  |  decant -> VM-local Ollama" >&2
+echo "Pi -> ${AGENT_MODEL} @ http://${HOST_IP}:${AGENT_PORT}  |  decant -> VM-local Ollama" >&2
 
 # 4. Hand off.
 if [ "$#" -eq 0 ]; then

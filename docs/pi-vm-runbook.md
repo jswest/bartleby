@@ -91,6 +91,19 @@ The benchmark ranks models on a *summarization* task. Top local finishers:
   `gemma4:e2b` at 4.69/5 and ~585 tok/s is the ideal distill model — and small
   enough to tolerate CPU-only inference in the VM.
 
+**Trying a different agent model.** The agent model is a *runtime* knob — set
+`AGENT_MODEL` on **both** the host serve and the run (no rebuild; it must match a
+model your host Ollama serves):
+
+```bash
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/host-agent-ollama.sh   # host GPU serves it
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/run.sh                 # Pi requests it
+```
+
+Defaults to `qwen3.6:35b` if unset. (decant's distill model is a *build-time*
+knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` — since it's baked
+into the image.)
+
 ## Security posture
 
 What this buys you, and what it doesn't:
@@ -207,6 +220,29 @@ BRAVE_SEARCH_API_KEY=brv-... ./scripts/pi-vm/run.sh
 Inside the VM, Pi sees the Bartleby skill (installed to `~/.pi/agent/skills/`
 at build time) and drives it against `/corpus` exactly as Claude Code would.
 
+A couple of things to expect while running these:
+
+- **Step 0, first run:** `container system start` reports "No default kernel
+  configured" and offers to download the recommended guest Linux kernel (the
+  Kata Containers static kernel) — answer `Y` (one-time; the Linux VM needs a
+  kernel).
+- **Step 1 stays running:** `host-agent-ollama.sh` runs `ollama serve` in the
+  **foreground**, so keep it in its own terminal window for the whole session
+  (`Ctrl-C` stops it). On macOS it also surfaces the Ollama desktop/menu-bar app
+  — that's your *daily-driver* `:11434` instance; leave it running (our agent
+  instance is the separate `:11435` process in the terminal). During a session
+  you'll have both alive — different ports, no conflict, shared model store.
+- **Which project?** Pi acts on Bartleby's active project. Set it on the host
+  first with `bartleby project use <name>` — it's stored in
+  `~/.bartleby/config.yaml`, which is shared into the VM via the `/corpus` mount,
+  so the agent inherits it (or pass `--project <name>` on a skill call to
+  override per-call).
+- **Give the VM real RAM.** Apple `container` defaults a guest to **1 GB**, which
+  is far too small here — embeddings (CPU-only in the guest) plus a multi-GB
+  corpus DB will thrash it until it wedges at 100% CPU and the runtime auto-removes
+  it (`--rm`). `run.sh` sets `-m 8g` by default; raise it for heavy ingest with
+  `VM_MEMORY=16g ./scripts/pi-vm/run.sh`. You have 128 GB — don't starve it.
+
 ## Verifying the wiring
 
 Once you're in the container shell (`./scripts/pi-vm/run.sh bash`):
@@ -243,7 +279,50 @@ pi --help            # confirm `pi` is on PATH; see shakeout note if not
 - **Gateway detection.** If `ip route` inside the VM doesn't yield a
   host-reachable address, set `HOST_OLLAMA_IP` explicitly (see networking note).
 - **`container system start`.** Apple `container` needs its runtime started once
-  per boot before `build`/`run`.
+  per boot before `build`/`run`, and may need a moment to settle — if `build` or
+  `run` errors with `XPC connection error: Connection invalid`, the runtime
+  wasn't up yet; just re-run.
+
+## Viewing findings while the agent runs
+
+If you browse the corpus with `bartleby serve` **on the host** while the VM agent
+is working the same project, expect intermittent `500`s —
+`SqliteError: database disk image is malformed`. Your data is **not** corrupt;
+it's a SQLite WAL limitation. Bartleby opens corpus DBs in **WAL mode**, whose
+write-ahead index lives in a shared-memory sidecar (`bartleby.db-shm`) that is
+only coherent *within one kernel*. With the agent (Linux guest) holding the DB
+read-write over the `/corpus` mount **and** the host `bartleby serve` reading it
+at the same time, two kernels share one WAL DB — which SQLite explicitly does not
+support. The host reader sees the guest's wal-index as garbage and reports
+"malformed." It clears the moment the agent's writes are checkpointed (`-wal`
+back to `0` bytes).
+
+Practical rule: **don't drive the host viewer against a project the VM agent is
+actively writing.** View between runs, or refresh once the agent is idle. (There
+is no clean reader-side fix — `better-sqlite3`, which the web UI uses, doesn't
+support SQLite's `immutable=1` URI escape hatch.)
+
+## Disk & cleanup
+
+The **container** is disposable — `run.sh` uses `--rm`, so `Ctrl-C` removes the
+running VM and no stopped containers pile up. The **image** is the disk cost: it's
+large (~10–15 GB — the baked `gemma4:e2b` plus Node/Ollama/deps) and persists by
+design. Each `build.sh` re-tags `:latest` and **orphans the previous image's
+layers**, which are *not* auto-cleaned, so repeated rebuilds stack up multi-GB
+ghosts.
+
+Reclaim space (verify the verbs with `container --help` — the CLI is young):
+
+```bash
+container images ls                          # what's on disk
+container images delete bartleby-pi:latest   # delete by name — the reliable way
+container ls -a                              # stopped containers (should be none; --rm)
+```
+
+Don't rely on `container image prune` to reclaim the big images — it's
+[known-buggy](https://github.com/apple/container/issues/901) (removes only
+orphaned blobs, not whole images). Simplest habit: `container images delete
+bartleby-pi:latest` before a fresh rebuild.
 
 ## Files
 

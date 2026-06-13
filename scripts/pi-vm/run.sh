@@ -10,7 +10,13 @@
 # Env:
 #   IMAGE               image tag           (default: bartleby-pi:latest)
 #   BARTLEBY_HOME       host corpus root    (default: ~/.bartleby)
+#   VM_MEMORY           guest RAM            (default: 8g). Apple container's 1 GB
+#                       default is too small — the guest thrashes (and can wedge
+#                       at 100% CPU) under embeddings + a large corpus DB. Bump it.
 #   AGENT_OLLAMA_PORT   host agent port     (default: 11435)
+#   AGENT_MODEL         Pi's model id       (default: qwen3.6:35b). Must match a
+#                       model served by the host agent Ollama (host-agent-ollama.sh
+#                       honors the same var).
 #   HOST_OLLAMA_IP      override gateway autodetect (optional)
 #   BRAVE_SEARCH_API_KEY  passed through for `decant search` (optional). If unset,
 #                       falls back to brave_api_key in your host decant config
@@ -26,6 +32,7 @@ set -euo pipefail
 IMAGE="${IMAGE:-bartleby-pi:latest}"
 CORPUS="${BARTLEBY_HOME:-${HOME}/.bartleby}"
 AGENT_PORT="${AGENT_OLLAMA_PORT:-11435}"
+VM_MEMORY="${VM_MEMORY:-8g}"
 
 command -v container >/dev/null || {
   echo "Apple 'container' not found. Install with: brew install container" >&2
@@ -49,8 +56,10 @@ fi
 
 ARGS=(run -it --rm --name bartleby-pi
       -v "${CORPUS}:/corpus"
+      -m "${VM_MEMORY}"
       -e "AGENT_OLLAMA_PORT=${AGENT_PORT}")
 [ -n "${HOST_OLLAMA_IP:-}" ] && ARGS+=(-e "HOST_OLLAMA_IP=${HOST_OLLAMA_IP}")
+[ -n "${AGENT_MODEL:-}" ]    && ARGS+=(-e "AGENT_MODEL=${AGENT_MODEL}")
 [ -n "${BRAVE_KEY}" ]        && ARGS+=(-e "BRAVE_SEARCH_API_KEY=${BRAVE_KEY}")
 
 exec container "${ARGS[@]}" "${IMAGE}" "$@"
