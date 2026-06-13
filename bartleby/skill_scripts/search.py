@@ -14,17 +14,20 @@ semantic (vector) leg, which embeds the chunk text and is unaffected.
 ``--tag <name>`` (repeatable, OR semantics) restricts to chunks whose
 underlying document carries any of the given tags. ``--file-like <pattern>``
 (SQL ``LIKE``, repeatable for OR) restricts to chunks whose document's
-``file_name`` matches a pattern. Both combine naturally with ``--in-documents``
-(intersection: the document must be in every active set) and drop findings the
-same way (findings have no document anchor).
+``file_name`` matches a pattern. ``--authored-after`` / ``--authored-before``
+add inclusive ``YYYY-MM-DD`` date bounds over the document's summarizer-inferred
+``authored_date`` — with ``scan``'s exact semantics: because the date is often
+NULL, a bound excludes undated documents by default (``--include-nulls`` keeps
+them) and ``excluded_null_dated`` reports the count dropped. All of these combine
+naturally with ``--in-documents`` (intersection: the document must be in every
+active set) and drop findings the same way (findings have no document anchor).
 
-Whenever a scope filter (``--in-documents`` / ``--tag`` / ``--file-like``) is
-active the response carries a nested ``filters`` object echoing it — ``{tags,
-in_documents, file_like, authored_after, authored_before, include_nulls,
-excluded_null_dated}`` — the same contract ``scan`` / ``list_documents`` /
-``describe_corpus`` emit (search takes no date bounds, so those keys are
-null/0). It is absent on an unfiltered search; the query terms themselves always
-stay top-level under ``query``.
+Whenever a scope filter (``--in-documents`` / ``--tag`` / ``--file-like`` / a
+date bound) is active the response carries a nested ``filters`` object echoing
+it — ``{tags, in_documents, file_like, authored_after, authored_before,
+include_nulls, excluded_null_dated}`` — the same contract ``scan`` /
+``list_documents`` / ``describe_corpus`` emit. It is absent on an unfiltered
+search; the query terms themselves always stay top-level under ``query``.
 
 Output:
     {
@@ -89,9 +92,9 @@ import subprocess
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_file_like_arg, add_returning_arg, apply_preview, chunk_locations,
-    comma_int_list, memory_enabled, positive_int, project_row, source_names,
-    text_qualified_fts, validate_returning,
+    add_date_filter_args, add_file_like_arg, add_returning_arg, apply_preview,
+    chunk_locations, comma_int_list, memory_enabled, positive_int, project_row,
+    source_names, text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -158,6 +161,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     add_file_like_arg(p)
+    add_date_filter_args(p)
     p.add_argument(
         "--add-context",
         type=_context_value,
@@ -414,6 +418,9 @@ def work(*, conn, args, session_id) -> dict:
     scope = resolve_scope(
         conn, in_documents=args.in_documents, tags=args.tags,
         file_like=args.file_like,
+        authored_after=args.authored_after,
+        authored_before=args.authored_before,
+        include_nulls=args.include_nulls,
     )
     # None = whole corpus, [] = a filter matched nothing, else the resolved slice.
     restrict = scope.document_ids

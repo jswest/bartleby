@@ -11,7 +11,9 @@ from bartleby.skill_scripts import search as search_script
 from bartleby.db.chunks import ChunkInput, insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
-from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
+from tests._skill_fixtures import (  # noqa: F401
+    dated_corpus, project_env, seeded_project,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -886,3 +888,156 @@ def test_search_default_projection_unchanged_without_returning(seeded_project, c
         "page_number", "authored_date", "chunk_index", "section_heading",
         "content_type", "text", "rank", "score", "normalized_score",
     }
+
+
+# ---------- date filters (--authored-after/before/--include-nulls), #537 ----------
+#
+# Reuse the shared `dated_corpus` fixture (#536): seven single-chunk documents
+# whose chunk text is `body of <file_name>`, so the literal token "body" matches
+# every document. Only `dated_doc` carries a date (2099-12-31); the rest are
+# undated (no summary, or a NULL-dated summary). Date bounds are resolved by the
+# same `resolve_scope` helper `scan` uses, so these also pin scan-parity.
+
+
+def _set_summary_date(project, document_id, value):
+    """Stamp authored_date onto a doc's summary, creating one if absent.
+
+    Lets a test add an in-range dated doc without editing the shared fixture's
+    shape (the director's note prefers a per-test row over a fixture change).
+    """
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO summaries (document_id, title, description, text, model, "
+            "authored_date) VALUES (?, '', '', '', 'test', ?) "
+            "ON CONFLICT(document_id) DO UPDATE SET authored_date = excluded.authored_date",
+            (document_id, value),
+        )
+    finally:
+        conn.close()
+
+
+def test_search_authored_after_filters_to_dated_doc(dated_corpus, capsys):
+    # Only dated_doc (2099-12-31) is on-or-after 2000-01-01; the six undated
+    # docs are excluded by default and counted in excluded_null_dated.
+    _run([
+        "--project", dated_corpus["project"], "--full-text",
+        "--authored-after", "2000-01-01",
+        "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert {r["source_id"] for r in out["results"]} == {dated_corpus["dated_doc"]}
+    f = out["filters"]
+    assert f["authored_after"] == "2000-01-01"
+    assert f["authored_before"] is None
+    assert f["include_nulls"] is False
+    assert f["excluded_null_dated"] == 6
+
+
+def test_search_authored_before_excludes_later_dated_doc(dated_corpus, capsys):
+    # dated_doc is 2099-12-31, so a 2024 upper bound drops it; nothing dated
+    # survives, and the six undated docs are still excluded.
+    _run([
+        "--project", dated_corpus["project"], "--full-text",
+        "--authored-before", "2024-01-01",
+        "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"] == []
+    assert out["filters"]["authored_before"] == "2024-01-01"
+    assert out["filters"]["excluded_null_dated"] == 6
+
+
+def test_search_inclusive_bounds_match_scan_boundary(dated_corpus, capsys):
+    # Inclusive: the exact boundary date is kept (>= / <=, not > / <).
+    _run([
+        "--project", dated_corpus["project"], "--full-text",
+        "--authored-after", "2099-12-31", "--authored-before", "2099-12-31",
+        "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert {r["source_id"] for r in out["results"]} == {dated_corpus["dated_doc"]}
+
+
+def test_search_include_nulls_keeps_undated(dated_corpus, capsys):
+    # With --include-nulls the six undated docs ride along beside dated_doc, and
+    # excluded_null_dated zeroes out.
+    _run([
+        "--project", dated_corpus["project"], "--full-text",
+        "--authored-after", "2000-01-01", "--include-nulls",
+        "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["results"]) == 7
+    f = out["filters"]
+    assert f["include_nulls"] is True
+    assert f["excluded_null_dated"] == 0
+
+
+def test_search_invalid_date_bound_errors(dated_corpus, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _run([
+            "--project", dated_corpus["project"], "--full-text",
+            "--authored-after", "2099", "body",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INVALID_DATE"
+
+
+def test_search_date_bound_ands_with_in_documents(dated_corpus, capsys):
+    # The date bound intersects the document scope: dated_doc is on-bound but
+    # excluded from the in-documents slice → no hits, and the undated docs in
+    # the slice are counted as dropped.
+    _run([
+        "--project", dated_corpus["project"], "--full-text",
+        "--in-documents", str(dated_corpus["stub_doc"]),
+        "--authored-after", "2000-01-01",
+        "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["results"] == []
+    f = out["filters"]
+    assert f["in_documents"] == [dated_corpus["stub_doc"]]
+    # stub_doc is undated and the only doc in scope → 1 dropped.
+    assert f["excluded_null_dated"] == 1
+
+
+def test_search_unfiltered_omits_date_keys(dated_corpus, capsys):
+    # No bound, no scope → no filters echo at all (uniform with scan).
+    _run([
+        "--project", dated_corpus["project"], "--full-text", "body",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert "filters" not in out
+
+
+def test_search_date_filter_matches_scan_on_same_bounds(dated_corpus, capsys):
+    """Scan parity: search and scan resolve identical doc sets + counts for the
+    same corpus and bounds (both route through resolve_scope)."""
+    from bartleby.skill_scripts import scan as scan_script
+
+    # Add a second in-range dated doc so the surviving set is non-trivial.
+    _set_summary_date(dated_corpus["project"], dated_corpus["summary_doc"], "2010-06-01")
+
+    args = ["--authored-after", "2000-01-01", "--authored-before", "2050-01-01"]
+
+    scan_script.main([
+        "--project", dated_corpus["project"], "body", *args,
+    ])
+    scan_out = json.loads(capsys.readouterr().out)
+
+    _run([
+        "--project", dated_corpus["project"], "--full-text", "body", *args,
+    ])
+    search_out = json.loads(capsys.readouterr().out)
+
+    # Same surviving document set (search's source_id == document_id for
+    # document-kind chunks) and the same excluded_null_dated count.
+    scan_docs = {m["document_id"] for m in scan_out["matches"]}
+    search_docs = {r["source_id"] for r in search_out["results"]}
+    assert search_docs == scan_docs == {dated_corpus["summary_doc"]}
+    assert (
+        search_out["filters"]["excluded_null_dated"]
+        == scan_out["filters"]["excluded_null_dated"]
+    )
