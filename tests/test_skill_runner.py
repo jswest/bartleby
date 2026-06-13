@@ -349,3 +349,70 @@ def test_help_still_exits_zero(capsys):
     assert exc.value.code == 0
     captured = capsys.readouterr()
     assert "usage:" in captured.out  # argparse printed its own help, untouched
+
+
+# --- run_key resolution + run echo (one run per conversation, #547) -----------
+
+
+def _run_parse_args(argv):
+    # Use the real factory so --run (the global the runner reads) is declared.
+    from bartleby.skill_runner import build_arg_parser
+    return build_arg_parser("probe").parse_args(argv)
+
+
+def _echo_session_work(*, conn, args, session_id) -> dict:
+    return {"session_id": session_id}
+
+
+def test_run_flag_resolves_and_reuses_same_run(project_env, capsys):
+    project = project_env
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-1"])
+    first = json.loads(capsys.readouterr().out)
+
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-1"])
+    second = json.loads(capsys.readouterr().out)
+
+    # Same conversation id → same run on every call.
+    assert first["session_id"] == second["session_id"]
+    assert first["run"]["run_key"] == "conv-1"
+    assert first["run"]["session_id"] == first["session_id"]
+
+
+def test_run_flag_distinct_conversations_distinct_runs(project_env, capsys):
+    project = project_env
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-A"])
+    a = json.loads(capsys.readouterr().out)
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-B"])
+    b = json.loads(capsys.readouterr().out)
+    assert a["session_id"] != b["session_id"]
+    assert a["run"]["run_key"] == "conv-A"
+    assert b["run"]["run_key"] == "conv-B"
+
+
+def test_missing_run_flag_falls_back_to_active_marker(project_env, capsys):
+    project = project_env
+    # A call carrying its run id establishes the marker.
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-1"])
+    carried = json.loads(capsys.readouterr().out)
+
+    # A later call that forgot --run falls back to the marker — usually the
+    # right run (the run-echo banner lets the agent notice if it isn't).
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project])
+    forgot = json.loads(capsys.readouterr().out)
+    assert forgot["session_id"] == carried["session_id"]
+
+
+def test_run_echo_present_on_every_result(project_env, capsys):
+    project = project_env
+    run(tool_name="probe", parse_args=_run_parse_args, work=_echo_session_work,
+        argv=["--project", project, "--run", "conv-1"])
+    out = json.loads(capsys.readouterr().out)
+    assert set(out["run"]) >= {
+        "run_key", "session_id", "session_name", "model", "model_set_by_llm",
+    }

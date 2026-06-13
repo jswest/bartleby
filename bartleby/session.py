@@ -75,6 +75,7 @@ class SessionInfo(TypedDict):
     harness: str | None
     created_at: str
     ended_at: str | None
+    run_key: str | None
 
 
 def generate_name() -> str:
@@ -124,16 +125,41 @@ def _row_to_info(row) -> SessionInfo:
         harness=row[4],
         created_at=row[5],
         ended_at=row[6],
+        run_key=row[7],
     )
 
 
 def _fetch_session(conn, session_id: int) -> SessionInfo | None:
     row = conn.cursor().execute(
-        "SELECT session_id, name, memory_enabled, model, harness, created_at, ended_at "
+        "SELECT session_id, name, memory_enabled, model, harness, created_at, "
+        "ended_at, run_key "
         "FROM sessions WHERE session_id = ?",
         (session_id,),
     ).fetchone()
     return _row_to_info(row) if row else None
+
+
+def run_echo(conn, session_id: int) -> dict:
+    """The current-run summary every skill result carries (#547).
+
+    Echoed so the agent (and the human reading output) always sees which run a
+    call landed in, and so the run_key stays fresh in the agent's context across
+    a long, summarized conversation. ``model_set_by_llm`` is True only for an
+    agent-minted run (run_key present) whose model the agent self-reported — it
+    flags the model as a *claim* ("Set by LLM"), never a verified fact, and is
+    always False for a CLI/web session. Returns ``{}`` if the row vanished.
+    """
+    info = _fetch_session(conn, session_id)
+    if info is None:
+        return {}
+    return {
+        "run_key": info["run_key"],
+        "session_id": info["session_id"],
+        "session_name": info["name"],
+        "model": info["model"],
+        "memory_enabled": info["memory_enabled"],
+        "model_set_by_llm": bool(info["run_key"] and info["model"]),
+    }
 
 
 def start_session(
@@ -142,6 +168,7 @@ def start_session(
     memory_enabled: bool = True,
     model: str | None = None,
     harness: str | None = None,
+    run_key: str | None = None,
     max_attempts: int = 32,
 ) -> SessionInfo:
     """Insert a new session, mark it active, return its info.
@@ -154,6 +181,12 @@ def start_session(
     fall back to :func:`detect_harness`. ``model`` is rarely discoverable from
     the environment, so it stays NULL unless declared here or set later via
     :func:`set_session_provenance`.
+
+    ``run_key`` is the per-conversation UUID an agent mints via ``skill session
+    new`` (#547). The retry loop only redraws the *name*; the caller is
+    responsible for supplying a fresh ``run_key`` (a uuid4 never collides), so a
+    run_key UNIQUE violation is not something the redraw can clear — get-or-
+    create against an existing key lives in :func:`ensure_session_by_run_key`.
     """
     harness = harness or detect_harness()
     conn = open_db(project_name)
@@ -163,9 +196,9 @@ def start_session(
             name = generate_name()
             try:
                 cur.execute(
-                    "INSERT INTO sessions (name, memory_enabled, model, harness) "
-                    "VALUES (?, ?, ?, ?)",
-                    (name, 1 if memory_enabled else 0, model, harness),
+                    "INSERT INTO sessions (name, memory_enabled, model, harness, "
+                    "run_key) VALUES (?, ?, ?, ?, ?)",
+                    (name, 1 if memory_enabled else 0, model, harness, run_key),
                 )
             except apsw.ConstraintError:
                 continue
@@ -299,3 +332,63 @@ def ensure_active_session(project_name: str) -> int:
         project_name, memory_enabled=True
     )
     return info["session_id"]
+
+
+def ensure_session_by_run_key(
+    project_name: str,
+    run_key: str,
+    *,
+    model: str | None = None,
+    max_attempts: int = 32,
+) -> int:
+    """Return the session bound to ``run_key``, creating it if absent (#547).
+
+    The per-conversation run resolver: an agent mints a run_key via ``skill
+    session new`` and carries it on each call as ``--run <uuid>``. Get-or-create
+    keyed on that UUID means a conversation's calls all resolve to one run, two
+    conversations never collide (distinct keys), and a call that arrives before
+    ``session new`` ran (or after it failed) still lands somewhere sane. It
+    writes the ``.active_session`` marker so the no-``--run`` fallback
+    (:func:`ensure_active_session`) keeps pointing at the most recent run.
+
+    Race-safe: a pre-SELECT covers the common reuse case. On the create path the
+    INSERT can trip either UNIQUE — ``name`` (redraw and retry) or ``run_key``
+    (a concurrent caller minted the same key first, so re-SELECT and return the
+    winner). Created runs are always memory-enabled; the memory-off eval path
+    sets its policy explicitly via ``session new --no-memory``.
+    """
+    conn = open_db(project_name)
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT session_id FROM sessions WHERE run_key = ?", (run_key,)
+        ).fetchone()
+        if row:
+            write_active_session_id(project_name, row[0])
+            return row[0]
+        harness = detect_harness()
+        for _ in range(max_attempts):
+            name = generate_name()
+            try:
+                cur.execute(
+                    "INSERT INTO sessions (name, memory_enabled, model, harness, "
+                    "run_key) VALUES (?, 1, ?, ?, ?)",
+                    (name, model, harness, run_key),
+                )
+            except apsw.ConstraintError:
+                won = cur.execute(
+                    "SELECT session_id FROM sessions WHERE run_key = ?", (run_key,)
+                ).fetchone()
+                if won:  # lost the run_key race — adopt the winner
+                    write_active_session_id(project_name, won[0])
+                    return won[0]
+                continue  # a name collision — redraw and retry
+            session_id = conn.last_insert_rowid()
+            write_active_session_id(project_name, session_id)
+            return session_id
+        raise RuntimeError(
+            f"Could not generate a unique session name after {max_attempts} tries; "
+            f"the namespace may be exhausted."
+        )
+    finally:
+        conn.close()
