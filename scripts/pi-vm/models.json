@@ -6,7 +6,7 @@
       "apiKey": "ollama",
       "compat": { "supportsDeveloperRole": false },
       "models": [
-        { "id": "qwen3.6:35b" }
+        { "id": "__AGENT_MODEL__" }
       ]
     }
   }
