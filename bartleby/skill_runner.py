@@ -39,7 +39,12 @@ from typing import Any, Callable
 from bartleby.db.audit import log_call
 from bartleby.db.connection import open_db
 from bartleby.project import get_active_project
-from bartleby.session import ensure_active_session, ensure_named_session
+from bartleby.session import (
+    ensure_active_session,
+    ensure_named_session,
+    ensure_session_by_run_key,
+    run_echo,
+)
 
 
 class SkillError(Exception):
@@ -79,6 +84,11 @@ def build_arg_parser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--project", type=str, default=None)
+    # The per-conversation run id (#547). An agent mints it once via `skill
+    # session new` and passes it on every later call so the work attaches to the
+    # right run; like --project, run() reads it for every script, so it lives
+    # here rather than in each parser.
+    parser.add_argument("--run", type=str, default=None)
     return parser
 
 
@@ -173,6 +183,13 @@ def run(
         session_name = os.environ.get("BARTLEBY_SESSION_NAME")
         if session_name:
             session_id = ensure_named_session(project, session_name)
+        elif getattr(args, "run", None):
+            # Agent carried a per-conversation run id (#547): resolve (or create)
+            # the run bound to it. This is the precise path; the marker below is
+            # only the fallback for a call that forgot to pass --run. getattr (not
+            # args.run) because a parser that didn't come from build_arg_parser
+            # has no `run` attribute — true of bare test parsers.
+            session_id = ensure_session_by_run_key(project, args.run)
         else:
             session_id = ensure_active_session(project)
         if mutates:
@@ -203,6 +220,13 @@ def run(
     )
 
     if conn is not None:
+        # Every successful result echoes the current run (#547) under a "run"
+        # key — id, name, model, and whether the model was self-reported — so
+        # the agent can see and keep its run_key. Errors keep the bare error
+        # envelope; the run row is committed by now (a mutating work's
+        # `with conn:` has exited), so the read sees it.
+        if error_envelope is None and isinstance(result, dict) and session_id is not None:
+            result = {**result, "run": run_echo(conn, session_id)}
         # log_call needs a resolved session_id (its FK target); close must run
         # on every opened path regardless, or the conn leaks. See module docstring.
         if session_id is not None:

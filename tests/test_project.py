@@ -34,6 +34,10 @@ def _strip_db_to_v4(db_path) -> None:
     conn = apsw.Connection(str(db_path))
     try:
         cur = conn.cursor()
+        # v10 per-conversation run_key (#547): drop the unique index before the
+        # column, so the re-walked v9→v10 step can re-ALTER + re-index cleanly.
+        cur.execute("DROP INDEX idx_sessions_run_key")
+        cur.execute("ALTER TABLE sessions DROP COLUMN run_key")
         # v9 value-bearing-tags (#114) + anchor-splitting (#254) columns: strip
         # them first so the re-walked v8→v9 step can re-ALTER them without a
         # `duplicate column name` (flagged by #355).

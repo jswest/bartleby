@@ -14,7 +14,8 @@ export function listFindings() {
   const { db } = getDb();
   return db.prepare(`
     SELECT f.finding_id, f.title, f.description, f.created_at,
-           s.name AS session_name,
+           s.name AS session_name, s.model,
+           (s.run_key IS NOT NULL AND s.model IS NOT NULL) AS model_set_by_llm,
            (SELECT COUNT(*) FROM finding_citations fc WHERE fc.finding_id = f.finding_id) AS citation_count
     FROM findings f
     JOIN sessions s USING (session_id)
@@ -26,7 +27,8 @@ export function getFinding(findingId) {
   const { db } = getDb();
   const finding = db.prepare(`
     SELECT f.finding_id, f.title, f.description, f.body, f.created_at,
-           s.name AS session_name
+           s.name AS session_name, s.model,
+           (s.run_key IS NOT NULL AND s.model IS NOT NULL) AS model_set_by_llm
     FROM findings f
     JOIN sessions s USING (session_id)
     WHERE f.finding_id = ?

@@ -111,9 +111,9 @@ def test_upgrade_does_not_overwrite_existing_embedding_model(conn):
     assert value == "some/other-model"
 
 
-def test_schema_version_pinned_at_nine():
-    # The v0.9.x line is pinned at schema 9; this whole omnibus is additive.
-    assert SCHEMA_VERSION == 9
+def test_schema_version_pinned_at_ten():
+    # Schema 10 (#547) adds the per-conversation run_key; this bump is additive.
+    assert SCHEMA_VERSION == 10
 
 
 def test_attach_disables_load_extension(conn):

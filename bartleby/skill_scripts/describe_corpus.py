@@ -10,6 +10,10 @@ After reading it once ("689 docs, 2023–2026, all carry ch/nyseg tags, 12
 missing summaries, mass clustered in 2024"), issue *targeted* ``list_documents``
 calls (scoped by ``--tag`` / date) or jump straight to ``search``.
 
+Backstop reminder (#547): if this is your first call of the conversation, run
+``bartleby skill session new`` *first* to open your research run, then carry the
+returned ``run_key`` as ``--run <uuid>`` on this and every later call.
+
 "Corpus" counts (``chunk_count`` / ``content_mix`` / ``chunk_length``) cover
 ingested material only — ``source_kind IN ('document','image')``. Summary and
 finding chunks are derived agent artifacts and are deliberately excluded.

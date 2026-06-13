@@ -301,3 +301,99 @@ def test_set_session_provenance_updates_only_passed_fields(project, monkeypatch)
 
 def test_set_session_provenance_no_active_returns_none(project):
     assert session_mod.set_session_provenance(project, model="x") is None
+
+
+# --- run_key: one run per conversation (#547) ---------------------------------
+
+
+def test_start_session_persists_run_key(project):
+    info = session_mod.start_session(project, run_key="run-abc")
+    assert info["run_key"] == "run-abc"
+
+    conn = open_db(project)
+    try:
+        stored = conn.cursor().execute(
+            "SELECT run_key FROM sessions WHERE session_id = ?",
+            (info["session_id"],),
+        ).fetchone()[0]
+        assert stored == "run-abc"
+    finally:
+        conn.close()
+
+
+def test_start_session_run_key_defaults_null(project):
+    info = session_mod.start_session(project)
+    assert info["run_key"] is None
+
+
+def test_ensure_session_by_run_key_creates_then_reuses(project):
+    first = session_mod.ensure_session_by_run_key(project, "run-1")
+    again = session_mod.ensure_session_by_run_key(project, "run-1")
+    assert first == again  # same key → same run, not a second row
+
+    conn = open_db(project)
+    try:
+        count = conn.cursor().execute(
+            "SELECT COUNT(*) FROM sessions WHERE run_key = ?", ("run-1",),
+        ).fetchone()[0]
+        assert count == 1
+    finally:
+        conn.close()
+
+
+def test_ensure_session_by_run_key_distinct_keys_distinct_runs(project):
+    a = session_mod.ensure_session_by_run_key(project, "run-A")
+    b = session_mod.ensure_session_by_run_key(project, "run-B")
+    assert a != b  # two conversations never collide
+
+
+def test_ensure_session_by_run_key_writes_active_marker(project):
+    sid = session_mod.ensure_session_by_run_key(project, "run-mark")
+    # The marker stays warm so a later call that forgets --run still resolves
+    # the most recent run.
+    assert session_mod.read_active_session_id(project) == sid
+
+
+def test_ensure_session_by_run_key_created_run_is_memory_enabled(project):
+    sid = session_mod.ensure_session_by_run_key(project, "run-mem")
+    conn = open_db(project)
+    try:
+        info = session_mod._fetch_session(conn, sid)
+    finally:
+        conn.close()
+    assert info["memory_enabled"] is True
+
+
+def test_run_echo_marks_self_reported_model(project):
+    info = session_mod.start_session(project, run_key="run-llm", model="opus")
+    conn = open_db(project)
+    try:
+        echo = session_mod.run_echo(conn, info["session_id"])
+    finally:
+        conn.close()
+    assert echo["run_key"] == "run-llm"
+    assert echo["model"] == "opus"
+    assert echo["session_name"] == info["name"]
+    assert echo["model_set_by_llm"] is True
+
+
+def test_run_echo_no_llm_label_without_run_key(project):
+    # A CLI/web session (no run_key) carrying a model is NOT an LLM self-report.
+    info = session_mod.start_session(project, model="opus")
+    conn = open_db(project)
+    try:
+        echo = session_mod.run_echo(conn, info["session_id"])
+    finally:
+        conn.close()
+    assert echo["run_key"] is None
+    assert echo["model_set_by_llm"] is False
+
+
+def test_run_echo_no_llm_label_when_model_absent(project):
+    info = session_mod.start_session(project, run_key="run-nomodel")
+    conn = open_db(project)
+    try:
+        echo = session_mod.run_echo(conn, info["session_id"])
+    finally:
+        conn.close()
+    assert echo["model_set_by_llm"] is False
