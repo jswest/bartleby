@@ -1,9 +1,12 @@
-# Pure-build research VM: Pi + Bartleby + decant + a VM-local Ollama (CPU) for
-# decant's distill model. The big agent model runs on the HOST GPU; see
-# docs/pi-vm-runbook.md. Bartleby and decant are pulled from GitHub (not local
-# source), so the build context is just this directory (scripts/pi-vm/).
+# Pure-build research VM: Pi + Bartleby, optionally + decant and a VM-local
+# Ollama (CPU) for decant's distill model. The big agent model runs on the HOST
+# GPU; see docs/pi-vm-runbook.md. Bartleby and decant are pulled from GitHub (not
+# local source), so the build context is just this directory (scripts/pi-vm/).
 # Node base: guarantees Node >=22.19 + npm for the Pi install, and is still
 # Debian/apt underneath so the rest of this file is unchanged.
+#
+# The default build is lean (corpus-only, no web reach). WITH_DECANT=1 adds
+# decant, a VM-local Ollama, and the ~7.2 GB distill model for in-VM web fetch.
 FROM node:22-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -16,33 +19,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-# Ollama (Linux). CPU-only inside the VM — used solely for decant's small model.
-RUN curl -fsSL https://ollama.com/install.sh | sh
+# decant is optional and off by default. WITH_DECANT=1 adds it, its VM-local
+# Ollama, and its model.
+ARG WITH_DECANT=0
+
+# Ollama (Linux). CPU-only inside the VM — used solely for decant's small model,
+# so it's installed only when decant is. (zstd above is for this installer.)
+RUN if [ "$WITH_DECANT" = "1" ]; then \
+      curl -fsSL https://ollama.com/install.sh | sh; \
+    else echo "WITH_DECANT=0: skipping Ollama install"; fi
 
 # Pi coding agent via npm. The pi.dev/install.sh script needs a TTY, so it can't
 # run in a non-interactive build; npm is the headless path. `pi` lands on PATH
 # at /usr/local/bin. --ignore-scripts is what Pi's own docs recommend.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
-# --- Bartleby (latest release tag) + decant (main), pulled from GitHub ---
-# Both repos are public over HTTPS, so no auth in the build. Ingestion runs on
-# the HOST, so the VM needs no [docling]/[sec2md] extras — the agent only
-# searches/reads/cites an already-ingested corpus.
+# --- Bartleby (latest release tag), pulled from GitHub ---
+# Public over HTTPS, so no auth in the build. Ingestion runs on the HOST, so the
+# VM needs no [docling]/[sec2md] extras — the agent only searches/reads/cites an
+# already-ingested corpus.
 RUN BARTLEBY_REF="$(git ls-remote --tags --refs https://github.com/jswest/bartleby.git 'v*' \
                     | awk -F/ '{print $NF}' | sort -V | tail -1)" \
-    && echo "Installing bartleby ${BARTLEBY_REF}, decant@main" \
-    && uv tool install "git+https://github.com/jswest/bartleby.git@${BARTLEBY_REF}" \
-    && uv tool install "git+https://github.com/jswest/decant.git@main"
+    && echo "Installing bartleby ${BARTLEBY_REF}" \
+    && uv tool install "git+https://github.com/jswest/bartleby.git@${BARTLEBY_REF}"
+
+# decant (main) — only when WITH_DECANT=1.
+RUN if [ "$WITH_DECANT" = "1" ]; then \
+      echo "Installing decant@main" \
+      && uv tool install "git+https://github.com/jswest/decant.git@main"; \
+    else echo "WITH_DECANT=0: skipping decant"; fi
 
 # Install the Bartleby skill where Pi discovers skills.
 RUN bartleby ready --dest /root/.pi/agent/skills --force
 RUN HF_HUB_OFFLINE=0 bartleby embed "warmup" >/dev/null
 
 # Bake decant's distill model into the image (pure build = reproducible/offline).
+# Skipped with the rest of decant when WITH_DECANT=0 — this is the ~7.2 GB layer.
 ARG DECANT_MODEL=gemma4:e2b
-RUN ollama serve >/tmp/ollama-build.log 2>&1 & \
-    until ollama list >/dev/null 2>&1; do sleep 0.5; done; \
-    ollama pull "${DECANT_MODEL}"
+RUN if [ "$WITH_DECANT" = "1" ]; then \
+      ollama serve >/tmp/ollama-build.log 2>&1 & \
+      until ollama list >/dev/null 2>&1; do sleep 0.5; done; \
+      ollama pull "${DECANT_MODEL}"; \
+    else echo "WITH_DECANT=0: skipping distill model pull"; fi
 
 # Config templates + entrypoint (build context is scripts/pi-vm/ itself).
 COPY models.json        /opt/pi-vm/models.json

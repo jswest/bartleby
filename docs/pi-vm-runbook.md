@@ -104,6 +104,23 @@ Defaults to `qwen3.6:35b` if unset. (decant's distill model is a *build-time*
 knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` — since it's baked
 into the image.)
 
+### Web fetch is opt-in: add decant with `WITH_DECANT=1`
+
+decant — and the VM-local Ollama plus the baked distill model that exist only to
+serve it — is the largest thing in the image, so the **default build is lean**:
+Pi + Bartleby against `/corpus`, no decant, no web reach. That fits corpus-only
+runs, where the agent searches/reads/cites the already-ingested corpus. When you
+want in-VM web fetch/search, build it in:
+
+```bash
+WITH_DECANT=1 ./scripts/pi-vm/build.sh
+```
+
+That adds the decant install, the VM-local Ollama, and the ~7.2 GB `gemma4:e2b`
+pull. The entrypoint detects decant at runtime, so the same entrypoint serves
+both the lean and full images. Default is `WITH_DECANT=0` (lean); the trade-off
+is exactly that capability — a lean image has **no in-VM web fetch/search**.
+
 ## Security posture
 
 What this buys you, and what it doesn't:
@@ -207,8 +224,9 @@ container system start          # starts the container runtime
 # 1. host: start the dedicated agent Ollama (GPU), separate from your daily one
 ./scripts/pi-vm/host-agent-ollama.sh          # serves qwen3.6:35b on :11435
 
-# 2. build the research-VM image (pulls Bartleby release + decant main from GitHub)
+# 2. build the research-VM image (lean by default: Bartleby release, no decant)
 ./scripts/pi-vm/build.sh                       # -> bartleby-pi:latest
+#    need in-VM web fetch? add decant + its ~7.2 GB model: WITH_DECANT=1 ./scripts/pi-vm/build.sh
 
 # 3. run it — mounts ~/.bartleby as /corpus, drops you into Pi
 BRAVE_SEARCH_API_KEY=brv-... ./scripts/pi-vm/run.sh
@@ -305,24 +323,38 @@ support SQLite's `immutable=1` URI escape hatch.)
 ## Disk & cleanup
 
 The **container** is disposable — `run.sh` uses `--rm`, so `Ctrl-C` removes the
-running VM and no stopped containers pile up. The **image** is the disk cost: it's
-large (~10–15 GB — the baked `gemma4:e2b` plus Node/Ollama/deps) and persists by
-design. Each `build.sh` re-tags `:latest` and **orphans the previous image's
-layers**, which are *not* auto-cleaned, so repeated rebuilds stack up multi-GB
-ghosts.
+running VM and no stopped containers pile up. Two things *do* accumulate, and
+`build.sh` now cleans up both for you:
 
-Reclaim space (verify the verbs with `container --help` — the CLI is young):
+1. **Orphaned images.** Each build re-tags `:latest` and orphans the previous
+   digest's layers (~10–15 GB — the baked `gemma4:e2b` plus Node/Ollama/deps),
+   which `container` has no reliable prune for. `build.sh` deletes the prior
+   image *before* building, so exactly one stays on disk.
+2. **The BuildKit cache.** The builder container accretes a layer cache on every
+   build — it grew to **75 GB** during development. The nasty part: this cache
+   lives *inside the builder container* and is **invisible to `container system
+   df`**, so nothing warns you. `build.sh` resets it after a successful build
+   (`container builder delete`; the builder recreates itself on the next build).
+   Set **`KEEP_BUILD_CACHE=1`** to keep it for fast incremental rebuilds while
+   you're iterating on the `Containerfile`.
+
+So in normal use, repeated `build.sh` runs no longer stack up ghosts. To inspect
+or reclaim by hand (note: `container image` is **singular** — `container images`
+is not a valid verb):
 
 ```bash
-container images ls                          # what's on disk
-container images delete bartleby-pi:latest   # delete by name — the reliable way
+container system df                          # images/containers/volumes usage…
+                                             # …but NOT the builder cache (see above)
+container image ls                           # images on disk
+container image delete bartleby-pi:latest    # delete by name — the reliable way
+container builder delete                     # nuke the BuildKit cache (recreates on next build)
 container ls -a                              # stopped containers (should be none; --rm)
 ```
 
 Don't rely on `container image prune` to reclaim the big images — it's
 [known-buggy](https://github.com/apple/container/issues/901) (removes only
-orphaned blobs, not whole images). Simplest habit: `container images delete
-bartleby-pi:latest` before a fresh rebuild.
+orphaned blobs, not whole images). And remember `du` is the *only* way to see the
+builder cache: `du -sh "$HOME/Library/Application Support/com.apple.container/containers"`.
 
 ## Files
 

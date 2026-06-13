@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
 #
 # In-VM entrypoint. Runs inside the Apple `container` Linux guest.
-#   1. start the VM-local Ollama (CPU) that serves decant's distill model
+#   1. (if decant is baked in) start the VM-local Ollama (CPU) for its model
 #   2. detect the host bridge IP so Pi can reach the host agent Ollama
-#   3. render Pi's models.json (-> host :11435) and decant's config (-> VM-local)
+#   3. render Pi's models.json (-> host :11435) and, if present, decant's config
 #   4. hand off to Pi (interactive) or whatever command was passed
+#
+# Decant is optional at build time (WITH_DECANT=0); we detect it at runtime so
+# the same entrypoint works for both the full and the lean image.
 #
 # See docs/pi-vm-runbook.md.
 set -euo pipefail
 
+# Lean image (WITH_DECANT=0) has neither decant nor the VM-local Ollama.
+if command -v decant >/dev/null 2>&1 && command -v ollama >/dev/null 2>&1; then
+  HAS_DECANT=1
+else
+  HAS_DECANT=0
+fi
+
 # 1. VM-local Ollama (serves decant's small model, CPU-only — expected).
-ollama serve >/tmp/ollama.log 2>&1 &
-until ollama list >/dev/null 2>&1; do sleep 0.5; done
+if [ "${HAS_DECANT}" = "1" ]; then
+  ollama serve >/tmp/ollama.log 2>&1 &
+  until ollama list >/dev/null 2>&1; do sleep 0.5; done
+fi
 
 # 2. Host bridge IP. Apple `container` has no host.docker.internal; the default
 #    gateway points at the host bridge. Override with HOST_OLLAMA_IP if wrong.
@@ -30,11 +42,14 @@ sed -e "s|__HOST_OLLAMA__|http://${HOST_IP}:${AGENT_PORT}/v1|g" \
     /opt/pi-vm/models.json > /root/.pi/agent/models.json
 
 # 3b. decant -> VM-local Ollama. Brave key from env if provided, else null.
-mkdir -p /root/.decant
-sed "s|__BRAVE_KEY__|${BRAVE_SEARCH_API_KEY:-null}|g" \
-    /opt/pi-vm/decant-config.yaml > /root/.decant/config.yaml
-
-echo "Pi -> ${AGENT_MODEL} @ http://${HOST_IP}:${AGENT_PORT}  |  decant -> VM-local Ollama" >&2
+if [ "${HAS_DECANT}" = "1" ]; then
+  mkdir -p /root/.decant
+  sed "s|__BRAVE_KEY__|${BRAVE_SEARCH_API_KEY:-null}|g" \
+      /opt/pi-vm/decant-config.yaml > /root/.decant/config.yaml
+  echo "Pi -> ${AGENT_MODEL} @ http://${HOST_IP}:${AGENT_PORT}  |  decant -> VM-local Ollama" >&2
+else
+  echo "Pi -> ${AGENT_MODEL} @ http://${HOST_IP}:${AGENT_PORT}  |  decant: not installed (lean image)" >&2
+fi
 
 # 4. Hand off.
 if [ "$#" -eq 0 ]; then
