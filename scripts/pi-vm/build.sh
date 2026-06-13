@@ -12,9 +12,9 @@
 #
 # Env:
 #   IMAGE             image tag                   (default: bartleby-pi:latest)
-#   WITH_DECANT       set=0 to drop decant, the VM-local Ollama, and the ~7.2 GB
-#                     distill model — a smaller, web-fetch-less image for
-#                     corpus-only research (default: 1, decant included).
+#   WITH_DECANT       set=1 to add decant, a VM-local Ollama, and the ~7.2 GB
+#                     distill model for in-VM web fetch/search. Default: 0 — a
+#                     lean, corpus-only image with no web reach.
 #   DECANT_MODEL      distill model baked into VM (default: gemma4:e2b; ignored
 #                     when WITH_DECANT=0).
 #   KEEP_BUILD_CACHE  set=1 to keep the BuildKit cache after a successful build
@@ -26,7 +26,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="${IMAGE:-bartleby-pi:latest}"
-WITH_DECANT="${WITH_DECANT:-1}"
+WITH_DECANT="${WITH_DECANT:-0}"
 DECANT_MODEL="${DECANT_MODEL:-gemma4:e2b}"
 
 command -v container >/dev/null || {

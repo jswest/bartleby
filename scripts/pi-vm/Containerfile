@@ -5,8 +5,8 @@
 # Node base: guarantees Node >=22.19 + npm for the Pi install, and is still
 # Debian/apt underneath so the rest of this file is unchanged.
 #
-# WITH_DECANT=0 drops decant, the VM-local Ollama, and the ~7.2 GB distill model
-# — a much smaller, web-fetch-less image for corpus-only research (default: on).
+# The default build is lean (corpus-only, no web reach). WITH_DECANT=1 adds
+# decant, a VM-local Ollama, and the ~7.2 GB distill model for in-VM web fetch.
 FROM node:22-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,8 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-# decant is optional. WITH_DECANT=0 skips it, its VM-local Ollama, and its model.
-ARG WITH_DECANT=1
+# decant is optional and off by default. WITH_DECANT=1 adds it, its VM-local
+# Ollama, and its model.
+ARG WITH_DECANT=0
 
 # Ollama (Linux). CPU-only inside the VM — used solely for decant's small model,
 # so it's installed only when decant is. (zstd above is for this installer.)

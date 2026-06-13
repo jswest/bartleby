@@ -104,23 +104,22 @@ Defaults to `qwen3.6:35b` if unset. (decant's distill model is a *build-time*
 knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` — since it's baked
 into the image.)
 
-### Don't need web fetch? Drop decant (and ~7.2 GB)
+### Web fetch is opt-in: add decant with `WITH_DECANT=1`
 
 decant — and the VM-local Ollama plus the baked distill model that exist only to
-serve it — is the largest thing in the image. If a run is **corpus-only** (the
-agent searches/reads/cites the ingested corpus and never fetches the web), build
-without it:
+serve it — is the largest thing in the image, so the **default build is lean**:
+Pi + Bartleby against `/corpus`, no decant, no web reach. That fits corpus-only
+runs, where the agent searches/reads/cites the already-ingested corpus. When you
+want in-VM web fetch/search, build it in:
 
 ```bash
-WITH_DECANT=0 ./scripts/pi-vm/build.sh
+WITH_DECANT=1 ./scripts/pi-vm/build.sh
 ```
 
-That skips the decant install, the VM-local Ollama, and the ~7.2 GB `gemma4:e2b`
-pull — a much smaller image. The entrypoint detects decant's absence at runtime,
-so the lean image just runs Pi + Bartleby against `/corpus` with no web reach.
-Default is `WITH_DECANT=1` (decant included). The trade-off is exactly that
-capability: a lean image has **no in-VM web fetch/search** — rebuild with decant
-when you need it.
+That adds the decant install, the VM-local Ollama, and the ~7.2 GB `gemma4:e2b`
+pull. The entrypoint detects decant at runtime, so the same entrypoint serves
+both the lean and full images. Default is `WITH_DECANT=0` (lean); the trade-off
+is exactly that capability — a lean image has **no in-VM web fetch/search**.
 
 ## Security posture
 
@@ -225,9 +224,9 @@ container system start          # starts the container runtime
 # 1. host: start the dedicated agent Ollama (GPU), separate from your daily one
 ./scripts/pi-vm/host-agent-ollama.sh          # serves qwen3.6:35b on :11435
 
-# 2. build the research-VM image (pulls Bartleby release + decant main from GitHub)
+# 2. build the research-VM image (lean by default: Bartleby release, no decant)
 ./scripts/pi-vm/build.sh                       # -> bartleby-pi:latest
-#    corpus-only (no web)? skip decant + its ~7.2 GB model: WITH_DECANT=0 ./scripts/pi-vm/build.sh
+#    need in-VM web fetch? add decant + its ~7.2 GB model: WITH_DECANT=1 ./scripts/pi-vm/build.sh
 
 # 3. run it — mounts ~/.bartleby as /corpus, drops you into Pi
 BRAVE_SEARCH_API_KEY=brv-... ./scripts/pi-vm/run.sh
