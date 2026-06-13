@@ -6,7 +6,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git iproute2 tesseract-ocr \
+      ca-certificates curl git iproute2 tesseract-ocr zstd \
       python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
