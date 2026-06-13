@@ -137,7 +137,9 @@ is left as a follow-up; the filesystem boundary is the load-bearing protection.
   (`ollama pull qwen3.6:35b` — `gemma4:e2b` is re-pulled inside the VM at build
   time, so the host copy is optional).
 - A **Brave Search API key** if you want `decant search` (not needed for
-  `decant url`). Pass it as `BRAVE_SEARCH_API_KEY`.
+  `decant url`). Pass it as `BRAVE_SEARCH_API_KEY`, or leave it in your host
+  `~/.decant/config.yaml` — `run.sh` reads the value from there as a fallback
+  (the config file itself is never mounted into the box).
 - The **decant** source at `~/Code/decant` (override with `DECANT_SRC`).
 
 ## The Apple `container` networking note
