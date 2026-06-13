@@ -17,7 +17,7 @@ invariant and the rest of the project's load-bearing rules.
 # without those structures. That cohort is RE-INGEST-ONLY — it shares a version
 # number with released v8 but not its DDL, so no upgrade step can repair it in
 # place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 EMBEDDING_DIM = 768
 
@@ -76,8 +76,16 @@ CREATE TABLE sessions (
     model TEXT,
     harness TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ended_at TEXT
+    ended_at TEXT,
+    run_key TEXT
 );
+
+-- run_key is the per-conversation UUID an agent mints (`skill session new`) and
+-- carries on each call (#547). A UNIQUE index — not a column constraint — so the
+-- many NULL run_keys (CLI/web/legacy sessions never mint one) coexist, while two
+-- sessions can never share a key; that one-key-one-session guarantee is what
+-- makes get-or-create-by-run_key race-safe.
+CREATE UNIQUE INDEX idx_sessions_run_key ON sessions(run_key);
 
 CREATE TABLE findings (
     finding_id INTEGER PRIMARY KEY,

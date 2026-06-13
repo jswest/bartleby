@@ -144,12 +144,26 @@ def _upgrade_v8_to_v9(conn: apsw.Connection) -> None:
     cur.execute("ALTER TABLE documents ADD COLUMN section_order INTEGER")
 
 
+def _upgrade_v9_to_v10(conn: apsw.Connection) -> None:
+    # Schema v10 binds one research run to one conversation via an agent-minted
+    # UUID (#547): `sessions` gains a nullable `run_key` plus a UNIQUE index over
+    # it. Purely additive — every pre-upgrade session keeps run_key NULL (a
+    # truthful "this run was never UUID-minted"), and the unique index permits
+    # those many NULLs while forbidding two sessions from sharing a key. So
+    # existing corpora run `bartleby project upgrade` rather than re-ingest. Keep
+    # this DDL in lockstep with db/schema.py.
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE sessions ADD COLUMN run_key TEXT")
+    cur.execute("CREATE UNIQUE INDEX idx_sessions_run_key ON sessions(run_key)")
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
     6: _upgrade_v6_to_v7,
     7: _upgrade_v7_to_v8,
     8: _upgrade_v8_to_v9,
+    9: _upgrade_v9_to_v10,
 }
 
 
