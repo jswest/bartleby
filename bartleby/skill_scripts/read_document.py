@@ -7,10 +7,18 @@ override.
 
 Successful output:
     {
-      "document": {"id": int, "file_name": str, "token_count": int},
+      "document": {
+        "id": int, "file_name": str, "token_count": int,
+        "authored_date": str|null
+      },
       "summary": str|null,
       "full_text": str|null
     }
+
+``authored_date`` is the document's date (lives on its summary row); it is
+populated regardless of whether the summary text is real, because a
+``backfill``-stub row carries a real date but no summary text. ``summary`` is
+``null`` for such a stub (and for a document with no summary row at all).
 
 DOCUMENT_TOO_LARGE error envelope (when --full would exceed max_read_tokens):
     {
@@ -26,6 +34,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.config import load_config
+from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import positive_int
 
@@ -83,13 +92,19 @@ def work(*, conn, args, session_id) -> dict:
                 max_read_tokens=max_read_tokens,
             )
 
+    # Fetch the summary row regardless of mode: the date rides on it and is
+    # exposed even when the text is suppressed or --full was requested. A
+    # backfill stub carries a real date but no summary text, so its `text` ('')
+    # is reported as null — the date is honest, the "summary" is not.
+    row = cur.execute(
+        "SELECT text, model, authored_date FROM summaries WHERE document_id = ?",
+        (doc_id,),
+    ).fetchone()
+    authored_date = row[2] if row else None
+
     summary_text: str | None = None
-    if want_summary:
-        row = cur.execute(
-            "SELECT text FROM summaries WHERE document_id = ?",
-            (doc_id,),
-        ).fetchone()
-        summary_text = row[0] if row else None
+    if want_summary and row is not None and row[1] != BACKFILL_MODEL:
+        summary_text = row[0]
 
     full_text: str | None = None
     if want_full:
@@ -100,6 +115,7 @@ def work(*, conn, args, session_id) -> dict:
             "id": doc_id,
             "file_name": file_name,
             "token_count": token_count,
+            "authored_date": authored_date,
         },
         "summary": summary_text,
         "full_text": full_text,
