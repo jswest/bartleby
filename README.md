@@ -221,13 +221,13 @@ Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image fi
 
 In your harness of choice, load the `bartleby` skill (install it first with `bartleby ready` — see [Install the skill](#install-the-skill)) and ask the agent a question about your corpus. The skill guides it through searching, reading, synthesizing, and citing.
 
-If you want the agent to ignore findings from prior sessions, start the session with the memory flag off:
+The agent opens its own research *run* on its first call (`bartleby skill session new`) and carries it for the rest of the conversation, so **one conversation is one run** with no setup on your part — a new conversation is a new run. If you want the agent to ignore findings from prior runs (e.g. for a blind multi-model comparison), ask it to open the run with memory off:
 
 ```
-bartleby session start --no-memory
+bartleby skill session new --no-memory
 ```
 
-(More on sessions and memory in the skill README.)
+(More on runs and memory in the skill README.)
 
 ### 5. Browse what you've got
 
@@ -252,7 +252,7 @@ The core tables (see [`bartleby/db/schema.py`](./bartleby/db/schema.py) for the 
 | `images` | One row per *unique* image, deduped by byte hash. The same icon embedded in five docs is one row. |
 | `document_images` | Join: which images appear in which document, at which page. |
 | `findings` | Agent-authored research notes from `save_finding`. Each owned by a `session`. |
-| `sessions` | Agent sessions, with a memory flag. |
+| `sessions` | Agent research runs, with a memory flag, a self-reported model, and a `run_key` — the per-conversation UUID an agent mints to bind one run to one conversation. |
 | `chunks` | Polymorphic — one row per embeddable text chunk regardless of source. `source_kind` is one of `'document'`, `'summary'`, `'finding'`, `'image'`. |
 | `chunks_fts`, `chunks_vec` | Virtual tables shadowing `chunks` for full-text (FTS5) and vector (sqlite-vec) search. One query covers all four source kinds at once. |
 | `audit_logs` | One row per skill-script call, scoped to a session. |
