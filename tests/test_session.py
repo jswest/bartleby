@@ -222,6 +222,35 @@ def test_write_active_session_id_leaves_no_tmp_file(project):
     assert session_mod.read_active_session_id(project) == 7
 
 
+def test_write_active_session_id_concurrent_writers_no_race(project):
+    # Regression for #553: a shared ".active_session.tmp" let concurrent writers
+    # clobber one temp and race on the rename — the second os.replace raised
+    # FileNotFoundError. Unique temps fix it: many overlapping writers all
+    # succeed, the pointer lands on one written id, and no temp is left behind.
+    import threading
+
+    ids = list(range(1, 51))
+    errors: list[Exception] = []
+
+    def writer(sid: int) -> None:
+        try:
+            for _ in range(10):
+                session_mod.write_active_session_id(project, sid)
+        except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(sid,)) for sid in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert session_mod.read_active_session_id(project) in ids
+    pdir = bartleby.project.get_project_dir(project)
+    assert not list(pdir.glob(".active_session.*.tmp"))
+
+
 def test_generate_name_is_kebab_pair():
     name = session_mod.generate_name()
     a, _, b = name.partition("-")
