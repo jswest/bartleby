@@ -9,6 +9,13 @@
 
   $: byId = new Map(data.finding.citations.map((c) => [c.chunk_id, c]));
 
+  // The run's model for the meta line. Rendered inline among the · -separated
+  // fields with the qualifier in parens — deliberately distinct from the index's
+  // "model · Set by LLM" muted line (#547). null when no model was recorded.
+  $: modelMeta = data.finding.model
+    ? `${data.finding.model}${data.finding.model_set_by_llm ? " (Set by LLM)" : ""}`
+    : null;
+
   // Substitute each [^N] marker in the markdown source with an inline <button>
   // before marked parses. Marked passes inline HTML through, so the chip ends
   // up inside the same <p> as the surrounding prose — preserves reading flow.
@@ -106,7 +113,7 @@
   <article class="report surface surface--finding" bind:this={container}>
     <h1>{data.finding.title}</h1>
     <p class="meta">
-      <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name} · {data.finding.created_at}
+      <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name}{#if modelMeta} · {modelMeta}{/if} · {data.finding.created_at}
     </p>
     <p class="desc">{data.finding.description}</p>
 

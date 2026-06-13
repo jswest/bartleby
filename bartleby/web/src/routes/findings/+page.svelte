@@ -34,7 +34,10 @@
       const total = items.reduce((sum, f) => sum + f.citation_count, 0);
       const lo = day(items[items.length - 1].created_at);
       const hi = day(items[0].created_at);
-      return { name, items, total, span: lo === hi ? hi : `${lo} – ${hi}` };
+      // All findings in one session share its run, so the model is the first
+      // item's — the axis the multi-model comparison cares about (#547).
+      const model = modelLabel(items[0]);
+      return { name, items, total, model, span: lo === hi ? hi : `${lo} – ${hi}` };
     });
   })();
 
@@ -42,6 +45,14 @@
   // wants the day.
   function day(ts) {
     return (ts ?? "").slice(0, 10);
+  }
+
+  // The model behind a finding's run, or null when none was recorded. A model
+  // the agent self-reported (model_set_by_llm, #547) is tagged "Set by LLM" —
+  // it's a claim, not a verified fact. SQLite returns the boolean as 0/1.
+  function modelLabel(f) {
+    if (!f.model) return null;
+    return f.model_set_by_llm ? `${f.model} · Set by LLM` : f.model;
   }
 
   function pct(count) {
@@ -105,7 +116,10 @@
                 <a class="t-title" href="/findings/{f.finding_id}">{f.title}</a>
                 <span class="t-desc">{f.description}</span>
               </td>
-              <td class="t-sess">{f.session_name}</td>
+              <td class="t-sess">
+                {f.session_name}
+                {#if modelLabel(f)}<span class="t-model">{modelLabel(f)}</span>{/if}
+              </td>
               <td>
                 <span class="cbar" class:zero={f.citation_count === 0}>
                   <span class="track"><span class="fill" style="width:{pct(f.citation_count)}%"></span></span>
@@ -123,6 +137,7 @@
           <section class="group">
             <div class="group-head">
               <span class="group-name">{g.name}</span>
+              {#if g.model}<span class="group-model">{g.model}</span>{/if}
               <span class="group-meta">
                 {pluralize(g.items.length, "finding")} · {pluralize(g.total, "citation")} · {g.span}
               </span>
@@ -318,6 +333,13 @@
     color: var(--color-link);
     white-space: nowrap;
   }
+  /* The run's model under the session name — a muted second line. */
+  .t-model {
+    display: block;
+    font-size: var(--text-2xs);
+    color: var(--color-off);
+    margin-top: var(--space-3xs);
+  }
   .findings-table td.t-date {
     font-size: var(--text-xs);
     color: var(--color-off);
@@ -377,6 +399,11 @@
     font-size: var(--text-lg);
     font-weight: 700;
     color: var(--color-off);
+  }
+  .group-model {
+    font-family: var(--font-sans);
+    font-size: var(--text-2xs);
+    color: var(--color-link);
   }
   .group-meta {
     font-family: var(--font-sans);
