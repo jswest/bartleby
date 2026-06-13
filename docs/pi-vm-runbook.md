@@ -140,7 +140,9 @@ is left as a follow-up; the filesystem boundary is the load-bearing protection.
   `decant url`). Pass it as `BRAVE_SEARCH_API_KEY`, or leave it in your host
   `~/.decant/config.yaml` — `run.sh` reads the value from there as a fallback
   (the config file itself is never mounted into the box).
-- The **decant** source at `~/Code/decant` (override with `DECANT_SRC`).
+
+No local Bartleby/decant checkout is needed — the build pulls both from GitHub
+(Bartleby's latest release tag, decant's `main`).
 
 ## The Apple `container` networking note
 
@@ -170,8 +172,17 @@ distill model + both configs, and mounts *only* the corpus. The alternative
 (bind-mounting the Bartleby/decant source for live editing) was rejected because
 it would let the agent see and modify your tool source, which partly defeats the
 isolation. Pure build gives a reproducible, disposable image and the tightest
-blast radius. The cost is a rebuild when Bartleby or decant changes — run
-`build.sh` again.
+blast radius.
+
+Bartleby and decant are pulled **from GitHub at build time** — Bartleby's latest
+release tag (resolved via `git ls-remote`) and decant's `main` — not from your
+local working copy. That keeps the build context tiny and the image pinned to
+*published* code, which is the right default for a VM whose job is to *run*
+research over an already-ingested corpus (ingestion happens on the host, so the
+image needs no `[docling]`/`[sec2md]` extras). The trade-off: the VM runs
+published versions, not your in-flight local edits to Bartleby/decant — to test
+those you'd push/release first. Re-run `build.sh` to pick up a newer release or
+newer decant `main`.
 
 ## Step by step
 
@@ -183,7 +194,7 @@ container system start          # starts the container runtime
 # 1. host: start the dedicated agent Ollama (GPU), separate from your daily one
 ./scripts/pi-vm/host-agent-ollama.sh          # serves qwen3.6:35b on :11435
 
-# 2. build the research-VM image (stages bartleby + ~/Code/decant source)
+# 2. build the research-VM image (pulls Bartleby release + decant main from GitHub)
 ./scripts/pi-vm/build.sh                       # -> bartleby-pi:latest
 
 # 3. run it — mounts ~/.bartleby as /corpus, drops you into Pi
@@ -239,7 +250,7 @@ pi --help            # confirm `pi` is on PATH; see shakeout note if not
 | File | Role |
 | --- | --- |
 | [`scripts/pi-vm/host-agent-ollama.sh`](../scripts/pi-vm/host-agent-ollama.sh) | Host: dedicated agent Ollama on `:11435` (GPU) |
-| [`scripts/pi-vm/build.sh`](../scripts/pi-vm/build.sh) | Stage source + build the image (pure build) |
+| [`scripts/pi-vm/build.sh`](../scripts/pi-vm/build.sh) | Build the image (pulls Bartleby release + decant main from GitHub) |
 | [`scripts/pi-vm/Containerfile`](../scripts/pi-vm/Containerfile) | The research-VM image |
 | [`scripts/pi-vm/entrypoint.sh`](../scripts/pi-vm/entrypoint.sh) | In-VM: start local Ollama, render configs, launch Pi |
 | [`scripts/pi-vm/run.sh`](../scripts/pi-vm/run.sh) | Run the VM, mount the corpus |
