@@ -121,6 +121,42 @@ Each result carries three signals you can use to triage:
 
 Every `search` hit and every `scan` match also carries `authored_date` — the originating document's summarizer-inferred date, or `null` when the document is undated (or, for findings, has no document). It rides along in **all** modes, including `--brief`, so you can triage or order matches by time without a second lookup. Don't parse dates out of filenames; read this field. (It's the same value `list_documents` reports and `--authored-after`/`--authored-before` filter on.)
 
+### Retrieval coverage matrix: where each surface looks
+
+The three retrieval surfaces match **different parts of a chunk**. A term can be present in the corpus yet invisible to the surface you're using — so know what each one covers before reading a `0` as "absent":
+
+| Surface | Body `text` | `section_heading` | Semantic (no literal token) |
+| --- | --- | --- | --- |
+| `scan` (FTS) | ✅ matched (column-qualified) | ❌ never — use `--heading-like` | ❌ never (exact only) |
+| `search` — FTS leg | ✅ matched (column-qualified) | ❌ never | — |
+| `search` — semantic leg | ✅ covered | ✅ covered (heading is contextualized into the embedding) | ✅ covered |
+| `scan --heading-like 'pat%'` | (still body-matched) | ✅ filters on heading (SQL LIKE) | ❌ |
+
+Reading the matrix: **body-vs-heading** — only `search`'s semantic leg and `scan --heading-like` reach text living solely in a `section_heading`; both `scan`'s default FTS and `search`'s FTS leg are body-only. **exact-vs-semantic** — only `search`'s semantic leg finds a chunk that's *about* the term without containing the literal token. So if a scoped `scan` returns `0`, the term may still be present on a surface scan doesn't match.
+
+### Zero-result diagnosis: telling "absent" from "elsewhere"
+
+When `scan` returns nothing (no matches, an empty `--count-by` histogram, an empty `--extract` table), the envelope carries a **`diagnosis`** block — a few cheap COUNTs fired only on the zero path — that distinguishes "absent" from "present somewhere scan doesn't match":
+
+```
+"diagnosis": {
+  "verdict": "absent" | "out_of_scope" | "heading_only" | "filtered_out",
+  "body_in_scope": int,        // body matches inside your active scope
+  "body_corpus_wide": int,     // body matches ignoring every scope filter
+  "heading_in_scope": int,     // section_heading matches inside the scope
+  "heading_corpus_wide": int,  // section_heading matches corpus-wide
+  "hint": str
+}
+```
+
+Read the `verdict`, then act:
+- **`absent`** — no body or heading hit anywhere; the term really isn't in the corpus (it may still be present *semantically* — confirm with `search`).
+- **`out_of_scope`** — `body_corpus_wide > 0` but `body_in_scope == 0`: the term is in *other documents*, just not your `--tag`/`--in-documents`/`--file-like`/date slice. Widen the scope.
+- **`heading_only`** — the term lives in `section_heading`s, which scan's body match never returns. Reach it with `--heading-like` or `search`.
+- **`filtered_out`** — `body_in_scope > 0` but a chunk-level filter (`--heading-like`) dropped the body hits. Drop or loosen that filter.
+
+The diagnosis is a hint, not a guarantee: a purely-semantic presence (the chunk is *about* the term but never spells it) is invisible to these COUNTs — only `search` confirms that. An empty query carries no diagnosis. **Not** a substitute for `search`: scan stays a strict body-text grep by design (every returned snippet contains the query); the diagnosis only *reports* where the signal is.
+
 ### Undated corpus, temporal task: verify before you prompt
 
 When your task needs dates (filtering, ordering, "what happened before X") and `describe_corpus` shows a high `undated_document_count`, the dates may still be recoverable from the filenames in bulk — but **don't prompt the human blindly**. Verify a candidate regex first with `probe_dates` (read-only — it writes nothing):
