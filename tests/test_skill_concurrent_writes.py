@@ -26,8 +26,6 @@ import json
 import sys
 import threading
 
-import pytest
-
 from bartleby.db.connection import open_db
 from bartleby.skill_scripts import edit_finding, save_finding
 from tests._skill_fixtures import (  # noqa: F401
