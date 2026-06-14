@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build the research-VM image with Apple `container`. Bartleby (latest release
-# tag) and decant (main) are pulled from GitHub inside the build, so there's no
-# local source to stage — the build context is just this directory. Re-run to
-# pick up a newer Bartleby release / newer decant main.
+# Build the research-VM image with Apple `container`. Bartleby (a release tag,
+# resolved here on the host) and decant (main) are pulled from GitHub inside the
+# build, so there's no local source to stage — the build context is just this
+# directory. Re-run to pick up a newer Bartleby release / newer decant main.
 #
 # Self-cleaning so it can't silently bloat your disk (see "Disk & cleanup" in the
 # runbook): deletes the prior image before building and resets the BuildKit cache
@@ -12,6 +12,11 @@
 #
 # Env:
 #   IMAGE             image tag                   (default: bartleby-pi:latest)
+#   BARTLEBY_REF      Bartleby git ref to install (default: latest v* release tag,
+#                     resolved here). Passed to the build as a build-arg so the
+#                     install layer's cache busts when the release changes — a
+#                     RUN that resolved "latest" itself would cache on its command
+#                     text and silently reinstall a stale tag. Override to pin.
 #   WITH_DECANT       set=1 to add decant, a VM-local Ollama, and the ~7.2 GB
 #                     distill model for in-VM web fetch/search. Default: 0 — a
 #                     lean, corpus-only image with no web reach.
@@ -34,17 +39,28 @@ command -v container >/dev/null || {
   exit 1
 }
 
+# Resolve the Bartleby release tag on the HOST (not inside a cacheable RUN) and
+# pass it as a build-arg, so the install layer rebuilds when a new release lands.
+BARTLEBY_REF="${BARTLEBY_REF:-$(git ls-remote --tags --refs \
+  https://github.com/jswest/bartleby.git 'v*' | awk -F/ '{print $NF}' | sort -V | tail -1)}"
+[ -n "${BARTLEBY_REF}" ] || {
+  echo "Could not resolve a Bartleby release tag (git ls-remote returned nothing)." >&2
+  echo "Check your network, or pin one: BARTLEBY_REF=v0.10.1 ./scripts/pi-vm/build.sh" >&2
+  exit 1
+}
+
 # Drop any prior image first: each rebuild re-tags :latest and orphans the old
 # digest's layers, which `container` has no reliable prune for. Deleting up front
 # keeps exactly one image on disk. (If this build fails, just re-run to recover.)
 container image delete "${IMAGE}" >/dev/null 2>&1 || true
 
 if [ "${WITH_DECANT}" = "1" ]; then
-  echo "Building ${IMAGE} (bartleby=latest release, decant=main, DECANT_MODEL=${DECANT_MODEL}) ..." >&2
+  echo "Building ${IMAGE} (bartleby=${BARTLEBY_REF}, decant=main, DECANT_MODEL=${DECANT_MODEL}) ..." >&2
 else
-  echo "Building ${IMAGE} (bartleby=latest release, WITH_DECANT=0 — lean, no decant/Ollama/model) ..." >&2
+  echo "Building ${IMAGE} (bartleby=${BARTLEBY_REF}, WITH_DECANT=0 — lean, no decant/Ollama/model) ..." >&2
 fi
 container build \
+  --build-arg "BARTLEBY_REF=${BARTLEBY_REF}" \
   --build-arg "WITH_DECANT=${WITH_DECANT}" \
   --build-arg "DECANT_MODEL=${DECANT_MODEL}" \
   -t "${IMAGE}" \
