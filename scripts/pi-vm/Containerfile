@@ -34,12 +34,16 @@ RUN if [ "$WITH_DECANT" = "1" ]; then \
 # at /usr/local/bin. --ignore-scripts is what Pi's own docs recommend.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
-# --- Bartleby (latest release tag), pulled from GitHub ---
+# --- Bartleby (release tag), pulled from GitHub ---
 # Public over HTTPS, so no auth in the build. Ingestion runs on the HOST, so the
 # VM needs no [docling]/[sec2md] extras — the agent only searches/reads/cites an
 # already-ingested corpus.
-RUN BARTLEBY_REF="$(git ls-remote --tags --refs https://github.com/jswest/bartleby.git 'v*' \
-                    | awk -F/ '{print $NF}' | sort -V | tail -1)" \
+#
+# The tag is resolved on the HOST by build.sh and passed in as BARTLEBY_REF, so
+# this layer's cache key changes with each release. Resolving "latest" inside the
+# RUN instead would cache on the command text and silently reinstall a stale tag.
+ARG BARTLEBY_REF
+RUN test -n "${BARTLEBY_REF}" \
     && echo "Installing bartleby ${BARTLEBY_REF}" \
     && uv tool install "git+https://github.com/jswest/bartleby.git@${BARTLEBY_REF}"
 
