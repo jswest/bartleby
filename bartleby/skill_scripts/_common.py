@@ -128,8 +128,15 @@ def reject_malformed_citations(body: str) -> None:
     These markers render as bracketed prose but are silently ignored by the
     citation extractor, so the claim ends up effectively uncited. Refuse
     loudly so the agent fixes the typo before persisting.
+
+    External markers (``[^<scheme>:<ref>]``) may legitimately carry a ``[N]``-shaped
+    substring inside the ref (e.g. a URL ending ``…/doc[3]``), whose closing bracket
+    is also the marker's — so scan a copy with external markers masked out, else a
+    valid external citation false-trips this guard. (Refs may not themselves contain
+    ``]``; that terminates the marker — percent-encode it.)
     """
-    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(body)]
+    scrubbed = _EXTERNAL_MARKER.sub(" ", body)
+    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(scrubbed)]
     if not bad:
         return
     deduped = list(dict.fromkeys(bad))

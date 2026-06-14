@@ -20,8 +20,10 @@ import pytest
 
 from bartleby.skill_scripts import read_finding, save_finding
 from bartleby.skill_scripts._common import (
+    SkillError,
     extract_citations,
     extract_external_citations,
+    reject_malformed_citations,
 )
 from bartleby.db.connection import open_db
 from tests._skill_fixtures import (  # noqa: F401
@@ -74,6 +76,18 @@ def test_extract_external_citations_ignores_malformed_markers():
     """extract_* silently skips ill-formed markers; the save-time check is what
     rejects them. Unknown scheme and blank ref both drop out here."""
     assert extract_external_citations("[^ftp:nope] [^url:]") == []
+
+
+def test_malformed_check_ignores_bracketed_digits_inside_external_ref():
+    """A ``[N]``-shaped substring inside an external ref (e.g. a URL ending
+    ``…/doc[3]``) must not false-trip the caret-less-marker guard when a valid
+    chunk citation is present. Regression for the #563×malformed-check seam."""
+    body = "Corpus[^42]. Web[^url:https://example.com/doc[3]]."
+    reject_malformed_citations(body)  # must not raise
+    # A genuine caret-less [N] outside any external marker is still rejected.
+    with pytest.raises(SkillError) as exc:
+        reject_malformed_citations("Bad cite [5] here.")
+    assert exc.value.code == "MALFORMED_CITATION"
 
 
 # --- integration: save / read ------------------------------------------------
