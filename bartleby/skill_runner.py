@@ -21,10 +21,13 @@ and calls :func:`run`. The runner:
 - Exits 0 on success and 1 on failure.
 
 A script that mutates the DB passes ``mutates=True`` to :func:`run`; the runner
-then wraps the ``work`` call in a single ``with conn:`` transaction so the whole
-mutation commits or rolls back atomically. Read-only scripts (the default) open
-no transaction. The audit write always lands, transaction or not — including
-when a mutation rolled back.
+then wraps the ``work`` call in a single ``BEGIN IMMEDIATE`` transaction so the
+whole mutation commits or rolls back atomically. ``BEGIN IMMEDIATE`` (rather
+than apsw's deferred ``with conn:``) takes the write lock up front so concurrent
+writers serialize under ``busy_timeout`` instead of failing the read-to-write
+upgrade with an instant ``BusyError`` (see the comment at the seam). Read-only
+scripts (the default) open no transaction. The audit write always lands,
+transaction or not — including when a mutation rolled back.
 """
 
 from __future__ import annotations
@@ -194,16 +197,32 @@ def run(
             session_id = ensure_active_session(project)
         if mutates:
             # One transaction at the seam: a mutating script's entire ``work``
-            # commits or rolls back atomically. apsw's ``with conn:`` is a
-            # deferred transaction (no write lock until the first write), and
-            # the ``with conn:`` blocks inside the chunk helpers nest under it
-            # as savepoints rather than committing independently — so a partial
-            # write (e.g. chunks deleted but the row delete then raises) leaves
-            # nothing behind. The audit ``log_call`` below stays OUTSIDE this
-            # block on purpose: a rolled-back mutation must still record that it
-            # was attempted and failed.
-            with conn:
+            # commits or rolls back atomically. We open it with an explicit
+            # ``BEGIN IMMEDIATE`` rather than apsw's ``with conn:`` (a *deferred*
+            # transaction). A deferred txn takes no write lock until its first
+            # write, so a ``work`` that reads before writing hits the SQLite
+            # read-to-write upgrade trap: the upgrade returns ``SQLITE_BUSY``
+            # immediately, *ignoring* ``busy_timeout`` (the timeout governs the
+            # initial lock acquisition, not a mid-transaction upgrade). With a
+            # handful of concurrent finding writes into one session that meant a
+            # spurious first-attempt ``BusyError`` instead of serializing.
+            # Taking the write lock up front makes ``busy_timeout`` (set in
+            # ``connection._attach``) govern the wait, so concurrent writers
+            # block and serialize. The ``with conn:`` blocks inside the chunk
+            # helpers still nest under this open transaction as savepoints
+            # rather than committing independently, so a partial write (e.g.
+            # chunks deleted but the row delete then raises) leaves nothing
+            # behind. The audit ``log_call`` below stays OUTSIDE this block on
+            # purpose: a rolled-back mutation must still record that it was
+            # attempted and failed.
+            conn.cursor().execute("BEGIN IMMEDIATE")
+            try:
                 result = work(conn=conn, args=args, session_id=session_id)
+            except BaseException:
+                conn.cursor().execute("ROLLBACK")
+                raise
+            else:
+                conn.cursor().execute("COMMIT")
         else:
             result = work(conn=conn, args=args, session_id=session_id)
     except SkillError as e:

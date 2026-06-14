@@ -52,9 +52,16 @@ def _attach(conn: apsw.Connection) -> None:
     conn.enable_load_extension(False)
     cur = conn.cursor()
     cur.execute("PRAGMA foreign_keys = ON")
+    # busy_timeout MUST be set before `journal_mode = WAL`: that pragma itself
+    # takes a database lock, so when several connections open the same project
+    # DB concurrently (e.g. a handful of agents writing findings at once),
+    # whichever runs the WAL pragma second would get an instant BusyError with
+    # no timeout configured yet. Setting the timeout first makes every later
+    # statement — the WAL pragma and the `BEGIN IMMEDIATE` at the mutating seam
+    # — wait out a held lock instead of failing on first contact (#562).
+    cur.execute("PRAGMA busy_timeout = 5000")
     cur.execute("PRAGMA journal_mode = WAL")
     cur.execute("PRAGMA synchronous = NORMAL")
-    cur.execute("PRAGMA busy_timeout = 5000")
 
 
 def open_db(project_name: str | None = None) -> apsw.Connection:

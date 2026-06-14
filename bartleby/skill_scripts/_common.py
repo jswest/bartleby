@@ -20,6 +20,15 @@ _CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
 # Bare ``[N]`` — looks like a citation, isn't one. Doesn't match ``[^N]`` because
 # the ``^`` sits between the bracket and the digits.
 _MALFORMED_MARKER = re.compile(r"\[(\d+)\]")
+# External citation marker: ``[^url:<url>]`` / ``[^doc:<ref>]``. The scheme is an
+# alpha word, so the digit-only ``_CITATION_MARKER`` never matches it — external
+# markers don't count toward the ≥1 corpus-chunk requirement (a finding with only
+# external markers is still rejected). The ref is captured opaque (no parsing, no
+# fetch) up to the closing bracket.
+_EXTERNAL_MARKER = re.compile(r"\[\^([A-Za-z]+):([^\]]+)\]")
+# Schemes an external marker may carry. ``url`` is a web link; ``doc`` is an
+# external-dataset document ref (e.g. a filing id). Both are stored opaque.
+_EXTERNAL_SCHEMES = ("url", "doc")
 
 
 def text_qualified_fts(fts_expr: str) -> str:
@@ -46,14 +55,88 @@ def extract_citations(body: str) -> list[int]:
     return list(seen)
 
 
+def _well_formed_external(m: re.Match) -> tuple[str, str] | None:
+    """``(scheme, ref)`` for a well-formed external marker, else ``None``.
+
+    The single well-formedness predicate — a known scheme (``url`` / ``doc``)
+    and a non-blank ref — shared by the skip-on-bad extractor and the raise-on-bad
+    save-time check so the rule can't drift between them. Normalizes scheme to
+    lowercase and strips the ref.
+    """
+    scheme, ref = m.group(1).lower(), m.group(2).strip()
+    if scheme not in _EXTERNAL_SCHEMES or not ref:
+        return None
+    return scheme, ref
+
+
+def extract_external_citations(body: str) -> list[dict]:
+    """Return external citations from ``[^url:…]`` / ``[^doc:…]`` markers.
+
+    Each entry is ``{"scheme": "url"|"doc", "ref": <opaque str>}`` in
+    first-appearance order, deduped on ``(scheme, ref)``. These markers ride
+    *alongside* the mandatory ``[^N]`` chunk citations — never as a substitute:
+    the scheme is alpha, so :func:`extract_citations` (digit-only) ignores them
+    and the ≥1-chunk requirement is unchanged. The ref is opaque — it is not
+    parsed, validated as a real URL, or fetched (no network, per the guardrail);
+    only its well-formedness (a known scheme, non-blank ref) is checked at save
+    time by :func:`reject_malformed_external_citations`. Ill-formed markers that
+    somehow reached a stored body are left in the text but not promoted here.
+    Computed on read; no DB row backs it (see the body-marker-not-table decision).
+    """
+    seen: dict[tuple[str, str], None] = {}
+    out: list[dict] = []
+    for m in _EXTERNAL_MARKER.finditer(body):
+        parsed = _well_formed_external(m)
+        if parsed is None or parsed in seen:
+            continue
+        seen[parsed] = None
+        out.append({"scheme": parsed[0], "ref": parsed[1]})
+    return out
+
+
+def reject_malformed_external_citations(body: str) -> None:
+    """Raise ``MALFORMED_EXTERNAL_CITATION`` for an ill-formed external marker.
+
+    External markers (``[^<scheme>:<ref>]``) must carry a known scheme
+    (``url`` / ``doc``) and a non-blank ref. A marker with an unknown scheme
+    (e.g. ``[^ftp:…]``) or an empty ref (``[^url:]``) renders as bracketed prose
+    but is silently dropped by :func:`extract_external_citations`, so the
+    external attribution is effectively lost. Refuse loudly so the agent fixes
+    it before persisting. The ref itself is never fetched or otherwise validated
+    beyond non-blankness — it is stored opaque.
+    """
+    bad = [
+        m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
+        if _well_formed_external(m) is None
+    ]
+    if not bad:
+        return
+    bad = list(dict.fromkeys(bad))
+    raise SkillError(
+        "MALFORMED_EXTERNAL_CITATION",
+        f"Found {len(bad)} ill-formed external citation marker(s): "
+        f"{', '.join(bad)}. Write them as [^url:<url>] or [^doc:<ref>] "
+        f"with a known scheme ({', '.join(_EXTERNAL_SCHEMES)}) and a non-blank "
+        "ref.",
+        malformed_markers=bad,
+    )
+
+
 def reject_malformed_citations(body: str) -> None:
     """Raise ``MALFORMED_CITATION`` if the body contains ``[N]`` (missing ``^``).
 
     These markers render as bracketed prose but are silently ignored by the
     citation extractor, so the claim ends up effectively uncited. Refuse
     loudly so the agent fixes the typo before persisting.
+
+    External markers (``[^<scheme>:<ref>]``) may legitimately carry a ``[N]``-shaped
+    substring inside the ref (e.g. a URL ending ``…/doc[3]``), whose closing bracket
+    is also the marker's — so scan a copy with external markers masked out, else a
+    valid external citation false-trips this guard. (Refs may not themselves contain
+    ``]``; that terminates the marker — percent-encode it.)
     """
-    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(body)]
+    scrubbed = _EXTERNAL_MARKER.sub(" ", body)
+    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(scrubbed)]
     if not bad:
         return
     deduped = list(dict.fromkeys(bad))
@@ -220,8 +303,10 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
     The single read+validate path shared by ``save_finding``, ``edit_finding``,
     and ``merge_findings``: existence (``BODY_FILE_NOT_FOUND``), non-empty
     (``EMPTY_BODY``), no caret-less ``[N]`` markers (``MALFORMED_CITATION``),
-    at least one ``[^N]`` marker (``NO_INLINE_CITATIONS``), and every cited
-    chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
+    every external ``[^url:…]``/``[^doc:…]`` marker well-formed
+    (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^N]`` chunk marker
+    (``NO_INLINE_CITATIONS`` — external markers never satisfy this), and every
+    cited chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
     first-appearance order, deduped.
     """
     body_path = Path(body_file)
@@ -235,6 +320,7 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
     reject_malformed_citations(body)
+    reject_malformed_external_citations(body)
     citations = extract_citations(body)
     if not citations:
         raise SkillError(

@@ -1111,3 +1111,130 @@ def test_scan_count_by_regex_rejects_returning(scan_corpus, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "RETURNING_NOT_APPLICABLE"
+
+
+# --- Zero-result coverage diagnosis (issue #561) -----------------------------
+
+
+def test_scan_zero_absent_term_diagnosis(scan_corpus, capsys):
+    """A term nowhere in the corpus → verdict 'absent', every COUNT 0."""
+    _run(scan_corpus, ["zygomorphic nonexistent phrase"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    diag = out["diagnosis"]
+    assert diag["verdict"] == "absent"
+    assert diag["body_in_scope"] == 0
+    assert diag["body_corpus_wide"] == 0
+    assert diag["heading_in_scope"] == 0
+    assert diag["heading_corpus_wide"] == 0
+    assert "search" in diag["hint"]
+
+
+def test_scan_zero_out_of_scope_diagnosis(scan_corpus, capsys):
+    """MARKER scoped to d3 (which lacks it) → 'out_of_scope': body hits exist
+    corpus-wide but none in this scope."""
+    _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d3"])])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    diag = out["diagnosis"]
+    assert diag["verdict"] == "out_of_scope"
+    assert diag["body_in_scope"] == 0
+    assert diag["body_corpus_wide"] == 3  # d1 x2, d2 x1
+    assert diag["heading_corpus_wide"] == 0
+
+
+def test_scan_zero_filtered_out_by_heading_like_diagnosis(scan_corpus, capsys):
+    """MARKER --heading-like 'SECTION%' → 'filtered_out': the MARKER chunks have
+    no heading, so the chunk-level filter drops body hits that exist in scope."""
+    _run(scan_corpus, [MARKER, "--heading-like", "SECTION%"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    diag = out["diagnosis"]
+    assert diag["verdict"] == "filtered_out"
+    # heading_like is stripped for the diagnosis, so body hits in scope show.
+    assert diag["body_in_scope"] == 3
+    assert diag["body_corpus_wide"] == 3
+
+
+def test_scan_nonzero_result_has_no_diagnosis(scan_corpus, capsys):
+    """The diagnosis fires only on the zero path — a hit-bearing scan omits it."""
+    _run(scan_corpus, [MARKER])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 3
+    assert "diagnosis" not in out
+
+
+def test_scan_deep_empty_page_has_no_diagnosis(scan_corpus, capsys):
+    """A deep empty page past real matches keeps total > 0, so no diagnosis —
+    there ARE matches, just not on this page."""
+    _run(scan_corpus, [MARKER, "--offset", "99"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 3
+    assert out["matches"] == []
+    assert "diagnosis" not in out
+
+
+def test_scan_empty_query_token_set_no_diagnosis(scan_corpus, capsys):
+    """A query that tokenizes to nothing (punctuation only) yields no FTS
+    expression to COUNT, so it carries no diagnosis."""
+    _run(scan_corpus, ['""'])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert "diagnosis" not in out
+
+
+def test_scan_zero_diagnosis_on_count_by_document(scan_corpus, capsys):
+    """The empty-histogram path attaches the diagnosis too."""
+    _run(scan_corpus, [MARKER, "--count-by", "document",
+                       "--in-documents", str(scan_corpus["d3"])])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_document_count"] == 0
+    assert out["diagnosis"]["verdict"] == "out_of_scope"
+
+
+def test_scan_zero_diagnosis_on_count_by_regex(scan_corpus, capsys):
+    """The empty-bucket --count-by /regex/ path attaches the diagnosis too."""
+    _run(scan_corpus, ["nonexistent term here", "--count-by", "/(ACME|BETA)/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["distinct_value_count"] == 0
+    assert out["diagnosis"]["verdict"] == "absent"
+
+
+def test_scan_zero_diagnosis_on_extract(scan_corpus, capsys):
+    """The empty --extract table path attaches the diagnosis too."""
+    _run(scan_corpus, ["nonexistent term here",
+                       "--extract", r"/\$(?P<amount>[\d,]+)/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["rows"] == []
+    assert out["diagnosis"]["verdict"] == "absent"
+
+
+def test_scan_zero_heading_only_diagnosis(project_env, capsys):  # noqa: F811
+    """A term living ONLY in a section_heading (never the body) → 'heading_only':
+    scan's body-qualified match returns nothing, but the heading COUNT sees it."""
+    conn = open_db(project_env)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("hh", "headingonly.txt", "/tmp/headingonly.txt", 1, 10),
+        )
+        doc = conn.last_insert_rowid()
+        insert_document_chunks(conn, doc, [
+            ChunkInput(text="Body prose with no special marker at all.",
+                       embedding=_emb(0.0), chunk_index=0,
+                       section_heading="Quarterly Appropriations Rider",
+                       page_number=1, content_type="sec_text"),
+        ])
+    finally:
+        conn.close()
+
+    scan.main(["--project", project_env, "Appropriations Rider"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    diag = out["diagnosis"]
+    assert diag["verdict"] == "heading_only"
+    assert diag["body_corpus_wide"] == 0
+    assert diag["heading_corpus_wide"] == 1

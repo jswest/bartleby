@@ -185,6 +185,39 @@ Extract capture table (``--extract '/regex/'``, repeatable):
       ]
     }
 
+Zero-result diagnosis:
+    When a scan returns nothing — no matches, an empty histogram, an empty
+    capture table — the envelope carries a ``diagnosis`` block (computed with a
+    handful of cheap COUNTs fired **only** on that zero path, never on the hot
+    path) that distinguishes "absent" from "present on a surface scan doesn't
+    match". scan matches body ``text`` only, column-qualified, so a ``0`` is
+    ambiguous: the term may live in *other documents* outside the scope, in a
+    chunk's ``section_heading`` (which scan never matches), or only *semantically*
+    (no literal token — only ``search`` can confirm that).
+
+    {
+      "diagnosis": {
+        "verdict": "absent" | "out_of_scope" | "heading_only" | "filtered_out",
+        "body_in_scope": int,        # body matches inside the active scope
+        "body_corpus_wide": int,     # body matches ignoring every scope filter
+        "heading_in_scope": int,     # section_heading matches inside the scope
+        "heading_corpus_wide": int,  # section_heading matches corpus-wide
+        "hint": str                  # points at --heading-like / search
+      }
+    }
+
+    ``verdict`` reads the cheap signal: ``absent`` (no body/heading hit anywhere),
+    ``out_of_scope`` (body hits exist but only outside this scope),
+    ``heading_only`` (the term lives only in headings — reach it with
+    ``--heading-like`` or ``search``), ``filtered_out`` (body hits exist *in
+    scope* but a chunk-level filter like ``--heading-like`` dropped them). It is a
+    hint, not a guarantee: a purely-semantic presence is invisible to these
+    COUNTs and only confirmable with ``search``. An empty query carries no
+    diagnosis (there is no FTS expression to count). The diagnosis keys off the
+    full unpaginated ``total`` (not the current page), so a deep empty page past
+    real matches — where ``total`` is still > 0 — carries no diagnosis: there
+    are matches, just not on this page.
+
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
 intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
@@ -496,6 +529,110 @@ def _count_by_regex(cur, where: str, params: list, spec: CaptureSpec) -> tuple[C
     return counter, False
 
 
+def _heading_qualified_fts(fts_expr: str) -> str:
+    """Column-qualify an FTS5 MATCH expression to the ``section_heading`` column.
+
+    The heading-side mirror of :func:`text_qualified_fts`: ``{section_heading} :
+    (<expr>)`` confines the diagnosis COUNT to chunk headings, so it counts only
+    where the term lives in a heading and never in the body. Returns the
+    expression unchanged when empty.
+    """
+    if not fts_expr:
+        return fts_expr
+    return f"{{section_heading}} : ({fts_expr})"
+
+
+def _count_match(cur, column_fts: str, restrict: list | None) -> int:
+    """COUNT document chunks whose ``column_fts`` MATCH holds, optionally scoped.
+
+    A single cheap COUNT over ``chunks_fts`` joined to ``chunks`` — the diagnosis
+    primitive. ``restrict`` is the scope's resolved document-id set (``None`` =
+    whole corpus); ``column_fts`` is an already-column-qualified FTS expression
+    (body via :func:`text_qualified_fts`, heading via :func:`_heading_qualified_fts`).
+    Heading-like / pagination never reach here — the diagnosis answers "where does
+    the signal live", not "what did this exact filtered scan return".
+    """
+    where = "chunks_fts MATCH ? AND c.source_kind = 'document'"
+    params: list = [column_fts]
+    if restrict is not None:
+        placeholders = ",".join("?" * len(restrict))
+        where += f" AND c.source_id IN ({placeholders})"
+        params.extend(restrict)
+    return cur.execute(
+        f"SELECT COUNT(*) FROM chunks_fts "
+        f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+        f"WHERE {where}",
+        params,
+    ).fetchone()[0]
+
+
+def _build_diagnosis(cur, fts_query: str, restrict: list | None) -> dict:
+    """Coverage-aware diagnosis for a zero-result scan (fired only on that path).
+
+    scan matches body ``text`` only, column-qualified — so a ``0`` can mean
+    "absent" OR "present on a surface scan doesn't match". A handful of cheap
+    COUNTs distinguish those cases without touching the hot path:
+
+    - ``body_in_scope`` — body matches inside the active scope (with the
+      ``--heading-like`` chunk filter and pagination stripped). > 0 here means the
+      filtered scan returned 0 only because ``--heading-like`` (or another
+      chunk-level narrowing) excluded the body hits, not because the term is absent.
+    - ``body_corpus_wide`` — body matches ignoring every scope filter. > 0 while
+      ``body_in_scope`` is 0 means the term is present in *other documents* outside
+      the scope.
+    - ``heading_in_scope`` / ``heading_corpus_wide`` — the same split for
+      ``section_heading`` matches, which scan's body-qualified MATCH never returns.
+      > 0 means the term lives in a heading; reach it with ``--heading-like`` or
+      ``search`` (whose semantic leg contextualizes headings into the embedding).
+
+    ``verdict`` summarizes the cheap signal: ``absent`` (nothing anywhere),
+    ``out_of_scope`` (body hits exist but only outside the scope),
+    ``heading_only`` (only headings carry the term), or ``filtered_out`` (body
+    hits exist in scope but a chunk-level filter dropped them). It is a hint, not
+    a guarantee — only ``search`` can confirm a purely-*semantic* presence, which
+    scan cannot compute cheaply; that path is noted in ``hint``.
+    """
+    body_fts = text_qualified_fts(fts_query)
+    heading_fts = _heading_qualified_fts(fts_query)
+
+    body_corpus_wide = _count_match(cur, body_fts, None)
+    heading_corpus_wide = _count_match(cur, heading_fts, None)
+    # "in scope" follows the *document-level* restrict only; --heading-like is a
+    # chunk-level filter and is deliberately stripped here, so body_in_scope > 0
+    # on a zero scan means that filter (not absence) dropped the body hits.
+    if restrict is None:
+        # No document-level scope: in-scope equals corpus-wide, no extra COUNTs.
+        body_in_scope, heading_in_scope = body_corpus_wide, heading_corpus_wide
+    elif restrict:
+        body_in_scope = _count_match(cur, body_fts, restrict)
+        heading_in_scope = _count_match(cur, heading_fts, restrict)
+    else:
+        # Scope resolved to no documents — nothing in scope can match.
+        body_in_scope = heading_in_scope = 0
+
+    if body_in_scope:
+        verdict = "filtered_out"  # body hits in scope, dropped by a chunk filter
+    elif body_corpus_wide:
+        verdict = "out_of_scope"  # body hits exist, just not in this scope
+    elif heading_in_scope or heading_corpus_wide:
+        verdict = "heading_only"  # term lives only in headings
+    else:
+        verdict = "absent"  # no body/heading hit anywhere in the corpus
+
+    return {
+        "verdict": verdict,
+        "body_in_scope": body_in_scope,
+        "body_corpus_wide": body_corpus_wide,
+        "heading_in_scope": heading_in_scope,
+        "heading_corpus_wide": heading_corpus_wide,
+        "hint": (
+            "scan matches body text only. Headings are reachable via "
+            "--heading-like or search; a purely-semantic presence (no literal "
+            "token) is only confirmable with search."
+        ),
+    }
+
+
 def _project_count_by_document(full: dict, returning: list[str] | None) -> dict:
     """Project a --count-by document row to --returning, or its default.
 
@@ -570,16 +707,24 @@ def work(*, conn, args, session_id) -> dict:
 
     cur = conn.cursor()
 
+    def _with_diagnosis(env: dict) -> dict:
+        """Attach the coverage-aware ``diagnosis`` block — only fired here, on a
+        confirmed zero result, so the extra COUNTs stay off the hot path. An empty
+        token set carries no FTS expression to COUNT, so it gets no diagnosis."""
+        if fts_query:
+            env["diagnosis"] = _build_diagnosis(cur, fts_query, restrict)
+        return env
+
     if extract_specs is not None:
         # Per matching chunk: chunk_id/document_id/file_name plus each spec's
         # captured columns (first match per spec; null cells for a non-matching
         # spec, never dropping the row). Paginated like default mode with an
         # honest `total`; the column set is echoed so the table is self-describing.
         if no_match:
-            return _envelope({
+            return _with_diagnosis(_envelope({
                 "offset": args.offset, "limit": args.limit, "total": 0,
                 "columns": extract_columns, "rows": [],
-            })
+            }))
         total = _count_total(cur, where, params)
         rows_out = []
         page_end = args.offset + args.limit
@@ -600,10 +745,11 @@ def work(*, conn, args, session_id) -> dict:
             for spec in extract_specs:
                 row.update(spec.extract_first(text))
             rows_out.append(row)
-        return _envelope({
+        env = _envelope({
             "offset": args.offset, "limit": args.limit, "total": total,
             "columns": extract_columns, "rows": rows_out,
         })
+        return _with_diagnosis(env) if total == 0 else env
 
     if count_mode == "regex":
         if args.returning is not None:
@@ -623,7 +769,7 @@ def work(*, conn, args, session_id) -> dict:
         # documents/dates, so chronological ordering is meaningless here.
         ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
         page = ordered[args.offset : args.offset + args.limit]
-        return _envelope({
+        env = _envelope({
             "count_by": args.count_by,
             "offset": args.offset,
             "limit": args.limit,
@@ -632,6 +778,7 @@ def work(*, conn, args, session_id) -> dict:
             "truncated": truncated,
             "groups": [{"value": value, "count": count} for value, count in page],
         })
+        return _with_diagnosis(env) if not counter else env
 
     if count_mode == "document":
         validate_returning(args.returning, COUNT_BY_DOCUMENT_FIELDS)
@@ -665,7 +812,7 @@ def work(*, conn, args, session_id) -> dict:
                     [*params, args.limit, args.offset],
                 )
             ]
-        return _envelope({
+        env = _envelope({
             "count_by": "document",
             "offset": args.offset,
             "limit": args.limit,
@@ -673,17 +820,17 @@ def work(*, conn, args, session_id) -> dict:
             "total_chunk_count": total_chunk_count,
             "documents": documents,
         })
+        return _with_diagnosis(env) if total_chunk_count == 0 else env
 
     # Default mode: paginated per-chunk matches.
     validate_returning(args.returning, MATCH_FIELDS)
     preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
-    if no_match:
-        return _envelope({
+    total = 0 if no_match else _count_total(cur, where, params)
+    if total == 0:
+        return _with_diagnosis(_envelope({
             "offset": args.offset, "limit": args.limit, "total": 0,
             "preview": preview, "matches": [],
-        })
-
-    total = _count_total(cur, where, params)
+        }))
 
     # authored_date rides the summaries LEFT JOIN that --sort date already needs —
     # the canonical summarizer-inferred date that list_documents and the date
