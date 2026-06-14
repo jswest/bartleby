@@ -343,6 +343,9 @@ input[type="number"] {
 .markdown-body {
   font-family: var(--font-serif);
   line-height: 1.6;
+  /* Long unbreakable tokens (URLs, hashes, dotted entity strings) wrap inside
+     the column instead of spilling past its right edge onto the viewer. */
+  overflow-wrap: break-word;
 }
 .markdown-body > * + * {
   margin-top: var(--space-lg);
@@ -448,6 +451,14 @@ input[type="number"] {
   margin: var(--space-2xl) 0;
 }
 .markdown-body table {
+  /* A wide table scrolls horizontally *within* the report column rather than
+     painting over the sticky viewer. A table box can't establish its own
+     scroll container, so render it as a block that sizes to its content
+     (max-content) but is capped at the column width (max-width:100%). */
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   font-family: var(--font-sans);
   font-size: var(--text-sm);
