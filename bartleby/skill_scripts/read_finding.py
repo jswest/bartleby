@@ -36,8 +36,16 @@ Output:
         "file_name": str|null,
         "page_number": int|null,
       }, ...],
+      "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
       "dangling_citations": [int, ...]   # [^N] markers with no resolved citation
     }
+
+``external_citations`` are the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in the
+body — supplementary external attributions that ride *alongside* (never replace)
+the required corpus-chunk citations. They carry no DB row; they're parsed from
+the body on read, so the marker text is the single source of truth. The ``ref``
+is opaque (never fetched). A finding still needs ≥1 ``[^N]`` chunk citation, so
+``external_citations`` may be present even when ``citations`` is too.
 
 ``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
 can still read findings *this* session authored; reading a finding written by
@@ -53,6 +61,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     extract_citations,
+    extract_external_citations,
     finding_chunk_and_citation_ids,
     positive_int,
     resolve_citations,
@@ -104,6 +113,7 @@ def work(*, conn, args, session_id) -> dict:
         "created_at": created_at,
         "chunk_ids": chunk_ids,
         "citations": citations,
+        "external_citations": extract_external_citations(body),
         "dangling_citations": dangling,
     }
 

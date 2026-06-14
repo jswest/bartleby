@@ -28,8 +28,13 @@ plus ``merged_from``:
         "file_name": str|null,
         "page_number": int|null,
       }, ...],
+      "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
       "merged_from": [int, ...]     # source ids folded in and deleted
     }
+
+``external_citations`` echo the merged body's ``[^url:…]`` / ``[^doc:…]``
+markers — supplementary external attributions alongside (never replacing) the
+required ``[^N]`` chunk citations; no DB row, parsed from the body, ref opaque.
 
 ``FINDING_NOT_FOUND`` (with the offending ids) when the target or any source
 is missing; ``TARGET_IN_SOURCES`` when ``--into`` is also in ``--from``. In a
@@ -50,6 +55,7 @@ from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     comma_int_list,
     embed_body_chunks,
+    extract_external_citations,
     load_finding_body,
     positive_int,
     reject_citations_to_involved_findings,
@@ -157,6 +163,7 @@ def work(*, conn, args, session_id) -> dict:
         "body": body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),
+        "external_citations": extract_external_citations(body),
         "merged_from": sources,
     }
 

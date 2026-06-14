@@ -20,8 +20,13 @@ works after an edit):
       "model": str|null, "harness": str|null,
       "body": str,
       "chunk_ids": [int, ...],
-      "citations": [{...}, ...]
+      "citations": [{...}, ...],
+      "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...]
     }
+
+``external_citations`` echo the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in
+the body — supplementary external attributions alongside (never replacing) the
+required ``[^N]`` chunk citations; no DB row, parsed from the body, ref opaque.
 
 ``session_id`` / ``session_name`` (and ``model`` / ``harness``) describe the
 session that *owns* the finding (its original author), not the current
@@ -41,6 +46,7 @@ from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     embed_body_chunks,
+    extract_external_citations,
     finding_chunk_and_citation_ids,
     load_finding_body,
     positive_int,
@@ -132,6 +138,7 @@ def work(*, conn, args, session_id) -> dict:
         "body": new_body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citation_ids),
+        "external_citations": extract_external_citations(new_body),
     }
 
 

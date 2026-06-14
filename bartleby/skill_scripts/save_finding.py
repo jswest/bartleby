@@ -20,8 +20,14 @@ Output:
         "source_kind": str, "source_name": str,
         "file_name": str|null,
         "page_number": int|null,
-      }, ...]
+      }, ...],
+      "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...]
     }
+
+``external_citations`` echo the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in
+the body — supplementary external attributions that ride alongside (never
+replace) the required ``[^N]`` chunk citations. They carry no DB row; the body
+text is their source of truth. The ref is opaque (never fetched).
 
 ``body`` is the exact markdown that landed in ``findings.body``. The agent
 is expected to echo it verbatim back to the user — see SKILL.md for the
@@ -38,6 +44,7 @@ import argparse
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     embed_body_chunks,
+    extract_external_citations,
     load_finding_body,
     replace_finding_citations,
     resolve_citations,
@@ -87,6 +94,7 @@ def work(*, conn, args, session_id) -> dict:
         "body": body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),
+        "external_citations": extract_external_citations(body),
     }
 
 
