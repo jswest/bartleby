@@ -3,6 +3,7 @@
   import { goto } from "$app/navigation";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
+  import SourceViewer from "$lib/components/SourceViewer.svelte";
   import { stripExt } from "$lib/format.js";
   import { CHUNK_ICON } from "$lib/icons.js";
   export let data;
@@ -84,9 +85,6 @@
 
   let active = null;
   $: activeUrl = active ? citationUrl(active) : null;
-  // Sandbox the viewer for non-PDF sources so an ingested HTML document can't run
-  // its scripts; PDFs keep the native viewer + #page= jumps. Unknown → sandboxed.
-  $: activeIsPdf = /\.pdf$/i.test(active?.file_name ?? "");
 
   function citationUrl(c) {
     if (c.document_id == null) return null;
@@ -151,15 +149,7 @@
   </article>
 
   <aside class="viewer">
-    {#if activeUrl}
-      {#key activeUrl}
-        <iframe title="Source document" src={activeUrl} sandbox={activeIsPdf ? undefined : ""}></iframe>
-      {/key}
-    {:else}
-      <p class="empty">
-        Click an inline citation to view the source PDF here.
-      </p>
-    {/if}
+    <SourceViewer fileName={active?.file_name} src={activeUrl} />
   </aside>
 </div>
 
