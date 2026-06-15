@@ -544,22 +544,26 @@ def _heading_qualified_fts(fts_expr: str) -> str:
     return f"{{section_heading}} : ({fts_expr})"
 
 
-def _count_match(cur, column_fts: str, restrict: list | None) -> int:
+def _count_match(
+    cur, column_fts: str,
+    restrict_sql: str, restrict_params: list,
+) -> int:
     """COUNT document chunks whose ``column_fts`` MATCH holds, optionally scoped.
 
     A single cheap COUNT over ``chunks_fts`` joined to ``chunks`` — the diagnosis
-    primitive. ``restrict`` is the scope's resolved document-id set (``None`` =
-    whole corpus); ``column_fts`` is an already-column-qualified FTS expression
-    (body via :func:`text_qualified_fts`, heading via :func:`_heading_qualified_fts`).
+    primitive. ``restrict_sql`` / ``restrict_params`` are the SQL fragment and bind
+    values from ``Scope.restrict_in("c.source_id")``: empty string for whole corpus,
+    ``"0"`` for an empty scope, or a subquery/IN predicate for a restricted scope.
+    ``column_fts`` is an already-column-qualified FTS expression (body via
+    :func:`text_qualified_fts`, heading via :func:`_heading_qualified_fts`).
     Heading-like / pagination never reach here — the diagnosis answers "where does
     the signal live", not "what did this exact filtered scan return".
     """
     where = "chunks_fts MATCH ? AND c.source_kind = 'document'"
     params: list = [column_fts]
-    if restrict is not None:
-        placeholders = ",".join("?" * len(restrict))
-        where += f" AND c.source_id IN ({placeholders})"
-        params.extend(restrict)
+    if restrict_sql:
+        where += f" AND {restrict_sql}"
+        params.extend(restrict_params)
     return cur.execute(
         f"SELECT COUNT(*) FROM chunks_fts "
         f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
@@ -568,7 +572,10 @@ def _count_match(cur, column_fts: str, restrict: list | None) -> int:
     ).fetchone()[0]
 
 
-def _build_diagnosis(cur, fts_query: str, restrict: list | None) -> dict:
+def _build_diagnosis(
+    cur, fts_query: str,
+    restrict_sql: str, restrict_params: list,
+) -> dict:
     """Coverage-aware diagnosis for a zero-result scan (fired only on that path).
 
     scan matches body ``text`` only, column-qualified — so a ``0`` can mean
@@ -597,20 +604,20 @@ def _build_diagnosis(cur, fts_query: str, restrict: list | None) -> dict:
     body_fts = text_qualified_fts(fts_query)
     heading_fts = _heading_qualified_fts(fts_query)
 
-    body_corpus_wide = _count_match(cur, body_fts, None)
-    heading_corpus_wide = _count_match(cur, heading_fts, None)
+    body_corpus_wide = _count_match(cur, body_fts, "", [])
+    heading_corpus_wide = _count_match(cur, heading_fts, "", [])
     # "in scope" follows the *document-level* restrict only; --heading-like is a
     # chunk-level filter and is deliberately stripped here, so body_in_scope > 0
     # on a zero scan means that filter (not absence) dropped the body hits.
-    if restrict is None:
+    if not restrict_sql:
         # No document-level scope: in-scope equals corpus-wide, no extra COUNTs.
         body_in_scope, heading_in_scope = body_corpus_wide, heading_corpus_wide
-    elif restrict:
-        body_in_scope = _count_match(cur, body_fts, restrict)
-        heading_in_scope = _count_match(cur, heading_fts, restrict)
-    else:
+    elif restrict_sql == "0":
         # Scope resolved to no documents — nothing in scope can match.
         body_in_scope = heading_in_scope = 0
+    else:
+        body_in_scope = _count_match(cur, body_fts, restrict_sql, restrict_params)
+        heading_in_scope = _count_match(cur, heading_fts, restrict_sql, restrict_params)
 
     if body_in_scope:
         verdict = "filtered_out"  # body hits in scope, dropped by a chunk filter
@@ -675,7 +682,12 @@ def work(*, conn, args, session_id) -> dict:
         authored_before=args.authored_before,
         include_nulls=args.include_nulls,
     )
-    restrict = scope.document_ids  # None = whole corpus, [] = empty, else a set
+    # Build the scope predicate once; all three query sites (main scan, _count_match
+    # diagnosis, _count_total) consume the same (restrict_sql, restrict_params) pair.
+    # scope.restrict_in returns ("", []) for whole corpus, ("0", []) for empty scope,
+    # or a subquery/IN predicate — which may join a temp table for high-cardinality
+    # file-like scopes, avoiding the SQLITE_MAX_VARIABLE_NUMBER limit (#632).
+    restrict_sql, restrict_params = scope.restrict_in("c.source_id")
 
     def _envelope(extra: dict) -> dict:
         env = scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
@@ -692,17 +704,16 @@ def work(*, conn, args, session_id) -> dict:
     fts_query = _build_fts_query(args.query, match_mode)
     # Nothing can match: an empty token set, or a scope that resolved to no
     # documents (an empty tag / in-documents / date slice).
-    no_match = not fts_query or (restrict is not None and not restrict)
+    no_match = not fts_query or restrict_sql == "0"
 
     # Confine MATCH to the body text (``{text} : (...)``) so a heading-only term
     # never inflates grep-totals with a snippet that doesn't contain it.
     # Deliberate heading recall stays available via --heading-like.
     where = "chunks_fts MATCH ? AND c.source_kind = 'document'"
     params: list = [text_qualified_fts(fts_query)]
-    if restrict is not None:
-        placeholders = ",".join("?" * len(restrict))
-        where += f" AND c.source_id IN ({placeholders})"
-        params.extend(restrict)
+    if restrict_sql:
+        where += f" AND {restrict_sql}"
+        params.extend(restrict_params)
     if args.heading_like:
         # OR the patterns within the group; the group ANDs with the rest. Pushed
         # down parameterized — the agent's pattern never reaches the SQL text.
@@ -717,7 +728,9 @@ def work(*, conn, args, session_id) -> dict:
         confirmed zero result, so the extra COUNTs stay off the hot path. An empty
         token set carries no FTS expression to COUNT, so it gets no diagnosis."""
         if fts_query:
-            env["diagnosis"] = _build_diagnosis(cur, fts_query, restrict)
+            env["diagnosis"] = _build_diagnosis(
+                cur, fts_query, restrict_sql, restrict_params,
+            )
         return env
 
     if extract_specs is not None:
