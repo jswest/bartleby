@@ -39,7 +39,8 @@ set -euo pipefail
 # Parse --model before the passthrough args so it doesn't reach `container run`.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)   shift; AGENT_MODEL="$1"; shift ;;
+    --model)   [ $# -ge 2 ] || { echo "--model requires a value" >&2; exit 1; }
+               AGENT_MODEL="$2"; shift 2 ;;
     --model=*) AGENT_MODEL="${1#--model=}"; shift ;;
     *)         break ;;
   esac
