@@ -391,7 +391,7 @@ def read_text_arg(
     """
     if file is not None:
         file_path = Path(file)
-        if not file_path.exists() or not file_path.is_file():
+        if not file_path.is_file():  # False for both missing paths and directories
             raise SkillError(
                 error_code,
                 f"--{flag}-file path does not exist: {file_path}",

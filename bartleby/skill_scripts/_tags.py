@@ -411,6 +411,20 @@ def resolve_scope(
 
     date_active = after is not None or before is not None
 
+    def _empty_scope(excluded: int = 0) -> "Scope":
+        """A zero-hit scope carrying the active filters (only the dropped-NULL
+        count varies between the short-circuit points)."""
+        return Scope(
+            document_ids=[],
+            in_documents=in_documents,
+            tags=tags or None,
+            file_like=file_like,
+            authored_after=after,
+            authored_before=before,
+            include_nulls=include_nulls,
+            excluded_null_dated=excluded,
+        )
+
     if file_like:
         # Build the temp table: start with all file-like matches, then intersect
         # with tags and in_documents inside SQLite (never in Python) to avoid
@@ -426,16 +440,7 @@ def resolve_scope(
         if in_documents is not None:
             if not in_documents:
                 # Explicit empty in_documents → nothing matches.
-                return Scope(
-                    document_ids=[],
-                    in_documents=in_documents,
-                    tags=tags or None,
-                    file_like=file_like,
-                    authored_after=after,
-                    authored_before=before,
-                    include_nulls=include_nulls,
-                    excluded_null_dated=0,
-                )
+                return _empty_scope()
             id_ph = ",".join("?" * len(in_documents))
             conditions.append(f"d.document_id IN ({id_ph})")
             params.extend(in_documents)
@@ -465,16 +470,7 @@ def resolve_scope(
             "SELECT COUNT(*) FROM _scope_file_like"
         ).fetchone()[0]
         if count == 0:
-            return Scope(
-                document_ids=[],
-                in_documents=in_documents,
-                tags=tags or None,
-                file_like=file_like,
-                authored_after=after,
-                authored_before=before,
-                include_nulls=include_nulls,
-                excluded_null_dated=0,
-            )
+            return _empty_scope()
 
         excluded = 0
         if date_active:
@@ -487,16 +483,7 @@ def resolve_scope(
                 "SELECT COUNT(*) FROM _scope_file_like"
             ).fetchone()[0]
             if count == 0:
-                return Scope(
-                    document_ids=[],
-                    in_documents=in_documents,
-                    tags=tags or None,
-                    file_like=file_like,
-                    authored_after=after,
-                    authored_before=before,
-                    include_nulls=include_nulls,
-                    excluded_null_dated=excluded,
-                )
+                return _empty_scope(excluded)
 
         return Scope(
             document_ids=None,

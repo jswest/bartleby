@@ -282,8 +282,6 @@ def _build_scope(
     dict values are SQL subquery strings rather than Python lists, so no
     large IN-parameter list is ever built.
     """
-    from bartleby.skill_scripts._tags import Scope
-
     if scope_obj.temp_table is not None:
         # High-cardinality file-like path: use subqueries against the temp table
         # so no Python list is materialized.
