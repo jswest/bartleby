@@ -43,6 +43,11 @@
   --color-off-light: #dbfaeb;  /* mint   */
   --color-token: #ffecb9;      /* amber, pale fill */
   --color-token-dark: #ffbd08; /* amber, accent / glow */
+  /* RGB triples of the glow colors, so rgba() glow sites vary alpha off one
+     source instead of re-typing the channels (CSS can't derive an rgba alpha
+     from a hex var()). Keep in sync with --color-token-dark / --color-off-light. */
+  --color-token-dark-rgb: 255, 189, 8;
+  --color-off-light-rgb: 219, 250, 235;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
 
@@ -119,7 +124,7 @@
      shared "this is interactive" cue. (Tokens kept as box-shadow values so the
      existing `box-shadow: var(--shadow-card)` sites need no markup change.) */
   --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04);
-  --shadow-card-hover: 0 0 0 1px var(--color-token-dark), 0 0 12px rgba(255, 189, 8, 0.25);
+  --shadow-card-hover: 0 0 0 1px var(--color-token-dark), 0 0 12px rgba(var(--color-token-dark-rgb), 0.25);
 
   /* Layout */
   --width-content: 48rem;
@@ -821,6 +826,12 @@ input[type="number"] {
      shared .split grid, so collapsing it here is in-scope for R4). */
   .split:has(.ledger) {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .split:has(.ledger) .viewer {
+    /* Stacked under the prose: drop the desktop sticky-tall height so an idle or
+       empty SourceViewer collapses to its content (B5) instead of leaving a tall
+       dead frame below the citations. */
+    height: auto;
   }
   .ledger-column {
     grid-template-columns: minmax(0, 1fr);

@@ -211,7 +211,7 @@
             >
               <p class="margin-note__head">
                 <span class="margin-note__dagger">{note.dagger}{note.n}</span>
-                source
+                {note.gone ? "missing source" : "source"}
               </p>
               {#if note.gone}
                 <p class="margin-note__body">no longer available</p>

@@ -74,9 +74,9 @@ export function highlightTerms(text, query) {
   if (!text) return [];
   if (!query || !query.trim()) return [{ text, highlight: false }];
 
-  // Build one regex that matches any token in the query (word-boundary anchored,
-  // case-insensitive). Escape special regex chars in each token so a query like
-  // "C++ pointer" doesn't blow up.
+  // Build one regex that matches any token in the query (case-insensitive,
+  // substring — "cat" also highlights inside "category"). Escape special regex
+  // chars in each token so a query like "C++ pointer" doesn't blow up.
   const tokens = query.trim().split(/\s+/).filter(Boolean);
   const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const re = new RegExp(`(${escaped.join('|')})`, 'gi');

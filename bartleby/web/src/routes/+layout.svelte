@@ -98,7 +98,7 @@
     font-size: var(--text-xl);
     font-weight: 600;
     color: var(--color-token-dark);
-    text-shadow: 0 0 8px rgba(255, 189, 8, 0.55);
+    text-shadow: 0 0 8px rgba(var(--color-token-dark-rgb), 0.55);
     text-decoration: none;
   }
   .links {

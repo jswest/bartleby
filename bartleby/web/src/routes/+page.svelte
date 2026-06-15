@@ -260,8 +260,8 @@
   .stat-strip {
     --led-amber: var(--color-token-dark);
     --led-green: var(--color-off-light);
-    --led-glow-amber: rgba(255, 189, 8, 0.45);
-    --led-glow-green: rgba(219, 250, 235, 0.3);
+    --led-glow-amber: rgba(var(--color-token-dark-rgb), 0.45);
+    --led-glow-green: rgba(var(--color-off-light-rgb), 0.3);
 
     display: flex;
     flex-wrap: wrap;
