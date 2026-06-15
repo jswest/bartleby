@@ -78,7 +78,6 @@ export function highlightTerms(text, query) {
   // case-insensitive). Escape special regex chars in each token so a query like
   // "C++ pointer" doesn't blow up.
   const tokens = query.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return [{ text, highlight: false }];
   const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const re = new RegExp(`(${escaped.join('|')})`, 'gi');
 
@@ -94,7 +93,7 @@ export function highlightTerms(text, query) {
   if (last < text.length) {
     segments.push({ text: text.slice(last), highlight: false });
   }
-  return segments.length > 0 ? segments : [{ text, highlight: false }];
+  return segments;
 }
 
 // Whether a chunk's text is reliably markdown-authored — so it should render
