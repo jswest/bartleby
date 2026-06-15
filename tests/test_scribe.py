@@ -40,7 +40,8 @@ def _parse_config(archive_root, *, vision_enabled=False, vision_min_dimension=32
         pdf_converter="pdfplumber", html_converter="docling",
         sparse_text_threshold=100, ocr_min_confidence=30,
         vision_enabled=vision_enabled, vision_max_dimension=1024,
-        vision_min_dimension=vision_min_dimension, archive_root=archive_root,
+        vision_min_dimension=vision_min_dimension,
+        vector_ink_threshold=0, archive_root=archive_root,
     )
 
 

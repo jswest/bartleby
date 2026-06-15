@@ -62,6 +62,7 @@ from bartleby.lib.consts import (
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VECTOR_INK_THRESHOLD,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
@@ -195,6 +196,9 @@ def main(
         ),
         vision_min_dimension=int(
             config.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)
+        ),
+        vector_ink_threshold=int(
+            config.get("vector_ink_threshold", DEFAULT_VECTOR_INK_THRESHOLD)
         ),
         archive_root=archive_root,
         timings=timings,

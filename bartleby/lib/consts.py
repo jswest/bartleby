@@ -64,6 +64,14 @@ DEFAULT_VISION_MAX_DIMENSION = 768
 # noisier corpora.
 DEFAULT_VISION_MIN_DIMENSION = 64
 
+# Vector figure detection (#3). Pages with fewer vector ink primitives
+# (curves + lines + rects combined) than this threshold skip the shapely
+# proximity-merge pass entirely. 0 means "never skip" — any page with at
+# least one primitive gets a figure pass. Raise it on corpora where pages
+# routinely carry decorative rules or borders that aren't real figures, so
+# the merge pass only fires on pages with meaningful vector content.
+DEFAULT_VECTOR_INK_THRESHOLD = 0
+
 # Parse-pool sizing (#165). When `max_workers` is unset, scribe auto-picks
 # min(cpu_count - RESERVED_CORES, free_ram_gb // PER_WORKER_GB), floored at 1 —
 # so a box that's CPU-rich but RAM-poor doesn't launch more parse workers than

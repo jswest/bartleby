@@ -318,6 +318,7 @@ def _parse_pdf_pdfplumber(
         archived,
         sparse_text_threshold=config.sparse_text_threshold,
         ocr_min_confidence=config.ocr_min_confidence,
+        vector_ink_threshold=config.vector_ink_threshold,
     )
 
     doc_rows: list[ChunkRow] = []
@@ -495,6 +496,7 @@ class ParseConfig:
     vision_enabled: bool
     vision_max_dimension: int
     vision_min_dimension: int
+    vector_ink_threshold: int
     archive_root: Path
     timings: bool = False
 
