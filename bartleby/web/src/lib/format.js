@@ -1,3 +1,36 @@
+// Clamp a plain-text snippet to at most `maxLen` characters, cutting on a word
+// boundary and appending a single ellipsis (…). Handles two truncation cases:
+//
+//   1. Python's `apply_preview` appends a Unicode '…' when it truncates — strip
+//      that first, then recut on a word boundary so mid-word cuts are healed.
+//   2. Source text longer than `maxLen` — cut on word boundary, append '…'.
+//
+// In both cases trailing punctuation is stripped before the ellipsis so source
+// punctuation never collides with ours (no "text......", no "particulat……").
+// Returns the text unchanged (but trailing punctuation stripped) when it fits
+// within `maxLen` and was not Python-truncated.
+//
+// Operates on PLAIN TEXT only — do not pass markup. B3's highlight pass wraps
+// matched terms in <mark> after this helper runs.
+export function clampSnippet(text, maxLen = 280) {
+  if (!text) return text;
+  // Python's apply_preview appends a single Unicode '…' when truncating.
+  // Detect and strip it so it never collides with ours.
+  const wasPythonTruncated = text.endsWith('…');
+  const stripped = wasPythonTruncated
+    ? text.slice(0, -1).replace(/[\s\p{P}]+$/u, '')
+    : text.replace(/[\s\p{P}]+$/u, '');
+  // Short enough and not mid-word-truncated: return clean (no ellipsis).
+  if (stripped.length <= maxLen && !wasPythonTruncated) return stripped;
+  // Recut on word boundary and append a single ellipsis.
+  const effectiveMax = Math.min(maxLen, stripped.length);
+  const cut = stripped.slice(0, effectiveMax);
+  const wordBoundary = cut.search(/\S\s+\S*$/);
+  const trimmed = (wordBoundary > 0 ? cut.slice(0, wordBoundary + 1) : cut)
+    .replace(/[\s\p{P}]+$/u, '');
+  return trimmed + '…';
+}
+
 // Strip a trailing extension (e.g. .pdf) so a file name reads as a title when
 // no summary-derived title exists. Returns falsy input unchanged so callers can
 // chain a further `?? fallback`. Shared by the list, detail, and search views.

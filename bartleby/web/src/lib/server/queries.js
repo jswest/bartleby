@@ -1,4 +1,5 @@
 import { getDb } from './db.js';
+import { clampSnippet } from '$lib/format.js';
 
 // A document's assigned tags as a JSON array, ordered by name. Correlates on the
 // outer `d.document_id`, so any SELECT using this must alias documents as `d`.
@@ -182,6 +183,7 @@ export function enrichHits(hits) {
     const href = r.document_id != null ? documentHref(r.document_id, r.page_number) : null;
     return {
       ...h,
+      text: clampSnippet(h.text),
       title: meta?.title ?? null,
       description: meta?.description ?? null,
       file_name: r.file_name ?? h.file_name ?? null,
@@ -200,6 +202,7 @@ export function enrichScanMatches(matches) {
     const meta = summaries.get(m.document_id);
     return {
       ...m,
+      text: clampSnippet(m.text),
       title: meta?.title ?? null,
       description: meta?.description ?? null,
       href: documentHref(m.document_id, m.page_number)
