@@ -374,6 +374,32 @@ def reject_citations_to_involved_findings(
     )
 
 
+def read_text_arg(
+    value: str | None,
+    file: str | None,
+    *,
+    flag: str,
+    error_code: str,
+) -> str | None:
+    """Return the text for a ``--flag`` / ``--flag-file`` pair.
+
+    Exactly one of ``value`` / ``file`` may be set (the argparse mutually
+    exclusive group enforces this).  When ``file`` is given the value is read
+    verbatim from the file — no shell expansion, no strip.  Returns ``None``
+    when both are ``None`` (the flag was omitted entirely, valid for optional
+    fields like ``edit_finding --title``).
+    """
+    if file is not None:
+        file_path = Path(file)
+        if not file_path.exists() or not file_path.is_file():
+            raise SkillError(
+                error_code,
+                f"--{flag}-file path does not exist: {file_path}",
+            )
+        return file_path.read_text(encoding="utf-8")
+    return value
+
+
 def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
     """Read a finding body file and return ``(body, validated_citations)``.
 
