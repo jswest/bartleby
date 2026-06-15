@@ -51,6 +51,10 @@ else
   echo "Pi -> ${AGENT_MODEL} @ http://${HOST_IP}:${AGENT_PORT}  |  decant: not installed (lean image)" >&2
 fi
 
+# Cross-kernel WAL warning: while this container holds the corpus, the host must
+# not touch it (a host serve goes malformed-or-stale). See docs/pi-vm-runbook.md.
+echo "WARN: while this container runs, do not access this corpus from the host -- stop 'bartleby serve' for this project." >&2
+
 # 4. Hand off.
 if [ "$#" -eq 0 ]; then
   exec pi

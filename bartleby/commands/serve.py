@@ -128,6 +128,11 @@ def main(project: str | None = None) -> None:
     if project is not None:
         _override_project(project)
     console.splash()
+    console.warn(
+        "If a pi-vm (containerized) session is running against this corpus, stop "
+        "it first — a cross-kernel WAL clash makes serve go malformed-or-stale "
+        "(docs/pi-vm-runbook.md). Host-only use is fine."
+    )
     # Resolved here (not at import) so ``BARTLEBY_HOME`` set before launch wins.
     serve_dir = bartleby_dir() / "serve"
     checkout = _is_source_checkout()
