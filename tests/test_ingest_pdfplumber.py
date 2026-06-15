@@ -341,6 +341,43 @@ def _pdf_with_table_only(path) -> None:
     c.save()
 
 
+def _pdf_with_full_page_rect(path) -> None:
+    """One page: a single near-full-page rectangle (a full-bleed background /
+    page border) plus text. Its cluster covers >= PAGE_SUBSTRATE_AREA_RATIO of
+    the page, so it must be dropped as substrate rather than cropped to the VLM.
+    A lone rect is not a grid, so find_tables() does not claim it."""
+    from reportlab.lib import colors as rl_colors
+    c = canvas.Canvas(str(path), pagesize=letter)
+    t = c.beginText(72, 750)
+    for _ in range(4):
+        t.textLine("Text to clear the sparse threshold.")
+    c.drawText(t)
+    c.setStrokeColor(rl_colors.black)
+    c.setLineWidth(1)
+    w, h = letter
+    c.rect(10, 10, w - 20, h - 20)   # ~94% of the page → substrate
+    c.showPage()
+    c.save()
+
+
+def test_full_page_vector_substrate_produces_no_vector_crop(tmp_path):
+    """A page whose vector ink is a near-full-page rect must produce NO vector
+    crop — the substrate ceiling (PAGE_SUBSTRATE_AREA_RATIO) drops it, mirroring
+    the raster path. Guards against vector_ink_threshold=0 flooding the VLM with
+    whole-page crops on full-bleed-background pages."""
+    src = tmp_path / "full_page_rect.pdf"
+    _pdf_with_full_page_rect(src)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    page = result.pages[0]
+    vector_crops = [
+        e for e in page.embedded_images if e.image_index_on_page >= 1000
+    ]
+    assert vector_crops == [], (
+        f"Full-page-rect substrate should yield no vector crops, got {len(vector_crops)}"
+    )
+
+
 def test_vector_figure_and_raster_both_captured(tmp_path):
     """(a) A page with a vector chart AND a raster image must produce BOTH a
     vector-region crop (image_index_on_page >= 1000) and a raster crop

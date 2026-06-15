@@ -291,9 +291,18 @@ def _vector_figure_bboxes(page, tol: float = _VECTOR_MERGE_TOL,
     # than rolling a heuristic.
     table_boxes = [box(*tbl.bbox) for tbl in page.find_tables()]
 
+    page_area = max(1.0, page.width * page.height)
     results = []
     for g in geoms:
         if g.area < min_area:
+            continue
+        # Drop page-substrate clusters (full-bleed background rects, page
+        # borders, ink that bridges into one page-spanning blob) the same way
+        # the raster path drops full-page scans — see PAGE_SUBSTRATE_AREA_RATIO.
+        # Without this, a page with a full-page rect would crop ~the whole page
+        # to the VLM, and with vector_ink_threshold defaulting to 0 that fires
+        # on every such page.
+        if g.area / page_area >= PAGE_SUBSTRATE_AREA_RATIO:
             continue
         # Drop clusters that substantially overlap a table bbox. A cluster is
         # "table-like" when its centroid falls inside any table bbox — simpler
