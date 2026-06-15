@@ -226,19 +226,30 @@ def _fts_query(query: str) -> str:
 
 
 def _scope_clause(
-    scope: dict[str, list[int] | None],
+    scope: dict[str, list[int] | str | None],
 ) -> tuple[str, list]:
     """Build a SQL predicate over ``chunks`` that matches any allowed
     (source_kind, source_id) combination.
 
-    ``scope`` maps source_kind → either a list of allowed source_ids
-    (filtered scope) or ``None`` (unrestricted — match all of that kind).
+    ``scope`` maps source_kind → one of:
+      - ``None`` — unrestricted (match all of that kind)
+      - ``[]`` — empty list (matches nothing for this kind)
+      - ``[int, ...]`` — restrict to these source_ids
+      - ``str`` — a subquery string like ``"SELECT … FROM …"`` used as
+        ``source_id IN (<subquery>)`` to avoid large bind-parameter lists
+        (the file-like high-cardinality path, #632)
     """
     parts: list[str] = []
     params: list = []
     for kind, ids in scope.items():
         if ids is None:
             parts.append("chunks.source_kind = ?")
+            params.append(kind)
+        elif isinstance(ids, str):
+            # Subquery form: ids is a SELECT statement, no bind params needed.
+            parts.append(
+                f"(chunks.source_kind = ? AND chunks.source_id IN ({ids}))"
+            )
             params.append(kind)
         else:
             if not ids:
@@ -257,22 +268,48 @@ def _scope_clause(
 def _build_scope(
     conn,
     source_kinds: list[str],
-    in_documents: list[int] | None,
-) -> dict[str, list[int] | None]:
+    scope_obj,
+) -> dict[str, list[int] | str | None]:
     """Resolve the scope dict consumed by ``_scope_clause``.
 
-    Without ``in_documents``, every requested kind is unrestricted.
-    With ``in_documents``: 'document' is restricted to those ids; 'summary'
+    Without any document restriction, every requested kind is unrestricted.
+    With a restriction: 'document' is restricted to the matching ids; 'summary'
     is restricted to summaries whose document_id is in those ids; 'image' is
     restricted to images linked to those documents via ``document_images``;
     'finding' is excluded entirely (findings aren't tied to documents).
+
+    When ``scope_obj.temp_table`` is set (file-like high-cardinality path),
+    dict values are SQL subquery strings rather than Python lists, so no
+    large IN-parameter list is ever built.
     """
+    from bartleby.skill_scripts._tags import Scope
+
+    if scope_obj.temp_table is not None:
+        # High-cardinality file-like path: use subqueries against the temp table
+        # so no Python list is materialized.
+        temp = scope_obj.temp_table
+        scope: dict[str, list[int] | str | None] = {}
+        if "document" in source_kinds:
+            scope["document"] = f"SELECT document_id FROM {temp}"
+        if "summary" in source_kinds:
+            scope["summary"] = (
+                f"SELECT summary_id FROM summaries "
+                f"WHERE document_id IN (SELECT document_id FROM {temp})"
+            )
+        if "image" in source_kinds:
+            scope["image"] = (
+                f"SELECT DISTINCT image_id FROM document_images "
+                f"WHERE document_id IN (SELECT document_id FROM {temp})"
+            )
+        return scope
+
+    in_documents = scope_obj.document_ids
     if in_documents is None:
         return {kind: None for kind in source_kinds}
 
     placeholders = ",".join("?" * len(in_documents))
     cur = conn.cursor()
-    scope: dict[str, list[int] | None] = {}
+    scope = {}
     if "document" in source_kinds:
         scope["document"] = list(in_documents)
     if "summary" in source_kinds:
@@ -427,16 +464,12 @@ def work(*, conn, args, session_id) -> dict:
         authored_before=args.authored_before,
         include_nulls=args.include_nulls,
     )
-    # None = whole corpus, [] = a filter matched nothing, else the resolved slice.
-    restrict = scope.document_ids
-
-    # Findings drop out when memory is off OR when --in-documents/--tag is set
-    # (findings have no document anchor). memory_excluded reports only the
-    # memory case — that's the signal documented in SKILL.md.
+    # Findings drop out when memory is off OR when any document-level scope is active
+    # (findings have no document anchor). memory_excluded reports only the memory case.
     memory_excluded = (
         "finding" in source_kinds and not memory_enabled(conn, session_id)
     )
-    drop_findings = memory_excluded or restrict is not None
+    drop_findings = memory_excluded or scope.active
     if drop_findings:
         source_kinds = [k for k in source_kinds if k != "finding"]
 
@@ -453,11 +486,14 @@ def work(*, conn, args, session_id) -> dict:
             "results": results,
         }))
 
-    # No source kinds left, or a scope filter that matched nothing: zero hits.
-    if not source_kinds or (restrict is not None and not restrict):
+    # No source kinds left, or a scope filter that resolved to nothing: zero hits.
+    # When scope.temp_table is set, document_ids is None (handled by _build_scope);
+    # the only "nothing matched" signal on that path is document_ids == [] (resolved
+    # by resolve_scope before setting temp_table).
+    if not source_kinds or scope.document_ids == []:
         return _response([])
 
-    scope_dict = _build_scope(conn, source_kinds, restrict)
+    scope_dict = _build_scope(conn, source_kinds, scope)
     overfetch = max(args.limit * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR)
 
     rankings: list[list[int]] = []

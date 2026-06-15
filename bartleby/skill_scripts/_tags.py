@@ -168,24 +168,6 @@ def documents_with_any_tag(conn, tag_ids: list[int]) -> list[int]:
     ]
 
 
-def documents_matching_file_like(conn, patterns: list[str]) -> list[int]:
-    """Distinct document_ids whose ``file_name`` matches any of ``patterns``.
-
-    SQL ``LIKE`` semantics, OR across patterns, pushed down to SQLite as a
-    parameterized predicate (the user's pattern never reaches the SQL text).
-    Returns ``[]`` for an empty pattern list.
-    """
-    if not patterns:
-        return []
-    clause = " OR ".join("file_name LIKE ?" for _ in patterns)
-    return [
-        row[0] for row in conn.cursor().execute(
-            f"SELECT document_id FROM documents WHERE {clause}",
-            patterns,
-        )
-    ]
-
-
 # ---------- scope resolution (tags + in_documents + date bounds) ----------
 
 
@@ -219,6 +201,12 @@ class Scope:
     matched nothing" (short-circuit to zero results). The remaining fields echo
     the *requested* filter so a response can be self-describing via
     ``echo_into``.
+
+    ``temp_table`` is set when ``--file-like`` produced a scope that was
+    materialized into a SQLite temp table instead of a Python list (to avoid
+    binding >32 k variables). When set, ``document_ids`` is ``None`` (the
+    Python list is not populated) and callers must use ``restrict_in`` rather
+    than reading ``document_ids`` directly for SQL predicate building.
     """
 
     document_ids: list[int] | None
@@ -229,6 +217,7 @@ class Scope:
     authored_before: str | None
     include_nulls: bool
     excluded_null_dated: int
+    temp_table: str | None = None       # set when file-like scope lives in a temp table
 
     @property
     def date_active(self) -> bool:
@@ -267,14 +256,16 @@ class Scope:
     def restrict_in(self, col: str) -> tuple[str, list]:
         """A bare ``document_ids`` predicate for ``col`` plus its params.
 
-        Returns one of three forms, *without* a leading ``WHERE``/``AND`` so the
+        Returns one of four forms, *without* a leading ``WHERE``/``AND`` so the
         caller composes it freely:
           - ``("", [])`` — whole corpus, no restriction.
           - ``("0", [])`` — a filter matched nothing; matches no rows.
-          - ``("<col> IN (?,?)", [ids...])`` — restrict to the resolved slice.
-        This is the single source for the None/empty/list branch all three
-        scripts otherwise hand-roll.
+          - ``("<col> IN (?,?)", [ids...])`` — restrict to a small resolved slice.
+          - ``("<col> IN (SELECT document_id FROM <temp>)", [])`` — restrict via
+            temp-table join when ``--file-like`` produced a large match set.
         """
+        if self.temp_table is not None:
+            return f"{col} IN (SELECT document_id FROM {self.temp_table})", []
         if self.document_ids is None:
             return "", []
         if not self.document_ids:
@@ -337,6 +328,58 @@ def _apply_date_bound(
     return document_ids, excluded
 
 
+def _apply_date_bound_to_temp(
+    conn, temp_table: str, *,
+    after: str | None, before: str | None, include_nulls: bool,
+) -> int:
+    """Apply a date bound by deleting non-qualifying rows from ``temp_table`` in place.
+
+    Used when the scope was materialized into a temp table (the file-like path).
+    Removes rows that don't satisfy the date bound, returning ``excluded_null_dated``.
+    The temp table is modified in place so callers retain the same table name.
+    """
+    bounds, bound_params = [], []
+    if after is not None:
+        bounds.append("s.authored_date >= ?")
+        bound_params.append(after)
+    if before is not None:
+        bounds.append("s.authored_date <= ?")
+        bound_params.append(before)
+    bounds_sql = " AND ".join(bounds)
+
+    cur = conn.cursor()
+    excluded = 0
+
+    if include_nulls:
+        # Keep rows where date is NULL OR satisfies the bound; drop the rest.
+        cur.execute(
+            f"DELETE FROM {temp_table} WHERE document_id NOT IN ("
+            f"  SELECT t.document_id FROM {temp_table} t "
+            f"  LEFT JOIN summaries s USING (document_id) "
+            f"  WHERE s.authored_date IS NULL OR ({bounds_sql})"
+            f")",
+            bound_params,
+        )
+    else:
+        # Count undated rows (excluded from any date-bound result), then remove
+        # all rows that don't satisfy the bound. The INNER JOIN naturally drops
+        # undated rows (no summaries row → no join hit), so no separate null pass.
+        excluded = cur.execute(
+            f"SELECT COUNT(*) FROM {temp_table} t "
+            f"LEFT JOIN summaries s USING (document_id) "
+            f"WHERE s.authored_date IS NULL",
+        ).fetchone()[0]
+        cur.execute(
+            f"DELETE FROM {temp_table} WHERE document_id NOT IN ("
+            f"  SELECT t.document_id FROM {temp_table} t "
+            f"  JOIN summaries s USING (document_id) "
+            f"  WHERE {bounds_sql}"
+            f")",
+            bound_params,
+        )
+    return excluded
+
+
 def resolve_scope(
     conn, *,
     in_documents: list[int] | None = None,
@@ -355,24 +398,128 @@ def resolve_scope(
     Each intersection yields ``[]`` (short-circuit to zero hits) when empty, or
     passes the prior scope through unchanged when its filter is absent.
     Unknown tags raise ``TAG_NOT_FOUND`` and malformed bounds raise ``INVALID_DATE``.
+
+    When ``--file-like`` is present the matched ids are materialized into a
+    SQLite temp table (``_scope_file_like``) instead of a Python list, so a
+    broad glob that matches hundreds of thousands of documents never triggers
+    SQLite's ``SQLITE_MAX_VARIABLE_NUMBER`` limit. The returned ``Scope`` carries
+    ``temp_table`` set to the table name; ``restrict_in`` returns a subquery
+    predicate against it rather than an ``IN (?, ?, …)`` list.
     """
     after = validate_date_bound("--authored-after", authored_after)
     before = validate_date_bound("--authored-before", authored_before)
 
+    date_active = after is not None or before is not None
+
+    if file_like:
+        # Build the temp table: start with all file-like matches, then intersect
+        # with tags and in_documents inside SQLite (never in Python) to avoid
+        # a high-cardinality bind list at every consumer.
+        tag_ids: list[int] = []
+        if tags:
+            tag_ids = resolve_tag_names(conn, tags)
+
+        like_clause = " OR ".join("d.file_name LIKE ?" for _ in file_like)
+        conditions: list[str] = [f"({like_clause})"]
+        params: list = list(file_like)
+
+        if in_documents is not None:
+            if not in_documents:
+                # Explicit empty in_documents → nothing matches.
+                return Scope(
+                    document_ids=[],
+                    in_documents=in_documents,
+                    tags=tags or None,
+                    file_like=file_like,
+                    authored_after=after,
+                    authored_before=before,
+                    include_nulls=include_nulls,
+                    excluded_null_dated=0,
+                )
+            id_ph = ",".join("?" * len(in_documents))
+            conditions.append(f"d.document_id IN ({id_ph})")
+            params.extend(in_documents)
+
+        if tag_ids:
+            tid_ph = ",".join("?" * len(tag_ids))
+            conditions.append(
+                f"EXISTS (SELECT 1 FROM document_tags dt "
+                f"WHERE dt.document_id = d.document_id AND dt.tag_id IN ({tid_ph}))"
+            )
+            params.extend(tag_ids)
+
+        where_sql = " AND ".join(conditions)
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS temp._scope_file_like")
+        cur.execute(
+            "CREATE TEMP TABLE _scope_file_like (document_id INTEGER PRIMARY KEY)"
+        )
+        cur.execute(
+            f"INSERT INTO _scope_file_like "
+            f"SELECT DISTINCT d.document_id FROM documents d WHERE {where_sql}",
+            params,
+        )
+
+        # Check whether the temp table is empty (whole filter matched nothing).
+        count = cur.execute(
+            "SELECT COUNT(*) FROM _scope_file_like"
+        ).fetchone()[0]
+        if count == 0:
+            return Scope(
+                document_ids=[],
+                in_documents=in_documents,
+                tags=tags or None,
+                file_like=file_like,
+                authored_after=after,
+                authored_before=before,
+                include_nulls=include_nulls,
+                excluded_null_dated=0,
+            )
+
+        excluded = 0
+        if date_active:
+            excluded = _apply_date_bound_to_temp(
+                conn, "_scope_file_like",
+                after=after, before=before, include_nulls=include_nulls,
+            )
+            # After date filtering, check again for empty.
+            count = cur.execute(
+                "SELECT COUNT(*) FROM _scope_file_like"
+            ).fetchone()[0]
+            if count == 0:
+                return Scope(
+                    document_ids=[],
+                    in_documents=in_documents,
+                    tags=tags or None,
+                    file_like=file_like,
+                    authored_after=after,
+                    authored_before=before,
+                    include_nulls=include_nulls,
+                    excluded_null_dated=excluded,
+                )
+
+        return Scope(
+            document_ids=None,
+            in_documents=in_documents,
+            tags=tags or None,
+            file_like=file_like,
+            authored_after=after,
+            authored_before=before,
+            include_nulls=include_nulls,
+            excluded_null_dated=excluded,
+            temp_table="_scope_file_like",
+        )
+
+    # No file-like: use the original Python-list path.
     scoped_docs = in_documents
     if tags:
         tagged = documents_with_any_tag(conn, resolve_tag_names(conn, tags))
         scoped_docs = tagged if scoped_docs is None else sorted(set(scoped_docs) & set(tagged))
-    if file_like:
-        matched = documents_matching_file_like(conn, file_like)
-        scoped_docs = matched if scoped_docs is None else sorted(set(scoped_docs) & set(matched))
-    date_active = after is not None or before is not None
 
     if not date_active:
         document_ids, excluded = scoped_docs, 0
     elif scoped_docs is not None and not scoped_docs:
-        # The tag/in-documents/file-like scope is already empty — the bound
-        # can't add anything.
+        # The tag/in-documents scope is already empty — the bound can't add anything.
         document_ids, excluded = [], 0
     else:
         document_ids, excluded = _apply_date_bound(
