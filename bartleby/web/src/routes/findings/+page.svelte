@@ -1,5 +1,5 @@
 <script>
-  import { pluralize } from "$lib/format.js";
+  import { formatDateRange, pluralize } from "$lib/format.js";
 
   export let data;
 
@@ -37,7 +37,7 @@
       // All findings in one session share its run, so the model is the first
       // item's — the axis the multi-model comparison cares about (#547).
       const model = modelLabel(items[0]);
-      return { name, items, total, model, span: lo === hi ? hi : `${lo} – ${hi}` };
+      return { name, items, total, model, span: formatDateRange(lo, hi) };
     });
   })();
 
