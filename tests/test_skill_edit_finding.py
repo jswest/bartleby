@@ -502,3 +502,78 @@ def test_edit_finding_rejects_empty_description(seeded_project, tmp_path, capsys
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "EMPTY_DESCRIPTION"
+
+
+def test_edit_finding_response_echoes_title_and_description(
+    seeded_project, tmp_path, capsys
+):
+    """edit_finding echoes the final title and description so a title-only or
+    description-only edit is self-verifiable without a follow-up read_finding."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    finding_id = saved["finding_id"]
+
+    edit_finding.main([
+        "--project", seeded_project["project"],
+        "--finding-id", finding_id,
+        "--title", "Updated title",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["title"] == "Updated title"
+    assert out["description"] == "Original description."  # unchanged, still echoed
+
+    # Now update just the description and check both are echoed.
+    edit_finding.main([
+        "--project", seeded_project["project"],
+        "--finding-id", finding_id,
+        "--description", "Updated description.",
+    ])
+    out2 = json.loads(capsys.readouterr().out)
+    assert out2["title"] == "Updated title"      # from previous edit
+    assert out2["description"] == "Updated description."
+
+
+def test_edit_finding_title_file_reads_verbatim(seeded_project, tmp_path, capsys):
+    """--title-file reads the replacement title verbatim — $ and backticks survive."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+
+    tricky_title = "Spending ~$8M/quarter (in-house `estimate`)"
+    title_file = tmp_path / "title.txt"
+    title_file.write_text(tricky_title, encoding="utf-8")
+
+    edit_finding.main([
+        "--project", seeded_project["project"],
+        "--finding-id", saved["finding_id"],
+        "--title-file", str(title_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["title"] == tricky_title
+
+    from bartleby.db.connection import open_db
+    conn = open_db(seeded_project["project"])
+    try:
+        db_title = conn.cursor().execute(
+            "SELECT title FROM findings WHERE finding_id = ?",
+            (unprefix(saved["finding_id"]),),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert db_title == tricky_title
+
+
+def test_edit_finding_description_file_reads_verbatim(
+    seeded_project, tmp_path, capsys
+):
+    """--description-file reads the replacement description verbatim."""
+    saved = _seed_finding(seeded_project, tmp_path, capsys)
+
+    tricky_desc = "Revenue is $TOTAL (see `quarterly_report.pdf`)"
+    desc_file = tmp_path / "desc.txt"
+    desc_file.write_text(tricky_desc, encoding="utf-8")
+
+    edit_finding.main([
+        "--project", seeded_project["project"],
+        "--finding-id", saved["finding_id"],
+        "--description-file", str(desc_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["description"] == tricky_desc
