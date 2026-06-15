@@ -61,14 +61,24 @@
 </main>
 
 <style>
+  /* The machine shell's header: a dark scanlined band tinted with the brand
+     sage. The scanline is a repeating 1px sage stripe over near-black — the
+     "console" texture — kept faint so the chrome stays legible. */
   header {
-    background-color: var(--color-off);
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     z-index: 10;
-    border-bottom: 1px solid var(--color-off-light);
+    background-color: var(--color-shell-raised);
+    background-image: repeating-linear-gradient(
+      to bottom,
+      rgba(105, 136, 121, 0.12) 0,
+      rgba(105, 136, 121, 0.12) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    border-bottom: 1px solid var(--color-off);
   }
   .bar {
     display: flex;
@@ -76,10 +86,13 @@
     gap: var(--space-xl);
     padding: var(--space-md) var(--space-lg);
   }
+  /* The wordmark: amber dot-matrix with a soft amber glow — the lit nameplate
+     on the console. Doto sits at --text-xl, well above the display floor. */
   .brand {
     font-size: var(--text-xl);
-    font-weight: 900;
-    color: var(--color-token);
+    font-weight: 600;
+    color: var(--color-token-dark);
+    text-shadow: 0 0 8px rgba(255, 189, 8, 0.55);
     text-decoration: none;
   }
   .links {
@@ -87,7 +100,7 @@
     gap: var(--space-lg);
   }
   .links a {
-    color: var(--color-off-light);
+    color: var(--color-shell-text);
     text-decoration: none;
     font-family: var(--font-sans);
     font-size: var(--text-base);
@@ -99,11 +112,11 @@
   }
   .links a.active {
     color: var(--color-off-light);
-    border-bottom-color: var(--color-off-light);
+    border-bottom-color: var(--color-token-dark);
   }
   .project {
     margin-left: auto;
-    color: var(--color-off-light);
+    color: var(--color-shell-text-soft);
     font-size: var(--text-base);
   }
   main {

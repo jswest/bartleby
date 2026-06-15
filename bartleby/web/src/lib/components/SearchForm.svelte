@@ -145,11 +145,15 @@
     gap: var(--space-sm);
     max-width: var(--width-content);
   }
+  /* The query box is a paper field on the dark shell: white ground, dark ink,
+     Iosevka chrome (inputs are UI, not prose — so sans, not serif). */
   .query {
     flex: 1;
     padding: var(--space-sm) var(--space-md);
     font-size: var(--text-base);
-    font-family: var(--font-serif);
+    font-family: var(--font-sans);
+    background: var(--color-surface);
+    color: var(--color-text);
     border: 1px solid var(--color-off);
     border-radius: var(--radius-md);
   }

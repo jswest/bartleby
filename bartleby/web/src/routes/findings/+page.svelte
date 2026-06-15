@@ -97,6 +97,10 @@
       </button>
     </div>
 
+    <!-- The index is content (the agent's findings), so it rides a paper card on
+         the dark shell — the .surface ground re-establishes dark-ink-on-paper so
+         the dense table and its mint hover rows stay readable. -->
+    <div class="index-card surface">
     {#if mode === "table"}
       <table class="findings-table">
         <thead>
@@ -156,6 +160,7 @@
         {/each}
       </div>
     {/if}
+    </div>
   {/if}
 </div>
 
