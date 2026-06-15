@@ -25,16 +25,15 @@ the tooling encodes the conventions so you don't have to keep them all in your h
 
 | Piece | What it does |
 | --- | --- |
-| `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR (the loop below). **Vendored** (see note). |
-| `skills/ultraship/SKILL.md` | The `/ultraship` command — assembles a whole omnibus bundle unattended (see [Assembling a bundle unattended](#assembling-a-bundle-unattended-ultraship)). Backed by `skills/ultraship/ultraship.py`. **Vendored** (see note). |
+| `skills/ship/SKILL.md` | The `/ship #<N>` command — runs an issue end-to-end into a tested PR, or fans an omnibus out to players (the loop below). **Vendored** (see note). |
 | `skills/release/SKILL.md` | The `/release` command — dry-run → confirm → publish a release (see [Cutting a release](#cutting-a-release)). Repo-local (not vendored). |
 
-> **Vendored skills.** `ship` and `ultraship` are *pressed* verbatim from a local
-> skill drawer (one source, many repos), so don't hand-edit their `SKILL.md` or
-> `ultraship.py` here — edit the drawer and re-press. Everything bartleby-specific
-> lives in `.claude/ship.toml` / `.claude/ultraship.toml` (committed; the press
-> never touches them). `tests/test_skill_drift.py` fails if a pressed copy drifts
-> from the drawer, and skips when the drawer is absent (a clone / CI).
+> **Vendored skill.** `ship` is *pressed* verbatim from a local skill drawer (one
+> source, many repos) by `signet`, so don't hand-edit its `SKILL.md` here — edit
+> the drawer and re-press. Everything bartleby-specific lives in `.claude/ship.toml`
+> (committed; the press never touches it). `tests/test_skill_drift.py` fails if the
+> pressed copy drifts from the drawer, and skips when the drawer is absent (a clone /
+> CI). `release` stays repo-local.
 | `hooks/guard-main-write.sh` | A safety rail that refuses commits/pushes on `main`. |
 | `agents/simplify-refactor.md` | A subagent that does a quality/simplification pass over changed code. |
 | `agents/git-workflow-manager.md` | A subagent that turns a pile of changes into clean, atomic commits. |
@@ -48,37 +47,46 @@ else's clone.
 ## The everyday loop: `/ship #<N>`
 
 Almost all work starts from a GitHub issue and ends as a PR that closes it. Typing
-`/ship #141` walks Claude through this, in order:
+`/ship #141` kicks off a three-role workflow:
 
-1. **Sync `main`, check the tree is clean, and scan for collisions** — a quick look
-   at the other open worktrees and PRs so you can spot overlapping in-flight work on
-   the same files and coordinate before two branches diverge.
-2. **Create a sibling worktree** for the issue — `../bartleby-issue-<N>-<slug>` on a
-   branch `issue/<N>-<slug>`. We work in worktrees *next to* the main checkout,
-   never nested inside it, and never `git checkout -b` on `main` itself.
-3. **Flesh out a thin issue.** If the body is empty or sketchy, Claude writes a
-   problem/approach/scope back to it with `gh issue edit` before touching code — so
-   the plan has something concrete to anchor to.
-4. **PAUSE — plan.** For anything non-trivial, Claude lays out the plan (files,
-   approach, trade-offs) and waits for your OK before writing code.
-5. **Implement in logical units.** For *every* commit, in this exact order:
-   `uv run pytest` (must pass — except down the two [skip paths](#skipping-the-test-gates)
-   below) → run the `simplify-refactor` agent over the touched files → apply the
-   suggestions worth taking → re-run the tests → commit.
-6. **Docs sweep.** Check whether the change needs README / `ARCHITECTURE.md` /
-   `SKILL.md` updates (a new flag, changed behavior, a new `docs/decisions/` entry).
-7. **Reconcile** with `origin/main` so any merge conflict surfaces now, not in the PR,
-   then run the full test suite again.
-8. **PAUSE — PR.** Claude shows you the PR body and a final diff summary and waits
-   for your OK, then opens a PR with a `Closes #<N>` line.
+**Roles:**
+- **Director** — the session itself (you, running Claude Code). Plans, dispatches
+  players, triages critic findings, assembles omnibus branches, opens promotion PRs.
+  Runs at the strong tier.
+- **Players** — subagents that implement one issue each, each in its own sibling
+  worktree. Run at the cheap tier by default (token spend concentrates here).
+- **Critics** — a correctness critic (bugs, integration seams) and a simplicity
+  critic (duplication, needless abstraction), spooled by the director. Advisory only;
+  the director triages their findings.
 
-**Claude opens the PR; a human merges it.** That last step is always ours. Once
-you've merged, Claude closes the loop — removing the sibling worktree, deleting the
-issue branch, and re-syncing the base.
+**Leaf vs. omnibus:** the fork is a single API check — an issue with **native GitHub
+sub-issues** is an omnibus; anything else is a leaf. Checklists and title
+conventions do **not** decide it.
 
-The two **PAUSE** points are real stops — Claude won't blow past them without your
-say-so. They're where you catch a wrong approach before it's code, and a wrong PR
-before it's public.
+For a **leaf issue**, the director:
+
+1. Creates a sibling worktree off `main` — `../bartleby-issue-<N>-<slug>`, never
+   nested inside the checkout, never `git checkout -b` on `main`.
+2. Dispatches one player with the issue spec, guardrails, and tier.
+3. The player implements, runs `uv run pytest`, self-tidies, commits, and opens the
+   **issue → `main` PR**.
+4. The correctness and simplicity critics review the branch; the director triages.
+5. **Docs sweep** — README / `ARCHITECTURE.md` / `SKILL.md` brought in line.
+6. **PAUSE — PR.** Director shows you the PR body and waits for your OK. Claude
+   opens the PR with a `Closes #<N>` line. **You merge.**
+
+**Claude opens the PR; a human merges it.** That step is always yours. After you
+merge, the director removes the sibling worktree and re-syncs the base.
+
+**PAUSE** points are real stops — Claude won't blow past them. They're where you
+catch a wrong approach before it's code, and a wrong PR before it's public.
+
+### Plan gate
+
+Before any risky or underspecified work — and *especially* before an omnibus
+fan-out — the director presents the plan (or the wave DAG for an omnibus) and waits
+for your OK. Trivial, unambiguous leaves may skip the gate; everything uncertain
+stops. `--plan` makes it mandatory.
 
 ### The guard rail
 
@@ -88,14 +96,17 @@ branch is `main`. This is **intentional, not a bug.** If you hit
 your issue's worktree branch and try again. (Step 2 above keeps you out of this;
 the hook is the backstop for when something slips.)
 
-### `with-playwright` (web changes only)
+### Optional flags
 
-For changes under `bartleby/web/`, you can append a `with-playwright` token —
-`/ship #<N> with-playwright` — to turn on a visual-verification loop: Claude drives
-a real browser, screenshots the affected routes before and after, and iterates on
-what looks wrong. It's **off by default** because browser automation is slow and
-burns image tokens, so you opt in per run when a change is actually worth eyeballing.
-Backend-only issues ignore the token even if you pass it.
+- **`--with-playwright`** — for changes under `bartleby/web/`, turns on a
+  visual-verification loop: a player drives a real browser, screenshots affected
+  routes before and after, and iterates on what looks wrong. Off by default (slow;
+  burns image tokens). Available only when `.claude/ship.toml` declares a
+  `[playwright]` block. Ignored for backend-only issues.
+- **`--strong`** / **`--thrifty`** — tier overrides. `--strong` lifts every role to
+  strong; `--thrifty` drops all to cheap. Mutually exclusive.
+- **`--plan`** — force the plan gate before any work, even for trivial leaves.
+- **`--skip-tests`** — see [Skipping the test gates](#skipping-the-test-gates).
 
 ### Skipping the test gates
 
@@ -122,79 +133,62 @@ mid-stream starts running tests from that point. When tests are genuinely skippe
 the PR and final report say so — naming which path applied. Combine `skip-tests`
 with `with-playwright` in either order.
 
-### `onto #<omnibus>` (ship onto an omnibus branch)
+### `onto #<omnibus>` (ship a leaf onto an omnibus branch)
 
-For a bundle of related issues that should reach `main` as one unit — a release,
-say — you can stage the sub-issues on a shared *omnibus branch* first. Append an
-`onto #<omnibus>` token, where `#<omnibus>` is the **issue number** tracking the
-bundle: `/ship #170 onto #169`. Claude reads that omnibus issue, derives its branch
-from the title's leading version (`v0.8.0 — …` → `omnibus/v0.8.0`), and creates the
-branch off `main` on the bundle's *first* ship — asking first, since that pushes a
-new long-lived branch. From there the whole loop retargets from `main` to the
-omnibus branch: worktree base, collision scan, reconcile, and PR base. The sub-PR
-says *"Part of #169"* rather than `Closes #170`, because GitHub only auto-closes
-from the default branch; the sub-issues all close when the omnibus → main PR (which
-lists every `Closes #<N>`) finally merges. An omnibus is tracked two ways, kept in
-step by `/ship`: its sub-issues are linked as native GitHub **sub-issues** (the
-hierarchy / progress panel, which tracks issue *closure* — so under `onto` it reads
-0-closed until promotion), and its body carries a machine-anchorable **checklist
-block** — a comment-delimited region (`<!-- omnibus-checklist:start -->` … `:end`)
-with one `- [ ] #<N>` line per sub-issue, alongside the prose `### Sub-issues`
-narrative, tracking the finer-grained *branch-landing* status. As it opens each
-sub-PR, Claude ticks that issue's box and ensures its sub-issue link (seeding both
-on the bundle's first ship if missing, after showing you the edit), so tracking
-stays current instead of drifting, and the omnibus → main PR reads its `Closes` set
-straight from the block. The `main`-only guard rail is
-unchanged, so the omnibus branch itself isn't hook-protected — keeping work on
-sub-PRs is discipline, not enforcement. Composes with the two tokens above.
+`--onto <branch>` (or its shorthand `onto #<omnibus>`) lands a single leaf onto an
+existing omnibus branch — adding to an in-flight omnibus by hand. The sub-PR says
+*"Part of #<omnibus>"* rather than `Closes`, because GitHub only auto-closes from
+the default branch; the sub-issues close when the omnibus → main PR merges.
 
-When the bundle is ready, `/ship #169` — the omnibus issue **on its own, no
-`onto`** — opens that omnibus → main PR. Claude recognizes the omnibus issue (a
-`vX.Y.Z — …` title with a branch ahead of `main`), skips the implement machinery —
-the work already landed on the branch — and drafts the PR with a `Closes #<N>`
-line for every sub-issue, cross-checked against the PRs actually merged onto the
-branch. You approve and merge it; that one merge closes the whole bundle. Cutting
-the release is the later, separate `/release` step.
+### Omnibus: `/ship #<N>` on a parent issue
 
-### Assembling a bundle unattended: `/ultraship`
+When the argument issue has **native GitHub sub-issues**, `/ship` takes the omnibus
+path automatically. The director:
 
-`/ship #<N> onto #<omnibus>` lands **one** sub-issue at a time, with you in the
-loop at every plan and PR PAUSE. `/ultraship` takes a **single omnibus issue** and
-assembles the *whole* bundle while you sleep. It has two verbs and exactly one
-attended moment:
+1. Ensures the **omnibus branch** exists (creates it off `main` if missing, asking
+   first — that's a remote mutation).
+2. Computes a **wave plan** from the sub-issues (topological by declared
+   dependencies, then by file-overlap), posts it as an omnibus comment, seeds the
+   progress checklist (`<!-- omnibus-checklist:start/end -->`), and **pauses for
+   your OK** before fanning out.
+3. Dispatches sub-issues to **players in parallel** (one per sub-issue, each in its
+   own sibling worktree off the current omnibus HEAD).
+4. Runs a **merge-train** — per sub-PR: simplicity critic reviews the diff, small
+   fixes applied, then integrated and tested on the omnibus branch; conflict or red →
+   **park** (never resolved unattended); checklist line ticked on landing.
+5. After all waves land: correctness critic and cross-cutting simplicity critic
+   review the assembled omnibus; triage loop up to `max_critic_passes`.
+6. Docs sweep; then **promotion PR** (omnibus → `main`) with `Closes #<N>` for
+   every sub-issue. **You merge** — that one merge closes the whole bundle.
 
-- **`/ultraship plan #<omnibus>`** — a **director** interviews you to sharpen each
-  sub-issue's `objective` and the omnibus `goal`, writes those back into the
-  issue's `### Sub-issues` manifest, validates the manifest is well-formed
-  (`.claude/skills/ultraship/ultraship.py`), prints the wave DAG, and **stops.** This is the only
-  step that asks you anything.
-- **`/ultraship run #<omnibus>`** — fully unattended. A **stage-manager** fans the
-  sub-issues out (in dependency waves derived from `depends-on` + `touches`-
-  overlap) to **player** subagents, each in its own sibling worktree running the
-  `pytest` gate (the `simplify-refactor` half runs at the stage-manager over each
-  sub-PR's diff, since a subagent can't spawn another agent); merges their
-  "Part of #N" sub-PRs through a **serialized merge train** (conflict or red suite
-  → *park*, never resolved unattended); runs a bounded **critic** loop; has the
-  director **grade** the result against the goal; and leaves a finished
-  `omnibus/vX.Y.Z` branch plus a **risk-ranked morning report** as the
-  promotion-PR body.
-
-The manifest, validation, and wave scheduling are deterministic and live in
-`.claude/skills/ultraship/ultraship.py` (pure, unit-tested) — only the orchestration is agentic.
-The state is reconstructed from GitHub on every restart (merged sub-PR = done,
-open = parked, neither = untouched), so a run that dies at 3 a.m. resumes by
-re-reading GitHub rather than replaying a journal.
-
-One safety rule bends **deliberately and only here** (see
+One authority rule applies here (see
 [`docs/decisions/GH-0244-…`](./docs/decisions/GH-0244-ultraship-authority-boundary-0001.md),
 refined by [`GH-0335-…`](./docs/decisions/GH-0335-ultraship-subagent-players-gate-at-stage-manager-0001.md)):
-the stage-manager merges sub-issue → omnibus autonomously (recoverable branch,
-serialized, gated, never force-pushed). Players are **subagents** running under
-the session's own permission posture, so — unlike the spawned `claude -p` process
-GH-0244 first specified — they need no pre-granted permissions and can't hang on a
-1 a.m. prompt. The boundary that does **not** move: **a human still merges omnibus
-→ `main`** via the `/ship #<omnibus>` promotion mode above, and the
-`guard-main-write.sh` hook is untouched.
+the director merges sub-issue → omnibus autonomously (recoverable branch, serialized,
+gated, never force-pushed). Players are **subagents** under the session's own
+permission posture — no pre-granted permissions, no 1 a.m. prompts. The boundary
+that does **not** move: **a human merges omnibus → `main`**, and `guard-main-write.sh`
+is untouched.
+
+The state is reconstructable from GitHub at any restart (merged sub-PR = done, open =
+parked, neither = untouched), so an interrupted run can resume without replaying a
+journal. For a large omnibus you want to run while you're away, combine `/ship` with
+a loop or scheduled agent — the director handles everything; the omnibus path is fully
+unattended except for the plan gate and the final merge.
+
+### Configuring `/ship`: `.claude/ship.toml`
+
+Repo-specific facts live in `.claude/ship.toml` (committed; `signet` never touches
+it). Key fields: `base_branch`, `test_cmd` / `test_source_globs` / `auto_skip_globs`,
+`player_tier`, `max_critic_passes`, and the `guardrails` redline (injected verbatim
+into every player and director prompt — share it in git so a fresh clone gets the
+same redlines). On first run with no `.toml`, `/ship` auto-detects and proposes a
+config; `/ship config` or `/ship --reconfigure` re-runs it on demand.
+
+`/ship` also runs a **signet self-check** on startup: it reads
+`.claude/skills/ship/.stamp`, finds the drawer, and byte-compares the pressed files.
+Drift → stop and prompt to re-press. Drawer absent (clone, CI) → skip silently.
+`--no-signet-check` bypasses it.
 
 ### The helper agents
 

@@ -47,13 +47,12 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
   never per-issue. It dry-runs `scripts/release.py`, pauses for your OK, then
   `--tag --push`. The script owns the version math; never invent a version or
   reach around the guard hook with a bare `git tag`/`git push`.
-- **`ship` and `ultraship` are vendored, not hand-authored.** Their
-  `.claude/skills/<skill>/SKILL.md` are *pressed* verbatim from a local skill
-  drawer; editing them here is wrong — fix the drawer and re-press. Repo-specific
-  behavior lives in `.claude/ship.toml` / `.claude/ultraship.toml` (the press
-  never touches these). `tests/test_skill_drift.py` fails if a pressed copy drifts
-  from the drawer (it skips when the drawer is absent — clone/CI). `release` stays
-  repo-local.
+- **`ship` is vendored, not hand-authored.** `.claude/skills/ship/SKILL.md` is
+  *pressed* verbatim from a local skill drawer by `signet`; editing it here is
+  wrong — fix the drawer and re-press. Repo-specific behavior lives in
+  `.claude/ship.toml` (the press never touches it). `tests/test_skill_drift.py`
+  fails if the pressed copy drifts from the drawer (skips when the drawer is absent
+  — clone/CI). `release` stays repo-local.
 
 ## Tooling
 
