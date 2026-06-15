@@ -95,3 +95,32 @@ def test_source_text_is_frozen_value():
     s = SourceText("d", "t", "sha", 1)
     with pytest.raises(AttributeError):
         s.text = "other"
+
+
+def test_named_extraction_served_from_precommitted_fixture(root):
+    """A named extraction variant is served from a pre-committed fixture file,
+    not extracted live — ensure_source serves it without calling build_summary_input."""
+    # Write a pre-committed fixture (e.g. docling output):
+    root.sources_dir.mkdir(parents=True, exist_ok=True)
+    root.source_path("doc-a", "docling").write_text("docling extracted text")
+
+    corpus = load_corpus(root)
+    src = ensure_source(root, "doc-a", corpus["doc-a"], extraction="docling")
+    assert src.text == "docling extracted text"
+    assert src.sha == source_sha("docling extracted text")
+
+
+def test_named_extraction_raises_when_fixture_missing(root):
+    """A named extraction with no pre-committed fixture raises with guidance."""
+    corpus = load_corpus(root)
+    with pytest.raises(SystemExit, match="pre-committed fixture"):
+        ensure_source(root, "doc-a", corpus["doc-a"], extraction="docling")
+
+
+def test_source_path_encoding(root):
+    """Default extraction uses <doc-id>.txt; named uses <doc-id>-<extraction>.txt."""
+    assert root.source_path("doc-a") == root.sources_dir / "doc-a.txt"
+    assert root.source_path("doc-a", "pdfplumber") == root.sources_dir / "doc-a.txt"
+    assert root.source_path("doc-a", "docling") == root.sources_dir / "doc-a-docling.txt"
+    assert (root.source_path("doc-a", "image-fixture")
+            == root.sources_dir / "doc-a-image-fixture.txt")

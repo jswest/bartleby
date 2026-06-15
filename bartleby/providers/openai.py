@@ -78,8 +78,10 @@ class OpenAIProvider:
         image_bytes: bytes,
         *,
         model: str,
+        temperature: float,
         media_type: str = "image/jpeg",
     ) -> VlmDescription:
+        _drop_temperature(temperature)
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
         response = self._client.chat.completions.parse(
             model=model,

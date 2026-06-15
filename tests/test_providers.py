@@ -217,7 +217,7 @@ def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
 
     from bartleby.providers.anthropic import AnthropicProvider
     p = AnthropicProvider()
-    result = p.analyze_image(b"\xff\xd8\xff", model="claude-haiku-4-5")
+    result = p.analyze_image(b"\xff\xd8\xff", model="claude-haiku-4-5", temperature=0.4)
 
     assert isinstance(result, VlmDescription)
     assert result.description == "A cat sitting."
@@ -225,6 +225,22 @@ def test_anthropic_analyze_image_validates_tool_input(monkeypatch):
     content = fake.last_call["messages"][0]["content"]
     assert any(b.get("type") == "image" for b in content)
     assert fake.last_call["tool_choice"]["name"] == "save_image_description"
+    # Haiku 4.5 accepts temperature, so the configured vision temperature is sent.
+    assert fake.last_call["temperature"] == 0.4
+
+
+def test_anthropic_analyze_image_drops_temperature_on_47plus(monkeypatch):
+    # Opus 4.7+ / Fable 5 reject temperature outright (a 400) — analyze_image must
+    # drop it just like summarize, or every caption call on a current model fails.
+    from bartleby.providers import anthropic as mod
+    monkeypatch.setattr(mod, "_temperature_warned", False)
+    response = _FakeAnthropicResponse([
+        _block("tool_use", name="save_image_description", input_=_VLM_INPUT),
+    ])
+    fake = _install_anthropic(monkeypatch, response)
+    p = mod.AnthropicProvider()
+    p.analyze_image(b"\xff\xd8\xff", model="claude-opus-4-8", temperature=0.4)
+    assert "temperature" not in fake.last_call
 
 
 def test_anthropic_missing_tool_use_raises(monkeypatch):
@@ -233,7 +249,7 @@ def test_anthropic_missing_tool_use_raises(monkeypatch):
     from bartleby.providers.anthropic import AnthropicProvider
     p = AnthropicProvider()
     with pytest.raises(RuntimeError, match="did not include"):
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
 
 
 def test_anthropic_max_tokens_truncation_raises_named_error(monkeypatch):
@@ -246,7 +262,7 @@ def test_anthropic_max_tokens_truncation_raises_named_error(monkeypatch):
     from bartleby.providers.anthropic import AnthropicProvider
     p = AnthropicProvider()
     with pytest.raises(RuntimeError, match="max_tokens") as exc:
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
     assert "did not include" not in str(exc.value)
 
 
@@ -259,7 +275,7 @@ def test_anthropic_invalid_tool_input_raises(monkeypatch):
     from bartleby.providers.anthropic import AnthropicProvider
     p = AnthropicProvider()
     with pytest.raises(RuntimeError, match="failed schema validation"):
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
 
 
 # ---------- OpenAI ----------
@@ -369,7 +385,7 @@ def test_openai_analyze_image_returns_parsed_pydantic(monkeypatch):
     fake = _install_openai(monkeypatch, _FakeOpenAIResponse(parsed=parsed))
     from bartleby.providers.openai import OpenAIProvider
     p = OpenAIProvider()
-    result = p.analyze_image(b"\xff\xd8\xff", model="gpt-5-mini")
+    result = p.analyze_image(b"\xff\xd8\xff", model="gpt-5-mini", temperature=0.0)
     assert result is parsed
     assert fake.last_call["response_format"] is VlmDescription
     # Image is passed as a data URL in the content blocks.
@@ -384,7 +400,7 @@ def test_openai_refusal_raises(monkeypatch):
     from bartleby.providers.openai import OpenAIProvider
     p = OpenAIProvider()
     with pytest.raises(RuntimeError, match="refusal='nope'"):
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
 
 
 # ---------- Ollama ----------
@@ -427,12 +443,14 @@ def test_ollama_analyze_image_passes_bytes(monkeypatch):
                            _FakeOllamaResponse(content=json.dumps(_VLM_INPUT)))
     from bartleby.providers.ollama import OllamaProvider
     p = OllamaProvider(base_url="http://test:11434")
-    result = p.analyze_image(b"\xff\xd8\xff", model="qwen2.5-vl:7b")
+    result = p.analyze_image(b"\xff\xd8\xff", model="qwen2.5-vl:7b", temperature=0.3)
     assert isinstance(result, VlmDescription)
     assert result.description == "A cat sitting."
     msg = fake.last_call["messages"][0]
     assert msg["images"] == [b"\xff\xd8\xff"]
     assert fake.last_call["format"] == VlmDescription.model_json_schema()
+    # The configured vision temperature is forwarded via Ollama's options.
+    assert fake.last_call["options"]["temperature"] == 0.3
 
 
 def test_ollama_empty_content_raises(monkeypatch):
@@ -440,7 +458,7 @@ def test_ollama_empty_content_raises(monkeypatch):
     from bartleby.providers.ollama import OllamaProvider
     p = OllamaProvider(base_url="http://test:11434")
     with pytest.raises(RuntimeError, match="empty response"):
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
 
 
 def test_ollama_malformed_json_raises(monkeypatch):
@@ -448,7 +466,7 @@ def test_ollama_malformed_json_raises(monkeypatch):
     from bartleby.providers.ollama import OllamaProvider
     p = OllamaProvider(base_url="http://test:11434")
     with pytest.raises(RuntimeError, match="failed .* validation"):
-        p.analyze_image(b"\x00", model="m")
+        p.analyze_image(b"\x00", model="m", temperature=0.0)
 
 
 # ---------- wsjpt ----------

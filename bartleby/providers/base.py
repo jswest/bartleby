@@ -117,6 +117,7 @@ class Provider(Protocol):
         image_bytes: bytes,
         *,
         model: str,
+        temperature: float,
         media_type: str = "image/jpeg",
     ) -> VlmDescription: ...
 

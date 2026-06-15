@@ -284,3 +284,156 @@ def test_reject_if_html_passes_a_real_pdf(tmp_path):
     _text_pdf(src, ["A genuine PDF with plenty of text. " * 4])
     # A valid PDF starts with %PDF — no exception.
     pp.reject_if_html(src)
+
+
+# ---------------------------------------------------------------------------
+# Vector figure detection tests (#3)
+# ---------------------------------------------------------------------------
+
+def _pdf_with_vector_figure_and_raster(path, image: Image.Image) -> None:
+    """One page: a vector chart (axes + diagonal lines + bezier) plus a raster
+    image. The chart uses non-crossing lines so pdfplumber's table detector
+    does not claim the cluster."""
+    from reportlab.lib import colors as rl_colors
+    c = canvas.Canvas(str(path), pagesize=letter)
+    # Enough text so the page stays out of the sparse path.
+    t = c.beginText(72, 750)
+    for _ in range(4):
+        t.textLine("Text to clear the sparse threshold and keep page content_type='text'.")
+    c.drawText(t)
+    # Vector chart: two axes + a diagonal data line + a bezier curve.
+    c.setStrokeColor(rl_colors.black)
+    c.setLineWidth(1)
+    c.line(100, 200, 100, 400)       # Y axis
+    c.line(100, 200, 400, 200)       # X axis
+    c.line(100, 200, 400, 400)       # data line (diagonal — no grid)
+    c.bezier(100, 300, 200, 380, 300, 320, 400, 400)   # trend curve
+    # Raster image in a different region of the page.
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    c.drawImage(ImageReader(buf), 100, 450, width=200, height=100)
+    c.showPage()
+    c.save()
+
+
+def _pdf_with_table_only(path) -> None:
+    """One page: a proper grid table (4 rows × 5 cols) — no other vector ink.
+    pdfplumber's find_tables() should claim the cluster so no figure bbox
+    survives table exclusion."""
+    from reportlab.lib import colors as rl_colors
+    c = canvas.Canvas(str(path), pagesize=letter)
+    # Add text so content_type is 'text'.
+    t = c.beginText(72, 750)
+    for _ in range(4):
+        t.textLine("Text to clear the sparse threshold.")
+    c.drawText(t)
+    c.setStrokeColor(rl_colors.black)
+    c.setLineWidth(1)
+    # 4 horizontal + 5 vertical lines → a 3×4 grid pdfplumber recognises.
+    for row in range(4):
+        y = 600 - row * 30
+        c.line(100, y, 400, y)
+    for col in range(5):
+        x = 100 + col * 75
+        c.line(x, 600, x, 510)
+    c.showPage()
+    c.save()
+
+
+def _pdf_with_full_page_rect(path) -> None:
+    """One page: a single near-full-page rectangle (a full-bleed background /
+    page border) plus text. Its cluster covers >= PAGE_SUBSTRATE_AREA_RATIO of
+    the page, so it must be dropped as substrate rather than cropped to the VLM.
+    A lone rect is not a grid, so find_tables() does not claim it."""
+    from reportlab.lib import colors as rl_colors
+    c = canvas.Canvas(str(path), pagesize=letter)
+    t = c.beginText(72, 750)
+    for _ in range(4):
+        t.textLine("Text to clear the sparse threshold.")
+    c.drawText(t)
+    c.setStrokeColor(rl_colors.black)
+    c.setLineWidth(1)
+    w, h = letter
+    c.rect(10, 10, w - 20, h - 20)   # ~94% of the page → substrate
+    c.showPage()
+    c.save()
+
+
+def test_full_page_vector_substrate_produces_no_vector_crop(tmp_path):
+    """A page whose vector ink is a near-full-page rect must produce NO vector
+    crop — the substrate ceiling (PAGE_SUBSTRATE_AREA_RATIO) drops it, mirroring
+    the raster path. Guards against vector_ink_threshold=0 flooding the VLM with
+    whole-page crops on full-bleed-background pages."""
+    src = tmp_path / "full_page_rect.pdf"
+    _pdf_with_full_page_rect(src)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    page = result.pages[0]
+    vector_crops = [
+        e for e in page.embedded_images if e.image_index_on_page >= 1000
+    ]
+    assert vector_crops == [], (
+        f"Full-page-rect substrate should yield no vector crops, got {len(vector_crops)}"
+    )
+
+
+def test_vector_figure_and_raster_both_captured(tmp_path):
+    """(a) A page with a vector chart AND a raster image must produce BOTH a
+    vector-region crop (image_index_on_page >= 1000) and a raster crop
+    (image_index_on_page < 1000). The two run concurrently, not gated on each
+    other."""
+    src = tmp_path / "vector_and_raster.pdf"
+    _pdf_with_vector_figure_and_raster(src, _png_image())
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    assert result.page_count == 1
+    page = result.pages[0]
+    assert page.content_type == "text"
+
+    indices = [e.image_index_on_page for e in page.embedded_images]
+    # At least one raster-embed crop (index 1-based from page.images).
+    raster_crops = [i for i in indices if i < 1000]
+    assert raster_crops, (
+        f"Expected at least one raster-embed crop (index < 1000), got indices {indices}"
+    )
+    # At least one vector-figure crop (index >= 1000).
+    vector_crops = [i for i in indices if i >= 1000]
+    assert vector_crops, (
+        f"Expected at least one vector-figure crop (index >= 1000), got indices {indices}"
+    )
+    # Every crop is a valid PNG that Pillow can open.
+    for emb in page.embedded_images:
+        decoded = Image.open(io.BytesIO(emb.png_bytes))
+        assert decoded.size[0] > 0 and decoded.size[1] > 0
+
+
+def test_table_only_page_produces_no_vector_crop(tmp_path):
+    """(b) A page whose only vector ink forms a proper table grid must produce
+    NO vector-figure crop — the table exclusion pass strips the cluster."""
+    src = tmp_path / "table_only.pdf"
+    _pdf_with_table_only(src)
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    assert result.page_count == 1
+    page = result.pages[0]
+    vector_crops = [
+        e for e in page.embedded_images if e.image_index_on_page >= 1000
+    ]
+    assert vector_crops == [], (
+        f"Table-only page should have no vector crops, got {len(vector_crops)}"
+    )
+
+
+def test_text_only_page_produces_no_vector_crop(tmp_path):
+    """(c) A page with only text (no vector primitives) must produce no
+    vector-figure crop. The ink threshold short-circuits the shapely pass."""
+    src = tmp_path / "text_only.pdf"
+    _text_pdf(src, ["A page of plain text with no charts or figures. " * 6])
+    result = pp.convert(src, sparse_text_threshold=100, ocr_min_confidence=30)
+
+    assert result.page_count == 1
+    page = result.pages[0]
+    assert page.embedded_images == [], (
+        f"Text-only page should have no embedded images, got {page.embedded_images}"
+    )

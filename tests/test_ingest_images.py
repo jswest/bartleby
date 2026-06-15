@@ -150,7 +150,9 @@ def test_analyze_routes_text_image_via_tesseract_only(monkeypatch):
         lambda b: ocr_module.OcrResult(text="X" * 500, avg_confidence=80.0),
     )
     prepared = img_pipeline.prepare_image(_png_bytes(50, 50), max_dimension=1024)
-    out = img_pipeline.analyze(_FakeProvider(), prepared, model="fake-vl:1")
+    out = img_pipeline.analyze(
+        _FakeProvider(), prepared, model="fake-vl:1", temperature=0.0,
+    )
     assert out.kind == "text"
     assert out.text == "X" * 500
     assert out.description == ""
@@ -163,9 +165,10 @@ def test_analyze_routes_scene_image_via_vlm(monkeypatch):
 
     class _FakeProvider:
         name = "fake"
-        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+        def analyze_image(self, image_bytes, *, model, temperature, media_type="image/jpeg"):
             seen["bytes"] = image_bytes
             seen["model"] = model
+            seen["temperature"] = temperature
             return VlmDescription(description="A red square.", notes="")
         def summarize(self, *a, **k):
             raise NotImplementedError
@@ -175,12 +178,16 @@ def test_analyze_routes_scene_image_via_vlm(monkeypatch):
         lambda b: ocr_module.OcrResult(text="hi", avg_confidence=10.0),
     )
     prepared = img_pipeline.prepare_image(_png_bytes(50, 50), max_dimension=1024)
-    out = img_pipeline.analyze(_FakeProvider(), prepared, model="fake-vl:1")
+    out = img_pipeline.analyze(
+        _FakeProvider(), prepared, model="fake-vl:1", temperature=0.4,
+    )
     assert out.kind == "scene"
     assert out.text == ""
     assert out.description == "A red square."
     assert seen["bytes"] == prepared.jpeg_bytes
     assert seen["model"] == "fake-vl:1"
+    # analyze() threads the configured vision temperature to the provider.
+    assert seen["temperature"] == 0.4
 
 
 def test_analyze_falls_back_to_vlm_when_ocr_raises(monkeypatch):
@@ -190,7 +197,7 @@ def test_analyze_falls_back_to_vlm_when_ocr_raises(monkeypatch):
 
     class _FakeProvider:
         name = "fake"
-        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+        def analyze_image(self, image_bytes, *, model, temperature, media_type="image/jpeg"):
             seen["called"] = True
             return VlmDescription(description="A red square.", notes="")
         def summarize(self, *a, **k):
@@ -201,7 +208,9 @@ def test_analyze_falls_back_to_vlm_when_ocr_raises(monkeypatch):
 
     monkeypatch.setattr(ocr_module, "run", _boom)
     prepared = img_pipeline.prepare_image(_png_bytes(50, 50), max_dimension=1024)
-    out = img_pipeline.analyze(_FakeProvider(), prepared, model="fake-vl:1")
+    out = img_pipeline.analyze(
+        _FakeProvider(), prepared, model="fake-vl:1", temperature=0.0,
+    )
     assert seen["called"]   # VLM ran despite OCR crashing
     assert out.kind == "scene"
     assert out.description == "A red square."

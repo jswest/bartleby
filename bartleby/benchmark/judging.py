@@ -24,7 +24,7 @@ import time
 from pydantic import BaseModel, Field
 
 from bartleby.benchmark.refs import ModelRef
-from bartleby.benchmark.sources import load_source
+from bartleby.benchmark.sources import DEFAULT_EXTRACTION, load_source
 from bartleby.benchmark.stores import (
     BenchmarkRoot,
     append_record,
@@ -118,26 +118,29 @@ def _collect_work(root: BenchmarkRoot, judge: ModelRef, passes: int) -> list[dic
         first = ok_runs[0]
         ref = ModelRef(first["provider"], first["model"])
         doc_id = first["doc"]
+        extraction = first.get("extraction", DEFAULT_EXTRACTION)
 
-        source = load_source(root, doc_id)
+        source = load_source(root, doc_id, extraction)
         if source is None:
+            src_path = root.source_path(doc_id, extraction)
             raise SystemExit(
-                f"sources/{doc_id}.txt missing — the judge scores against the "
+                f"{src_path} missing — the judge scores against the "
                 f"exact text the models saw; re-run `bartleby benchmark "
                 f"summarize` to rebuild it.")
 
         groups: dict[str, dict] = {}
         for r in ok_runs:
             if r["source_sha"] != source.sha:
+                src_path = root.source_path(doc_id, extraction)
                 raise SystemExit(
-                    f"source drift for doc {doc_id!r}: run record carries "
-                    f"source_sha {r['source_sha']} but sources/{doc_id}.txt "
-                    f"hashes to {source.sha}. Refusing to judge against text "
-                    f"the model never saw. (Did sources/ get re-extracted? "
-                    f"Old runs can't be judged against new text.)")
+                    f"source drift for doc {doc_id!r} extraction {extraction!r}: "
+                    f"run record carries source_sha {r['source_sha']} but "
+                    f"{src_path} hashes to {source.sha}. Refusing to judge "
+                    f"against text the model never saw. (Did sources/ get "
+                    f"re-extracted? Old runs can't be judged against new text.)")
             groups.setdefault(summary_sha(r["summary"]), r["summary"])
 
-        jpath = root.judgement_path(ref, doc_id, judge)
+        jpath = root.judgement_path(ref, doc_id, judge, extraction)
         have: dict[str, int] = {}
         for j in read_records(jpath):
             if j.get("ok"):
@@ -146,8 +149,9 @@ def _collect_work(root: BenchmarkRoot, judge: ModelRef, passes: int) -> list[dic
         for sha, summary in groups.items():
             need = passes - have.get(sha, 0)
             if need > 0:
-                work.append({"ref": ref, "doc_id": doc_id, "sha": sha,
-                             "summary": summary, "source_text": source.text,
+                work.append({"ref": ref, "doc_id": doc_id, "extraction": extraction,
+                             "sha": sha, "summary": summary,
+                             "source_text": source.text,
                              "source_sha": source.sha, "jpath": jpath,
                              "done": have.get(sha, 0), "need": need})
     return work
@@ -204,6 +208,7 @@ def run(root: BenchmarkRoot, judge: ModelRef | None = None,
                 "provider": item["ref"].provider,
                 "model": item["ref"].model,
                 "doc": item["doc_id"],
+                "extraction": item["extraction"],
                 "judge_provider": judge.provider,
                 "judge_model": judge.model,
                 "summary_sha": item["sha"],

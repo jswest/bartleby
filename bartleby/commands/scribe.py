@@ -62,6 +62,7 @@ from bartleby.lib.consts import (
     DEFAULT_SPARSE_TEXT_THRESHOLD,
     DEFAULT_SUMMARIZE_WORKERS,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VECTOR_INK_THRESHOLD,
     DEFAULT_VISION_MAX_DIMENSION,
     DEFAULT_VISION_MIN_DIMENSION,
 )
@@ -196,10 +197,17 @@ def main(
         vision_min_dimension=int(
             config.get("vision_min_dimension", DEFAULT_VISION_MIN_DIMENSION)
         ),
+        vector_ink_threshold=int(
+            config.get("vector_ink_threshold", DEFAULT_VECTOR_INK_THRESHOLD)
+        ),
         archive_root=archive_root,
         timings=timings,
     )
     temperature = float(config.get("temperature", DEFAULT_TEMPERATURE))
+    # Vision captioning gets its own temperature knob, defaulting to the
+    # summarizer temperature when unset (#223) — so a corpus that wants
+    # deterministic summaries but more varied captions can have both.
+    vision_temperature = float(config.get("vision_temperature", temperature))
     # Validate the configured reasoning_effort once, here, before any summarize
     # call reaches a provider. The wizard constrains this value, but a config can
     # be hand-edited — an out-of-enum effort would otherwise crash mid-ingest with
@@ -314,6 +322,7 @@ def main(
             caption._caption_all(
                 writer, units,
                 vision_provider=vision_provider, vision_model=vision_model,
+                vision_temperature=vision_temperature,
                 vision_enabled=parse_config.vision_enabled,
                 caption_workers=caption_workers, timings=timings,
                 phase=progress.phase("caption"),

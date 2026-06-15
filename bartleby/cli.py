@@ -258,6 +258,12 @@ def main():
         "--ollama-host", type=str, default=None,
         help="Override the Ollama host (default http://localhost:11434).",
     )
+    bs.add_argument(
+        "--extraction", type=str, default=None,
+        help="Text-extraction backend to use (default: pdfplumber). Named variants "
+             "such as 'docling' or 'image-fixture' must already exist as pre-committed "
+             "fixtures under sources/<doc-id>-<extraction>.txt.",
+    )
     bj = benchmark_sub.add_parser(
         "judge",
         help="Top up blind judge scores for every distinct summary on record",
@@ -295,6 +301,11 @@ def main():
     bl.add_argument(
         "--min-schema", type=float, default=100.0,
         help="Minimum schema-valid %% to survive the hard gate (default 100).",
+    )
+    bl.add_argument(
+        "--extractions", type=str, default=None,
+        help="Comma-separated extraction filter (e.g. pdfplumber,docling); "
+             "default: all extractions on record.",
     )
 
     bb = benchmark_sub.add_parser(

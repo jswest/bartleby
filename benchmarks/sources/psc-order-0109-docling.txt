@@ -1,0 +1,60 @@
+STATE OF NEW YORK PUBLIC SERVICE COMMISSION
+At a session of the Public Service Commission held in the City of Albany on November 13, 2025
+
+COMMISSIONERS PRESENT:
+Rory M. Christian, Chair James S. Alesi David J. Valesky John B. Maggiore Uchenna S. Bright Denise M. Sheehan Radina R. Valova
+CASE 24-E-0461 -  Proceeding on Motion of the Commission as to the Rates, Charges, Rules and Regulations of Central Hudson Gas & Electric Corporation for
+Electric Service.
+- CASE 24-G-0462 -  Proceeding on Motion of the Commission as to the Rates, Charges, Rules and Regulations of Central Hudson Gas & Electric Corporation for Gas Service.
+ORDER DENYING REQUEST FOR REHEARING
+AND RECONSIDERATION
+(Issued and Effective November 14, 2025)
+BY THE COMMISSION:
+
+INTRODUCTION
+In this Order, the Commission denies a request for reconsideration and rehearing of an Order Adopting Terms of a Joint Proposal and Establishing Electric and Gas Rate Plans (Rate Order) issued August 14, 2025, in these proceedings.  The Rate Order was issued as the culmination of the Commission's review of a request by Central Hudson Gas & Electric Corporation
+(Central Hudson or the Company) to increase its annual electric and gas delivery revenues. 1
+
+RELEVANT PROCEDURAL HISTORY
+Central Hudson filed revised tariff leaves seeking increases to its annual electric and gas delivery revenues on August 1, 2024.  As the request was statutorily defined as a 'major change' under New York Public Service Law (PSL) §66(12)(c), the matters were referred to Administrative Law Judges to oversee the processing of the Company's requests including the conduct of a mandatory hearing.  Josh Riley (Petitioner), who submitted the petition seeking reconsideration or rehearing that is the subject of this order, participated in the proceedings as a party.
+On December 10, 2025, pursuant to 16 NYCRR §3.9, Central Hudson filed a Notice of Impending Settlement Negotiations, notifying the Judges and the parties of its intent to discuss the potential for settlement of the underlying issues.  Thereafter, the Company scheduled several meetings in which all parties were invited to attend and negotiate their respective positions.  On May 13, 2025, various parties to the proceedings filed with the Commission a Joint Proposal intended to forego litigation of their pre-filed testimonial positions in lieu of proposed three-year rate plans for Central Hudson's electric and gas delivery operations.  At such point, litigation shifted from consideration of Central Hudson's initial filed tariff amendments to consideration of whether the proposed
+1  See Public Service Law §66(12).
+three-year rate plans contained in the settlement were in the public interest. 2
+On June 16, 2025, the Judges conducted an evidentiary hearing focused on the Joint Proposal's provisions.  As a party to the proceeding, Petitioner appeared at the evidentiary hearing and conducted cross-examination of a panel of witnesses from the Joint Proposal signatories, specifically trial staff of the Department of Public Service and Central Hudson.  At the conclusion of the hearing, Petitioner filed a post-hearing brief on July 1, 2025, and a reply brief on July 9, 2025.
+
+RELEVANT PROCEDURAL HISTORY
+After the Judges provided to the Commission their report and recommendation at the Commission's regularly scheduled session on August 14, 2025, the Commission issued the Rate Order adopting the Joint Proposal.  In the Rate Order, the Commission considered at length the opposition positions of Petitioner. 3   On September 11, 2025, Petitioner filed a request for reconsideration including an additional request to rehear the matters or to reopen the record for further development. Statements opposing Petitioner's reconsideration request were filed on September 25, 2025, by trial staff of the Department of
+Public Service and by Central Hudson.
+
+LEGAL STANDARD
+Rehearing of a Commission Order is available under PSL §22 and 16 NYCRR §3.7.  Under 16 NYCRR §3.7(b) 'Rehearing may be sought only on the grounds that the commission committed an
+2  Cases 90-M-0255 and 92-M-0138, Proceeding on Motion of the Commission Concerning its Procedures for Settlements and Stipulation Agreements, Opinion 92-2, Opinion, Order and Resolution Adopting Settlement Procedures and Guidelines
+(issued March 24, 1992) (Settlement Guidelines).
+3  See Rate Order, pp. 17 - 22, and pp. 40 - 45.
+error of law or fact or that new circumstances warrant a different determination.'
+
+DISCUSSION
+Petitioner alleges two legal errors: (1) that the Commission failed to account for statements made by Central Hudson management on an investor call and in investment quarterly reports that the Company had sufficient revenues to (2) that the Commission failed to balance ratepayer interests against the interests of Central Hudson's upstream corporate meet its working capital needs 'for the foreseeable future,' and parent, and sole investor, Fortis Inc.
+As an initial matter, Petitioner is not entitled to rehearing on any error of fact.  An error of fact is either when some fact which really exists is unknown, or some fact is supposed to exist which really does not exist. 4   In the Rate Order, the Commission stated the underlying facts precisely as stated by Petitioner, analyzes those facts relative to the parties' positions, and reaches a conclusion different from what
+Petitioner argues. 5   Accordingly, no error of fact was made.
+Instead, Petitioner alleges that the Commission's conclusions on the stated facts create an error of law. However, Petitioner points to no law that requires the Commission to conclude differently than it did or to deny the Joint Proposal's rate plan.  This is insufficient to create an error of law where no law is cited that clearly and convincingly mandates a different outcome.  At most, Petitioner voices
+4   Cardone v. Consolidated Edison Co. of N.Y., 196 Misc. 44, 46 (1949), rev'd on other grounds Cardone v. Consolidated Edison Co. of N.Y., 197 Misc. 188 (1949).
+5   Rate Order, pp. 17 - 22 (statements regarding sufficient working capital), pp. 40 - 44 (relevance of Fortis as parent and sole investor).
+
+DISCUSSION
+disagreement with the Commission's analysis and its conclusions regarding the relevance, importance, and significance of the underlying facts.  To the extent that Petitioner relies on the Commission's public interest standard as contained in its Settlement Guidelines, Petitioner provides no analysis beyond asserting that 'the law requires' a different result 6  and erroneously expressing the view that the standard distills down to the single question of fairness. 7
+To the extent that Petitioner's request extends to the Commission's determination that the Company is sufficiently ring-fenced from its upstream owner such that its Constitutionally required opportunity to earn a fair return on its invested capital should be determined on a stand-alone basis, Petitioner again asserts without citation or support that the Rate Order misstates the law.  Such assertion alone is insufficient to properly allege an error of law requiring rehearing.
+Finally, as to Petitioner's further request for reconsideration or reopening the record, no new evidence has been submitted that is not already in the record or is not otherwise duplicative and such requests are likewise denied. Further, to the extent that Petitioner lodges complaints regarding the conduct of the hearing, our review of the hearing transcript indicates that the Judges considered Petitioner's offers and the other parties' objections and provided Petitioner significant opportunity to express positions on the record even after determining that such statements were irrelevant to the issues involved.  Furthermore, the evidence on which the Judges
+6   Motion to Reverse the PSC's Order Approving the Joint Proposal, p. 2.
+7   Motion to Reverse the PSC's Order Approving the Joint Proposal, p. 5.
+ruled was nonetheless included in Petitioner's post-hearing briefs and considered at length in the Rate Order.
+
+CONCLUSION
+Petitioner's requests for rehearing, reconsideration, and remand and reopening the record are denied.
+
+The Commission orders:
+1. The Motion to Reverse the PSC's Order Approving the Joint Proposal filed by Josh Riley on September 12, 2025, in these proceedings is denied.
+2. These proceedings are continued.
+By the Commission,
+MICHELLE L. PHILLIPS Secretary
+(SIGNED)
