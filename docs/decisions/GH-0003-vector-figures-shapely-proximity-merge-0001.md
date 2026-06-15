@@ -12,7 +12,8 @@ The issue body explored several approaches (whole-page render, `len(page.images)
 2. Buffer each primitive by `tol/2` points and `unary_union` into merged clusters.
 3. Subtract clusters whose centroid falls inside a `page.find_tables()` bbox — table gridlines are rects/lines and would otherwise produce false-positive figure crops. `find_tables()` is pdfplumber's purpose-built detector; no heuristic is needed.
 4. Drop clusters below `min_area` (slivers and hairlines).
-5. Crop each surviving cluster from the already-rendered raster.
+5. Drop clusters covering ≥ `PAGE_SUBSTRATE_AREA_RATIO` (90%) of the page — full-bleed background rects, page borders, or ink that bridges into one page-spanning blob — the same substrate ceiling `_crop_embedded_images` applies to raster embeds. This is load-bearing precisely because `vector_ink_threshold` defaults to 0: without it, a page with a full-page rect would crop ~the whole page to the VLM on every such page.
+6. Crop each surviving cluster from the already-rendered raster.
 
 ## Runs alongside raster-embed cropping, never gated on it
 
