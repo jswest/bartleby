@@ -647,3 +647,41 @@ input[type="number"] {
 }
 /* Entity rows render as cards by composing the shared `.surface` primitive in
    the markup (class="entity surface"); the box styling lives there, not here. */
+
+/* =========================================================================
+   B2 · Use the width — card grids and prose centering.
+
+   .card-grid    Responsive CSS grid for "cardable" list pages (documents,
+                 tags). `auto-fill` with an 18rem floor means one column on
+                 mobile, two at ~36rem, three at ~54rem+, etc. Cards inside
+                 carry `.surface .surface--interactive`.
+
+   .page-prose   Centers a text-only page at --width-content rather than
+                 left-anchoring it. Apply to a wrapping <div> on prose pages.
+   ========================================================================= */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--space-xl);
+  list-style: none;
+  padding: 0;
+}
+.card-grid h2 {
+  font-size: var(--text-lg);
+}
+.card-grid a {
+  color: inherit;
+  text-decoration: none;
+}
+.card-grid a:hover {
+  color: var(--color-off);
+}
+.card-grid .desc {
+  margin: var(--space-2xs) 0 0;
+}
+
+.page-prose {
+  max-width: var(--width-content);
+  margin-left: auto;
+  margin-right: auto;
+}
