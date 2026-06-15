@@ -107,8 +107,9 @@ def test_quality_aggregation_matches_hand_verified_numbers(populated):
     runs = report.load_runs(populated)
     judgments = report.load_judgments(populated)
     cells = report.quality_cells(runs, judgments)
-    assert cells[(ALPHA, "d1")]["score"] == pytest.approx(4.5 + 1 / 12)
-    assert cells[(BETA, "d1")]["score"] == pytest.approx(3.75)
+    # Cell key is now (ref, doc, extraction); default extraction is "pdfplumber".
+    assert cells[(ALPHA, "d1", "pdfplumber")]["score"] == pytest.approx(4.5 + 1 / 12)
+    assert cells[(BETA, "d1", "pdfplumber")]["score"] == pytest.approx(3.75)
     quality = report.quality_by_ref(cells)
     assert quality[ALPHA] == pytest.approx(4.0 + 1 / 12)
     assert quality[BETA] == pytest.approx(3.75)
@@ -123,7 +124,7 @@ def test_weights_recomputed_from_runs_not_judgments(populated):
     cells = report.quality_cells(report.load_runs(populated),
                                  report.load_judgments(populated))
     expected = (5 * (4.0833333) + 1 * (3.0833333)) / 6
-    assert cells[(BETA, "d1")]["score"] == pytest.approx(expected, abs=1e-4)
+    assert cells[(BETA, "d1", "pdfplumber")]["score"] == pytest.approx(expected, abs=1e-4)
 
 
 def test_leaderboard_renders_markdown_with_frontier_and_disqualified(populated, capsys):
@@ -259,3 +260,28 @@ def test_errors_clean_when_none(root, capsys):
 
 def test_leaderboard_empty_window_errors(populated, capsys):
     assert report.leaderboard(populated, since=4102444800.0) == 1  # year 2100
+
+
+def test_extraction_filter_excludes_other_extractions(root, capsys):
+    """--extractions filters runs and judgments by extraction field."""
+    # Default pdfplumber run
+    _run(root, ALPHA, "d1", 0, _summary("a"))
+    # Named docling run (records extraction directly in the store)
+    from bartleby.benchmark.stores import append_record
+    append_record(root.result_path(ALPHA, "d1", "docling"), {
+        "provider": ALPHA.provider, "model": ALPHA.model, "doc": "d1",
+        "extraction": "docling", "run_index": 0, "ok": True,
+        "wall_seconds": 5.0, "load_duration_ns": int(1e9),
+        "source_sha": "s1", "prompt_sha": "p1", "temperature": 0.0,
+        "summary": _summary("a-docling"),
+    })
+
+    pdfplumber_runs = report.load_runs(root, extractions=["pdfplumber"])
+    docling_runs = report.load_runs(root, extractions=["docling"])
+    all_runs = report.load_runs(root)
+
+    assert len(pdfplumber_runs) == 1
+    assert pdfplumber_runs[0].get("extraction", "pdfplumber") == "pdfplumber"
+    assert len(docling_runs) == 1
+    assert docling_runs[0]["extraction"] == "docling"
+    assert len(all_runs) == 2

@@ -4,13 +4,21 @@ Layout (relative to the benchmarks root, default ``benchmarks/`` in the CWD):
 
     corpus.yaml   models.yaml   judges.yaml      # tracked configuration
     corpus/                                      # tracked PDFs
-    sources/<doc-id>.txt                         # ignored: extracted-text cache
-    results/<provider>_<model>_<doc-id>.jsonl    # ignored: run records
+    sources/<doc-id>.txt                         # ignored: extracted-text cache (pdfplumber)
+    sources/<doc-id>-<extraction>.txt            # ignored: extraction-variant cache
+    results/<provider>_<model>_<doc-id>.jsonl           # ignored: run records (pdfplumber)
+    results/<provider>_<model>_<doc-id>_x-<extraction>.jsonl  # ignored: named-extraction runs
     judgements/<provider>_<model>_<doc-id>_<judge-provider>_<judge-model>.jsonl
+    judgements/<provider>_<model>_<doc-id>_x-<extraction>_<judge-provider>_<judge-model>.jsonl
 
 Filenames are write-side organization only — every record carries its own
-identity fields (``provider``, ``model``, ``doc``, and for judgments the judge
-pair), so readers glob and filter on record contents and never parse names.
+identity fields (``provider``, ``model``, ``doc``, ``extraction``, and for
+judgments the judge pair), so readers glob and filter on record contents and
+never parse names.
+
+A cell is (provider, model, doc, extraction). The default extraction is
+``"pdfplumber"`` and its files omit the ``_x-<extraction>`` segment so
+existing stores are backward-compatible.
 """
 
 from __future__ import annotations
@@ -26,6 +34,11 @@ import yaml
 from bartleby.benchmark.refs import ModelRef
 
 DEFAULT_ROOT = Path("benchmarks")
+
+# The extraction backend whose files omit the ``_x-<extraction>`` / ``-<extraction>``
+# segment, keeping pre-extraction-field stores backward-compatible. Defined here
+# (the file-layout owner) and re-exported from ``sources`` for callers.
+DEFAULT_EXTRACTION = "pdfplumber"
 
 
 class BenchmarkRoot:
@@ -70,11 +83,19 @@ class BenchmarkRoot:
     def judgements_dir(self) -> Path:
         return self.root / "judgements"
 
-    def result_path(self, ref: ModelRef, doc_id: str) -> Path:
-        return self.results_dir / f"{ref.slug}_{doc_id}.jsonl"
+    def result_path(self, ref: ModelRef, doc_id: str,
+                    extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"_x-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
+        return self.results_dir / f"{ref.slug}_{doc_id}{suffix}.jsonl"
 
-    def judgement_path(self, ref: ModelRef, doc_id: str, judge: ModelRef) -> Path:
-        return self.judgements_dir / f"{ref.slug}_{doc_id}_{judge.slug}.jsonl"
+    def judgement_path(self, ref: ModelRef, doc_id: str, judge: ModelRef,
+                       extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"_x-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
+        return self.judgements_dir / f"{ref.slug}_{doc_id}{suffix}_{judge.slug}.jsonl"
+
+    def source_path(self, doc_id: str, extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
+        return self.sources_dir / f"{doc_id}{suffix}.txt"
 
     def load_models(self) -> list[ModelRef]:
         return [ModelRef.parse(m) for m in self._yaml_list(self.models_yaml, "models")]

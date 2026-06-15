@@ -89,26 +89,50 @@ Two judge providers, two auth models:
 
 ```
 benchmarks/
-  corpus.yaml    models.yaml    judges.yaml     # tracked configuration
-  corpus/                                       # tracked PDFs
-  sources/<doc-id>.txt                          # ignored: extracted-text cache
-  results/<provider>_<model>_<doc-id>.jsonl     # ignored: run records, append-only
+  corpus.yaml    models.yaml    judges.yaml         # tracked configuration
+  corpus/                                           # tracked PDFs
+  sources/<doc-id>.txt                              # ignored: pdfplumber cache
+  sources/<doc-id>-<extraction>.txt                 # TRACKED: committed fixtures
+  results/<provider>_<model>_<doc-id>.jsonl         # ignored: run records
+  results/<provider>_<model>_<doc-id>_x-<extraction>.jsonl  # ignored: named-extraction runs
   judgements/<provider>_<model>_<doc-id>_<judge-provider>_<judge-model>.jsonl
+  judgements/<provider>_<model>_<doc-id>_x-<extraction>_<judge-provider>_<judge-model>.jsonl
 ```
 
-Every record carries its own identity (`provider`, `model`, `doc`, the judge
-pair) plus provenance: `source_sha` (hash of the exact text the model saw),
-`prompt_sha` (hash of the summarize prompt + `DocumentSummary` schema),
-`temperature`, `max_tokens`, and `bartleby_version`. Filenames are write-side
-organization only — readers glob and filter on record contents.
+A **cell** is `(provider, model, doc, extraction)`. The `extraction` field
+names the text-extraction backend whose source text the model received.
+The default is `pdfplumber` (stored files omit the `_x-<extraction>` segment
+so existing stores are unchanged). Named variants like `docling` or
+`image-fixture` write to separate store files and are separately filterable.
+
+Every record carries its own identity (`provider`, `model`, `doc`,
+`extraction`, the judge pair) plus provenance: `source_sha` (hash of the exact
+text the model saw), `prompt_sha` (hash of the summarize prompt +
+`DocumentSummary` schema), `temperature`, `max_tokens`, and
+`bartleby_version`. Filenames are write-side organization only — readers glob
+and filter on record contents.
 
 Nothing is ever rewritten: summarize appends runs with per-cell monotonic
 `run_index`es, judge appends passes. The leaderboard's `--since`/`--until`
 window is how you cut a report from a particular era, and it **warns** when a
 cell's windowed records mix `source_sha`, `prompt_sha`, `temperature`, or
-`max_tokens` regimes instead of silently averaging across them. Deleting `sources/` forces re-extraction —
-but old runs then carry a stale `source_sha`, and the judge **refuses** to
-score a summary against text the model never saw.
+`max_tokens` regimes instead of silently averaging across them. Deleting
+`sources/` forces re-extraction of pdfplumber caches — old runs then carry a
+stale `source_sha`, and the judge **refuses** to score a summary against text
+the model never saw. Committed fixtures in `sources/` are version-controlled
+and unaffected by deletion.
+
+To run a named-extraction variant:
+
+```sh
+# Run with a named extraction (fixture must exist under sources/):
+bartleby benchmark summarize --extraction docling
+bartleby benchmark summarize --extraction image-fixture --documents neada-heating-0461
+
+# Leaderboard filtered to one extraction:
+bartleby benchmark leaderboard --extractions pdfplumber
+bartleby benchmark leaderboard --extractions docling,pdfplumber
+```
 
 ## The benchmark corpus
 
@@ -124,14 +148,29 @@ score a summary against text the model never saw.
   long document: at this length a schema-constrained summary must actually
   *select*, which makes coverage a live, discriminating axis instead of a
   constant.
+- `hearing-transcript-0461` — a 183-page evidentiary hearing transcript from
+  the Central Hudson rate case (~58,250 tokens). **Truncation-exercising**: far
+  above `DEFAULT_MAX_SUMMARIZE_TOKENS` (50,000 tokens), so the `tiktoken`
+  truncation path fires and the summarizer must handle a hard-cut input. At
+  579 KB, this is the smallest corpus PDF that reliably exceeds the token
+  limit with text-dense regulatory transcript prose (no images, all pdfplumber-
+  extractable). Chosen from the centralhudson-redux corpus archive.
+- `neada-heating-0461` — an 8-page NEADA heating-price report (602 KB).
+  **Image-bearing**: 5 embedded data-table images on pages 1, 4, and 5. The
+  default pdfplumber extraction omits the image content (it would route to the
+  VLM pipeline in production). The `image-fixture` extraction variant provides
+  a pre-committed source text that interleaves hand-written table descriptions
+  with the page text, faithfully reproducing what `writer.summary_input` would
+  produce after VLM captioning. Run with:
+  `bartleby benchmark summarize --extraction image-fixture --documents neada-heating-0461`
 
-All three were chosen deliberately: **image-free** (every page
-text-extractable, so the pdfplumber → chunk path reproduces the *whole*
-production summary input without the caption pipeline), **coherent prose**
-with concrete dates, parties, and case numbers (faithfulness and coverage are
-genuinely testable), and **under `max_summarize_tokens`** (no truncation to
-muddy the comparison). More docs — including image-bearing ones — and a
-Docling-extraction variant are tracked in #242.
+**Docling variant.** `psc-order-0109` has a committed Docling extraction
+fixture at `benchmarks/sources/psc-order-0109-docling.txt`. Run with:
+`bartleby benchmark summarize --extraction docling --documents psc-order-0109`
+Docling uses `HybridChunker`-based chunking with section-heading context and
+Markdown export; the fixture captures this output without requiring Docling to
+be installed at benchmark time. The fixture was produced with Bartleby's
+`ingest.docling.convert` on the production PDF.
 
 ## Production parity
 

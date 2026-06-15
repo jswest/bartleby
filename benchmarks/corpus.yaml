@@ -4,7 +4,13 @@
 # are what --documents filters take. The PDFs are committed so the benchmark
 # is reproducible by anyone, not dependent on a local project DB. See
 # benchmarks/README.md for why each document was chosen.
-
+#
+# Three original image-free docs under DEFAULT_MAX_SUMMARIZE_TOKENS:
 psc-order-0109: 0109_Order_Denying_Request_for_Rehearing_and_Reconsideration.pdf
 rci-reply-0116: 0116_Ratepayer_and_Community_Intervenors_Reply_Statement.pdf
 opposition-0098: 0098_Statement_in_Opposition_to_the_Joint_Proposal.pdf
+# Truncation-exercising doc (58 k tokens > DEFAULT_MAX_SUMMARIZE_TOKENS = 50 k):
+hearing-transcript-0461: 0461_Evidentiary_Hearing_Transcript_2025-06-16.pdf
+# Image-bearing doc (5 embedded data-table images; sources/ fixture pre-interleaves
+# hand-crafted captions in page order so no VLM is needed to run the benchmark):
+neada-heating-0461: 0461_NEADA_Mid-Winter_Heating_Price_Update.pdf

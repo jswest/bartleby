@@ -27,6 +27,7 @@ import time
 from bartleby.benchmark.progress import BenchmarkProgress
 from bartleby.benchmark.refs import ModelRef, check_slug_collisions
 from bartleby.benchmark.sources import (
+    DEFAULT_EXTRACTION,
     DEFAULT_MAX_SUMMARIZE_TOKENS,
     ensure_source,
     load_corpus,
@@ -180,9 +181,17 @@ def _warn_missing_ollama(client, models: list[str]) -> None:
 def run(root: BenchmarkRoot, models: list[ModelRef] | None,
         documents: list[str] | None, runs: int = 1, seed: int | None = None,
         ollama_host: str | None = None,
+        extraction: str = DEFAULT_EXTRACTION,
         ollama_client=None, openai_client=None) -> None:
     """Execute the matrix. ``ollama_client``/``openai_client`` are injectable
-    for tests; by default they're constructed lazily per provider in use."""
+    for tests; by default they're constructed lazily per provider in use.
+
+    ``extraction`` names the text-extraction backend whose cached source text
+    (``sources/<doc-id>.txt`` for the default ``pdfplumber``, or
+    ``sources/<doc-id>-<extraction>.txt`` for named variants) the models
+    receive. Named variants must already exist as pre-committed fixtures or a
+    prior extraction run; they are never produced live here.
+    """
     root.require()
     refs = models if models is not None else root.load_models()
     check_slug_collisions(refs)
@@ -193,7 +202,7 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
             f"(got {', '.join(str(r) for r in cc)}). Use it with "
             f"`bartleby benchmark judge --model anthropic-cc/<model>`.")
     corpus = select_documents(load_corpus(root), documents)
-    sources = {doc_id: ensure_source(root, doc_id, pdf)
+    sources = {doc_id: ensure_source(root, doc_id, pdf, extraction=extraction)
                for doc_id, pdf in corpus.items()}
 
     if ollama_client is None and any(r.provider == "ollama" for r in refs):
@@ -210,14 +219,17 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
     random.Random(seed).shuffle(plan)
 
     # Per-cell run_index continues from whatever the store already holds.
-    next_index = {(ref, doc_id): len(read_records(root.result_path(ref, doc_id)))
-                  for ref, doc_id in set(plan)}
+    next_index = {
+        (ref, doc_id): len(read_records(root.result_path(ref, doc_id, extraction)))
+        for ref, doc_id in set(plan)
+    }
 
     psha = prompt_sha()
     from bartleby import __version__
 
     print(f"Running {len(plan)} call(s): {len(refs)} model(s) × "
-          f"{len(corpus)} doc(s) × {runs} run(s)...", file=sys.stderr)
+          f"{len(corpus)} doc(s) × {runs} run(s) "
+          f"[extraction={extraction}]...", file=sys.stderr)
     with BenchmarkProgress([str(r) for r in refs], len(corpus) * runs,
                            len(plan)) as prog:
         for call_no, (ref, doc_id) in enumerate(plan, 1):
@@ -234,10 +246,11 @@ def run(root: BenchmarkRoot, models: list[ModelRef] | None,
                 temperature = None  # provider default; see call_openai
             prog.finish_call(str(ref), result.get("ok", False),
                              result.get("tokens_per_second"))
-            append_record(root.result_path(ref, doc_id), {
+            append_record(root.result_path(ref, doc_id, extraction), {
                 "provider": ref.provider,
                 "model": ref.model,
                 "doc": doc_id,
+                "extraction": extraction,
                 "run_index": run_index,
                 **result,
                 "source_sha": sources[doc_id].sha,

@@ -1,11 +1,17 @@
 """Corpus loading and the per-doc source-text cache.
 
 ``corpus.yaml`` maps short doc-ids (``[a-z0-9-]``) to PDF file names under
-``corpus/``. Extraction happens once per doc into ``sources/<doc-id>.txt`` —
-the exact (truncated) text every model sees and the judge scores against.
-Run and judgment records carry the text's ``source_sha`` so drift (a
-pdfplumber/chunker upgrade, an edited PDF) surfaces as a hash mismatch instead
-of silently mixing inputs. Delete ``sources/`` to force re-extraction.
+``corpus/``. Extraction happens once per doc into ``sources/<doc-id>.txt``
+(pdfplumber, the default) or ``sources/<doc-id>-<extraction>.txt`` (named
+extraction variants such as ``docling``). The exact (truncated) text every
+model sees and the judge scores against is cached there.
+
+Run and judgment records carry the text's ``source_sha`` and ``extraction``
+so drift (a backend upgrade, an edited PDF, or a changed fixture) surfaces as a
+hash mismatch instead of silently mixing inputs. Delete ``sources/`` to force
+re-extraction. A named-extraction source may be a pre-committed fixture (e.g.
+Docling output committed to avoid requiring Docling in CI) rather than a live
+extraction — the sha pins provenance regardless.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from bartleby.benchmark.stores import BenchmarkRoot
+from bartleby.benchmark.stores import DEFAULT_EXTRACTION, BenchmarkRoot
 
 # Production parity: the same truncation limit ingest actually uses, imported
 # (not copied) so the benchmark can't silently diverge from it.
@@ -136,15 +142,29 @@ class SourceText:
 
 
 def ensure_source(root: BenchmarkRoot, doc_id: str, pdf: Path,
-                  max_tokens: int = DEFAULT_MAX_SUMMARIZE_TOKENS) -> SourceText:
+                  max_tokens: int = DEFAULT_MAX_SUMMARIZE_TOKENS,
+                  extraction: str = DEFAULT_EXTRACTION) -> SourceText:
     """The cached source text for a doc, extracting on first use.
 
-    ``max_tokens`` applies only on first extraction — a cache hit serves the
-    text as cached. Delete ``sources/`` to re-cut at a different limit.
+    For the default ``extraction="pdfplumber"`` the source is extracted live
+    on first use and cached. For named extractions (e.g. ``"docling"`` or
+    ``"image-fixture"``) the cache file may be a pre-committed fixture under
+    ``sources/``; if it already exists it is served as-is and extraction is
+    skipped (this is the intended path for fixtured sources — commit the file,
+    let the sha pin provenance).
+
+    ``max_tokens`` applies only on first live extraction — a cache hit serves
+    the text as cached. Delete ``sources/`` to re-cut at a different limit.
     """
-    cached = load_source(root, doc_id)
+    cached = load_source(root, doc_id, extraction)
     if cached is not None:
         return cached
+    if extraction != DEFAULT_EXTRACTION:
+        path = root.source_path(doc_id, extraction)
+        raise SystemExit(
+            f"No source cache for doc {doc_id!r} with extraction {extraction!r}. "
+            f"Expected a pre-committed fixture at {path}. "
+            f"Commit the fixture text there or use --extraction pdfplumber.")
     print(f"Extracting {pdf.name} (pdfplumber + chunker)...", file=sys.stderr)
     text, meta = build_summary_input(pdf)
     if not text.strip():
@@ -157,13 +177,14 @@ def ensure_source(root: BenchmarkRoot, doc_id: str, pdf: Path,
     if truncated:
         print(f"  NOTE: truncated to {max_tokens} cl100k tokens.", file=sys.stderr)
     root.sources_dir.mkdir(parents=True, exist_ok=True)
-    (root.sources_dir / f"{doc_id}.txt").write_text(text)
+    root.source_path(doc_id).write_text(text)
     return SourceText(doc_id, text, source_sha(text), count_tokens(text))
 
 
-def load_source(root: BenchmarkRoot, doc_id: str) -> SourceText | None:
+def load_source(root: BenchmarkRoot, doc_id: str,
+                extraction: str = DEFAULT_EXTRACTION) -> SourceText | None:
     """Read the cache without extracting (the judge-side accessor)."""
-    path = root.sources_dir / f"{doc_id}.txt"
+    path = root.source_path(doc_id, extraction)
     if not path.exists():
         return None
     text = path.read_text()
