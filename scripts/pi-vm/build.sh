@@ -8,7 +8,9 @@
 # Self-cleaning so it can't silently bloat your disk (see "Disk & cleanup" in the
 # runbook): deletes the prior image before building and resets the BuildKit cache
 # afterward. During development that cache grew to 75 GB — and it's invisible to
-# `container system df`, so nothing warns you.
+# `container system df`, so nothing warns you. NOTE: a FAILED build skips the
+# post-build cache reset (set -e aborts mid-script), so on persistent failures you
+# may need to clean up by hand — see "Disk & cleanup" in docs/pi-vm-runbook.md.
 #
 # Env:
 #   IMAGE             image tag                   (default: bartleby-pi:latest)
