@@ -58,7 +58,7 @@
       />
       <ul class="list">
         {#each result.matches as m (m.chunk_id)}
-          <ResultCard item={m} variant="scan" />
+          <ResultCard item={m} variant="scan" query={result.query} />
         {/each}
       </ul>
       <Pagination
@@ -79,7 +79,7 @@
       </p>
       <ul class="list">
         {#each result.results as h (h.chunk_id)}
-          <ResultCard item={h} variant="search" />
+          <ResultCard item={h} variant="search" query={result.query} />
         {/each}
       </ul>
     {/if}
