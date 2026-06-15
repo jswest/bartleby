@@ -91,18 +91,26 @@ The benchmark ranks models on a *summarization* task. Top local finishers:
   `gemma4:e2b` at 4.69/5 and ~585 tok/s is the ideal distill model — and small
   enough to tolerate CPU-only inference in the VM.
 
-**Trying a different agent model.** The agent model is a *runtime* knob — set
-`AGENT_MODEL` on **both** the host serve and the run (no rebuild; it must match a
+**Trying a different agent model.** The agent model is a *runtime* knob — pass
+`--model` to **both** the host serve and the run (no rebuild; it must match a
 model your host Ollama serves):
 
 ```bash
-AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/host-agent-ollama.sh   # host GPU serves it
-AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/run.sh                 # Pi requests it
+./scripts/pi-vm/host-agent-ollama.sh --model gpt-oss:120b   # host GPU serves it
+./scripts/pi-vm/run.sh --model gpt-oss:120b                 # Pi requests it
 ```
 
-Defaults to `qwen3.6:35b` if unset. (decant's distill model is a *build-time*
-knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` — since it's baked
-into the image.)
+You can also use the `AGENT_MODEL` environment variable if you prefer:
+
+```bash
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/host-agent-ollama.sh
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/run.sh
+```
+
+The `--model` flag takes precedence over `AGENT_MODEL` if both are set.
+Defaults to `qwen3.6:35b` if neither is given. (decant's distill model is a
+*build-time* knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` —
+since it's baked into the image.)
 
 ### Web fetch is opt-in: add decant with `WITH_DECANT=1`
 
@@ -352,9 +360,28 @@ running VM and no stopped containers pile up. Two things *do* accumulate, and
    Set **`KEEP_BUILD_CACHE=1`** to keep it for fast incremental rebuilds while
    you're iterating on the `Containerfile`.
 
-So in normal use, repeated `build.sh` runs no longer stack up ghosts. To inspect
-or reclaim by hand (note: `container image` is **singular** — `container images`
-is not a valid verb):
+So in normal use, repeated `build.sh` runs no longer stack up ghosts.
+
+### If a build fails
+
+When `container build` dies under `set -euo pipefail`, the script aborts between
+the two cleanup steps: the prior `:latest` image is already deleted (step 1 runs
+up front), the new image never finished, and the post-build cache reset never
+runs (step 2 is skipped). A failed build therefore leaves you with **no working
+image and an un-reset BuildKit cache** — and repeated failures let that cache
+accumulate just like it did before `build.sh` was self-cleaning.
+
+**Recovery:** once you've fixed the underlying cause (network/GitHub flake,
+decant `main` broken, flaky `ollama pull`), just re-run `build.sh` — a
+successful build resets the cache. If you're seeing persistent failures and
+want to reclaim space in the meantime, use the manual commands below
+(`container builder delete` for the cache, `container image ls` /
+`container image delete` for images, and `du` to actually see the invisible
+builder cache).
+
+### To inspect or reclaim by hand
+
+(Note: `container image` is **singular** — `container images` is not a valid verb.)
 
 ```bash
 container system df                          # images/containers/volumes usage…
