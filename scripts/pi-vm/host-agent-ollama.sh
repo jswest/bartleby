@@ -9,8 +9,30 @@
 # has no host.docker.internal). That also exposes it to your LAN — enable the
 # macOS firewall or bind to the vmnet bridge IP if that matters to you.
 #
+# Usage:
+#   ./host-agent-ollama.sh [--model <id>]
+#
+# Options:
+#   --model <id>        Model to serve (overrides AGENT_MODEL env var).
+#                       Must match what run.sh requests (use --model on both).
+#
+# Env:
+#   AGENT_MODEL         Model to serve      (default: qwen3.6:35b). --model takes
+#                       precedence if given.
+#   AGENT_OLLAMA_PORT   Port to bind on     (default: 11435)
+#   AGENT_OLLAMA_BIND   Full bind address   (default: 0.0.0.0:<port>)
+#
 # See docs/pi-vm-runbook.md.
 set -euo pipefail
+
+# Parse --model flag.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)   shift; AGENT_MODEL="$1"; shift ;;
+    --model=*) AGENT_MODEL="${1#--model=}"; shift ;;
+    *)         echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
 
 PORT="${AGENT_OLLAMA_PORT:-11435}"
 MODEL="${AGENT_MODEL:-qwen3.6:35b}"

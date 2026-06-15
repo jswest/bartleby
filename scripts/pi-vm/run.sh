@@ -7,6 +7,13 @@
 # Prereq: the host agent Ollama must be running first:
 #   ./scripts/pi-vm/host-agent-ollama.sh
 #
+# Usage:
+#   ./run.sh [--model <id>] [command [args...]]
+#
+# Options:
+#   --model <id>        Agent model to use (overrides AGENT_MODEL env var).
+#                       Must match a model served by host-agent-ollama.sh.
+#
 # Env:
 #   IMAGE               image tag           (default: bartleby-pi:latest)
 #   BARTLEBY_HOME       host corpus root    (default: ~/.bartleby)
@@ -16,7 +23,7 @@
 #   AGENT_OLLAMA_PORT   host agent port     (default: 11435)
 #   AGENT_MODEL         Pi's model id       (default: qwen3.6:35b). Must match a
 #                       model served by the host agent Ollama (host-agent-ollama.sh
-#                       honors the same var).
+#                       honors the same var). --model takes precedence if given.
 #   HOST_OLLAMA_IP      override gateway autodetect (optional)
 #   BRAVE_SEARCH_API_KEY  passed through for `decant search` (optional). If unset,
 #                       falls back to brave_api_key in your host decant config
@@ -28,6 +35,15 @@
 #
 # See docs/pi-vm-runbook.md.
 set -euo pipefail
+
+# Parse --model before the passthrough args so it doesn't reach `container run`.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)   shift; AGENT_MODEL="$1"; shift ;;
+    --model=*) AGENT_MODEL="${1#--model=}"; shift ;;
+    *)         break ;;
+  esac
+done
 
 IMAGE="${IMAGE:-bartleby-pi:latest}"
 CORPUS="${BARTLEBY_HOME:-${HOME}/.bartleby}"
