@@ -647,3 +647,63 @@ input[type="number"] {
 }
 /* Entity rows render as cards by composing the shared `.surface` primitive in
    the markup (class="entity surface"); the box styling lives there, not here. */
+
+/* =========================================================================
+   R5 · Boot/loading flourish (#594) — dot-matrix cursor + terminal empties.
+
+   A restrained retro affordance for the search route. Two pieces, both loose
+   on the dark shell:
+     - `.cursor`  a blinking Doto block, shown while a search/scan is in flight
+                  (a console "working…" tick). Honours the display floor.
+     - `.empty--terminal`  a console-prompt empty state ("> no results …").
+                  A modifier on the shared `.empty`; the base `.empty` (used by
+                  documents/findings/tags/source-viewer) is left untouched so
+                  this stays scoped to search and clear of B5 (#599).
+   ========================================================================= */
+
+/* The block tick. Doto, so it reads as one lit dot-matrix cell; held at the
+   display floor so the dots never turn to mud. Sits inline at the end of the
+   line it follows (busy banner copy, terminal-empty prompt). */
+@keyframes r5-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.cursor {
+  font-family: var(--font-display);
+  font-size: max(var(--text-display-floor), 1em);
+  /* The lit cell. A filled block glyph reads as a terminal cursor at any size. */
+  line-height: 0;
+  /* No layout shift: the cell reserves its width and only its opacity animates. */
+  animation: r5-blink 1.06s steps(1, end) infinite;
+}
+/* Respect reduced-motion: hold the cursor lit rather than blinking it. */
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+}
+
+/* Terminal-prompt empty state. Iosevka (UI chrome, not prose), a lit amber
+   prompt mark, and a trailing blinking cursor — a console waiting for input
+   with nothing to show. Overrides the base `.empty` (inherited serif + its
+   italic); equal specificity, wins on declaration order (defined after it). */
+.empty--terminal {
+  font-family: var(--font-sans);
+  font-style: normal;
+  color: var(--color-shell-text-soft);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+/* The amber `>` prompt mark that opens the line. */
+.empty--terminal::before {
+  content: ">";
+  color: var(--color-token-dark);
+  font-weight: 500;
+}
