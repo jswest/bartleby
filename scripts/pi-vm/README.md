@@ -17,6 +17,13 @@ brew install container && container system start   # one-time
 BRAVE_SEARCH_API_KEY=brv-... ./run.sh              # mount ~/.bartleby, launch Pi
 ```
 
+To use a different agent model, pass `--model` to both scripts (they must match):
+
+```bash
+./host-agent-ollama.sh --model gpt-oss:120b
+./run.sh --model gpt-oss:120b
+```
+
 ## What each file does
 
 | File | Side | Role |

@@ -91,18 +91,26 @@ The benchmark ranks models on a *summarization* task. Top local finishers:
   `gemma4:e2b` at 4.69/5 and ~585 tok/s is the ideal distill model — and small
   enough to tolerate CPU-only inference in the VM.
 
-**Trying a different agent model.** The agent model is a *runtime* knob — set
-`AGENT_MODEL` on **both** the host serve and the run (no rebuild; it must match a
+**Trying a different agent model.** The agent model is a *runtime* knob — pass
+`--model` to **both** the host serve and the run (no rebuild; it must match a
 model your host Ollama serves):
 
 ```bash
-AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/host-agent-ollama.sh   # host GPU serves it
-AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/run.sh                 # Pi requests it
+./scripts/pi-vm/host-agent-ollama.sh --model gpt-oss:120b   # host GPU serves it
+./scripts/pi-vm/run.sh --model gpt-oss:120b                 # Pi requests it
 ```
 
-Defaults to `qwen3.6:35b` if unset. (decant's distill model is a *build-time*
-knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` — since it's baked
-into the image.)
+You can also use the `AGENT_MODEL` environment variable if you prefer:
+
+```bash
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/host-agent-ollama.sh
+AGENT_MODEL=gpt-oss:120b ./scripts/pi-vm/run.sh
+```
+
+The `--model` flag takes precedence over `AGENT_MODEL` if both are set.
+Defaults to `qwen3.6:35b` if neither is given. (decant's distill model is a
+*build-time* knob instead — `DECANT_MODEL=<model> ./scripts/pi-vm/build.sh` —
+since it's baked into the image.)
 
 ### Web fetch is opt-in: add decant with `WITH_DECANT=1`
 
