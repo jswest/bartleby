@@ -1,6 +1,7 @@
 <script>
   import { formatDateRange, pluralize, stripExt } from "$lib/format.js";
   import StatusBanner from "$lib/components/StatusBanner.svelte";
+  import { FINDINGS_ICON, DOCUMENTS_ICON } from "$lib/icons.js";
   export let data;
 
   $: ({ project, counts, corpus, error } = data);
@@ -52,14 +53,14 @@
   <ul class="cards">
     <li>
       <a class="surface surface--finding surface--interactive" href="/findings">
-        <h2>Findings</h2>
+        <h2><span class="card-eyebrow-icon">{@html FINDINGS_ICON}</span>Findings</h2>
         <p class="count">{fmt(counts.findings)}</p>
         <p class="hint">Saved research notes with inline citations.</p>
       </a>
     </li>
     <li>
       <a class="surface surface--interactive" href="/documents">
-        <h2>Documents</h2>
+        <h2><span class="card-eyebrow-icon">{@html DOCUMENTS_ICON}</span>Documents</h2>
         <p class="count">{fmt(counts.documents)}</p>
         <p class="hint">Ingested source material with summaries.</p>
       </a>
@@ -211,6 +212,14 @@
     text-transform: uppercase;
     letter-spacing: var(--tracking-wide);
     margin-bottom: var(--space-sm);
+    /* R3 (#592): a Pixelarticon eyebrow rides before the card label, inheriting
+       the sage --color-off the heading already carries. */
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+  }
+  .card-eyebrow-icon {
+    display: inline-flex;
   }
   .count {
     font-family: var(--font-display);

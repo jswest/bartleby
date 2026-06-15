@@ -951,3 +951,52 @@ input[type="number"] {
 .card-grid .desc {
   margin: var(--space-2xs) 0 0;
 }
+
+/* =========================================================================
+   R3 · Pixelarticons 1-bit icon set (#592)
+   Adopts Pixelarticons (https://pixelarticons.com, MIT) — 1-bit pixel-art
+   glyphs — for nav links, card eyebrows, the chunk "open in context" link, and
+   the citation daggers. Glyphs are inline <svg> strings in lib/icons.js
+   (tree-shaken; no runtime icon dependency), emitted via {@html} so they pick
+   up `currentColor` at each site — nav shell-text, card ink, citation amber.
+
+   This block owns ONLY icon presentation (sizing + the pixelated render hint
+   + the citation-dagger glyph). It adds nothing to :root and touches none of
+   R1's tokens or the two-grounds rules.
+   ========================================================================= */
+
+/* Shared glyph rule. Every Pixelarticon carries `.pixel`; the inline width/
+   height set its box, but when a glyph is scaled up `image-rendering: pixelated`
+   keeps the 1-bit squares crisp instead of blurring them. `fill: currentColor`
+   is also on the element, so the glyph inherits its site's text color. */
+.pixel {
+  display: inline-block;
+  image-rendering: pixelated;
+  /* Don't let the glyph stretch the line-box it rides in. */
+  vertical-align: middle;
+  flex: none;
+}
+
+/* --- Citation daggers (R4 #593) get a Pixelarticons bookmark mark ---
+   R4's render emits `<sup class="cite-ref …">†N</sup>` inline and a
+   `.margin-note__dagger` in the gutter, with the †/ordinal as the tie-back. We
+   DON'T touch that markup: a ::before pseudo on the gutter dagger paints a small
+   pixel bookmark via CSS mask, so it inherits the head color (amber for source,
+   danger for gone) and the †N tie-back text stays exactly as R4 wrote it. */
+.margin-note__dagger::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 0.25em;
+  vertical-align: -1px;
+  background-color: currentColor;
+  image-rendering: pixelated;
+  -webkit-mask: var(--pixel-bookmark) center / contain no-repeat;
+  mask: var(--pixel-bookmark) center / contain no-repeat;
+}
+:root {
+  /* Pixelarticons "bookmark" (MIT), inlined as a mask data-URI. Mask uses alpha
+     only, so the fill is irrelevant — the dagger's currentColor shows through. */
+  --pixel-bookmark: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M6%202h12v2H6zM4%204h2v18H4zm14%200h2v18h-2zm-2%2016h2v2h-2zm-2-2h2v2h-2zm-8%202h2v2H6zm2-2h2v2H8zm2-2h4v2h-4z%22%2F%3E%3C%2Fsvg%3E");
+}
