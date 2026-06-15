@@ -25,6 +25,7 @@ def _root(args):
 def summarize(args) -> None:
     from bartleby.benchmark import summarize as mod
     from bartleby.benchmark.refs import parse_refs
+    from bartleby.benchmark.sources import DEFAULT_EXTRACTION
 
     mod.run(
         _root(args),
@@ -33,6 +34,7 @@ def summarize(args) -> None:
         runs=args.runs,
         seed=args.seed,
         ollama_host=args.ollama_host,
+        extraction=getattr(args, "extraction", DEFAULT_EXTRACTION) or DEFAULT_EXTRACTION,
     )
 
 
@@ -60,6 +62,7 @@ def leaderboard(args) -> None:
         models=parse_refs(args.models),
         documents=_split_csv(args.documents),
         judges=parse_refs(args.judges),
+        extractions=_split_csv(getattr(args, "extractions", None)),
         since=parse_when(args.since) if args.since else None,
         until=parse_when(args.until, end=True) if args.until else None,
         output=Path(args.output) if args.output else None,

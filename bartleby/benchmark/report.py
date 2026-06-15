@@ -23,6 +23,7 @@ from pathlib import Path
 
 from bartleby.benchmark.judging import summary_sha
 from bartleby.benchmark.refs import ModelRef
+from bartleby.benchmark.sources import DEFAULT_EXTRACTION
 from bartleby.benchmark.stores import BenchmarkRoot, in_window, read_store
 
 
@@ -34,17 +35,21 @@ def _ref(record: dict) -> ModelRef:
 
 def load_runs(root: BenchmarkRoot, models: list[ModelRef] | None = None,
               documents: list[str] | None = None,
+              extractions: list[str] | None = None,
               since: float | None = None, until: float | None = None) -> list[dict]:
     runs = read_store(root.results_dir)
     return [r for r in runs
             if in_window(r, since, until)
             and (models is None or _ref(r) in models)
-            and (documents is None or r["doc"] in documents)]
+            and (documents is None or r["doc"] in documents)
+            and (extractions is None
+                 or r.get("extraction", DEFAULT_EXTRACTION) in extractions)]
 
 
 def load_judgments(root: BenchmarkRoot, judges: list[ModelRef] | None = None,
                    models: list[ModelRef] | None = None,
                    documents: list[str] | None = None,
+                   extractions: list[str] | None = None,
                    since: float | None = None, until: float | None = None) -> list[dict]:
     judgments = read_store(root.judgements_dir)
     return [j for j in judgments
@@ -52,30 +57,38 @@ def load_judgments(root: BenchmarkRoot, judges: list[ModelRef] | None = None,
             and (judges is None or
                  ModelRef(j["judge_provider"], j["judge_model"]) in judges)
             and (models is None or _ref(j) in models)
-            and (documents is None or j["doc"] in documents)]
+            and (documents is None or j["doc"] in documents)
+            and (extractions is None
+                 or j.get("extraction", DEFAULT_EXTRACTION) in extractions)]
 
 
 # ---- aggregation ----
 
+def _cell_key(record: dict) -> tuple:
+    """(ref, doc, extraction) — the cell identity across runs and judgments."""
+    return (_ref(record), record["doc"],
+            record.get("extraction", DEFAULT_EXTRACTION))
+
+
 def quality_cells(runs: list[dict], judgments: list[dict]) -> dict[tuple, dict]:
-    """Per (ref, doc): the weighted quality score plus its evidence counts.
+    """Per (ref, doc, extraction): the weighted quality score plus its evidence counts.
 
     Weights come from the windowed runs (OK run count per summary_sha), never
     from judgment records. Judged summaries no run in the window produced get
     weight 0 and drop out; unjudged summaries are visible as evidence counts
     but can't contribute a score.
     """
-    # (ref, doc) -> sha -> ok-run count
+    # (ref, doc, extraction) -> sha -> ok-run count
     run_counts: dict[tuple, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in runs:
         if r.get("ok"):
-            run_counts[(_ref(r), r["doc"])][summary_sha(r["summary"])] += 1
+            run_counts[_cell_key(r)][summary_sha(r["summary"])] += 1
 
-    # (ref, doc) -> sha -> [pass means] (pooled across selected judges)
+    # (ref, doc, extraction) -> sha -> [pass means] (pooled across selected judges)
     pass_means: dict[tuple, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for j in judgments:
         if j.get("ok"):
-            pass_means[(_ref(j), j["doc"])][j["summary_sha"]].append(j["scores"]["mean"])
+            pass_means[_cell_key(j)][j["summary_sha"]].append(j["scores"]["mean"])
 
     cells: dict[tuple, dict] = {}
     for cell, shas in run_counts.items():
@@ -96,9 +109,9 @@ def quality_cells(runs: list[dict], judgments: list[dict]) -> dict[tuple, dict]:
 
 
 def quality_by_ref(cells: dict[tuple, dict]) -> dict[ModelRef, float]:
-    """Overall quality per model: docs weight equally, regardless of run counts."""
+    """Overall quality per model: (doc, extraction) cells weight equally."""
     by_ref: dict[ModelRef, list[float]] = defaultdict(list)
-    for (ref, _), cell in cells.items():
+    for (ref, _doc, _extraction), cell in cells.items():
         if cell["score"] is not None:
             by_ref[ref].append(cell["score"])
     return {ref: statistics.mean(scores) for ref, scores in by_ref.items()}
@@ -140,15 +153,18 @@ def heterogeneity_warnings(runs: list[dict]) -> list[str]:
     mixes: dict[tuple, dict[str, set]] = defaultdict(
         lambda: {key: set() for key in _REGIME_KEYS})
     for r in runs:
-        cell = mixes[(_ref(r), r["doc"])]
+        cell = mixes[_cell_key(r)]
         for key in _REGIME_KEYS:
             if r.get(key) is not None:
                 cell[key].add(r[key])
     warnings = []
-    for (ref, doc), shas in sorted(mixes.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
+    for (ref, doc, extraction), shas in sorted(
+            mixes.items(), key=lambda kv: (str(kv[0][0]), kv[0][1], kv[0][2])):
         mixed = [key for key, vals in shas.items() if len(vals) > 1]
         if mixed:
-            warnings.append(f"{ref} · {doc} mixes {' and '.join(mixed)} values "
+            label = f"{ref} · {doc}" + (
+                f" · {extraction}" if extraction != DEFAULT_EXTRACTION else "")
+            warnings.append(f"{label} mixes {' and '.join(mixed)} values "
                             f"within this window — scores average across regimes.")
     return warnings
 
@@ -213,14 +229,15 @@ def heading(text: str, style: str = "bold") -> None:
 def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
                 documents: list[str] | None = None,
                 judges: list[ModelRef] | None = None,
+                extractions: list[str] | None = None,
                 since: float | None = None, until: float | None = None,
                 output: Path | None = None, min_schema: float = 100.0) -> int:
     root.require()
-    runs = load_runs(root, models, documents, since, until)
+    runs = load_runs(root, models, documents, extractions, since, until)
     if not runs:
         print("No runs on record (in this window).", file=sys.stderr)
         return 1
-    judgments = load_judgments(root, judges, models, documents, since, until)
+    judgments = load_judgments(root, judges, models, documents, extractions, since, until)
     cells = quality_cells(runs, judgments)
     quality = quality_by_ref(cells)
     docs = sorted({r["doc"] for r in runs})
@@ -300,19 +317,24 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
 
     if any(cell["score"] is not None for cell in cells.values()):
         heading("Mean quality by document")
-        note("Cell = score (OK runs / judge passes); — = no judgments yet.")
+        note("Cell = score (OK runs / judge passes); — = no judgments yet. "
+             "Multiple extractions per doc are averaged.")
         doc_cols = [(d, "right") for d in docs]
         q_rows = []
         for s in survivors:
             row = [(str(s["ref"]), None)]
             for d in docs:
-                cell = cells.get((s["ref"], d))
-                if cell is None:
+                doc_cells = _doc_cells(cells, s["ref"], d)
+                if not doc_cells:
                     row.append(("—", None))
-                elif cell["score"] is None:
-                    row.append((f"— ({cell['runs']}r/0p)", None))
+                elif all(c["score"] is None for c in doc_cells):
+                    row.append((f"— ({sum(c['runs'] for c in doc_cells)}r/0p)", None))
                 else:
-                    row.append((f"{cell['score']:.2f} ({cell['runs']}r/{cell['passes']}p)", None))
+                    scored = [c for c in doc_cells if c["score"] is not None]
+                    score = statistics.mean(c["score"] for c in scored)
+                    total_runs = sum(c["runs"] for c in doc_cells)
+                    total_passes = sum(c["passes"] for c in doc_cells)
+                    row.append((f"{score:.2f} ({total_runs}r/{total_passes}p)", None))
             q_rows.append(row)
         emit_table("", [("Model", "left"), *doc_cols], q_rows)
 
@@ -332,6 +354,11 @@ def leaderboard(root: BenchmarkRoot, models: list[ModelRef] | None = None,
     return 0
 
 
+def _doc_cells(cells: dict[tuple, dict], ref: ModelRef, doc: str) -> list[dict]:
+    """All cell records for a (ref, doc) pair across all extractions."""
+    return [c for (r, d, _ext), c in cells.items() if r == ref and d == doc]
+
+
 def _write_csv(path: Path, survivors: list[dict], front: set[ModelRef],
                cells: dict[tuple, dict], docs: list[str]) -> None:
     with path.open("w", newline="") as f:
@@ -340,7 +367,11 @@ def _write_csv(path: Path, survivors: list[dict], front: set[ModelRef],
                          "input_tokens_per_second", "mean_quality", "runs",
                          "pareto_optimal", *[f"quality_{d}" for d in docs]])
         for s in survivors:
-            per_doc = [(cells.get((s["ref"], d)) or {}).get("score") for d in docs]
+            per_doc = []
+            for d in docs:
+                scored = [c["score"] for c in _doc_cells(cells, s["ref"], d)
+                          if c["score"] is not None]
+                per_doc.append(statistics.mean(scored) if scored else None)
             writer.writerow([
                 s["ref"].provider, s["ref"].model, round(s["schema_pct"], 1),
                 round(s["input_tps"], 2) if s["input_tps"] is not None else None,

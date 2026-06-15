@@ -157,3 +157,37 @@ def test_records_parse_as_json_lines(root):
     summarize_mod.run(root, refs, ["doc-a"], runs=1, ollama_client=FakeOllama())
     raw = root.result_path(refs[0], "doc-a").read_text().strip()
     assert json.loads(raw)["doc"] == "doc-a"
+
+
+def test_extraction_field_recorded_on_run(root):
+    """The extraction field is stored on every run record (default: pdfplumber)."""
+    refs = [ModelRef("ollama", "tiny:1b")]
+    summarize_mod.run(root, refs, ["doc-a"], runs=1, ollama_client=FakeOllama())
+    r = read_records(root.result_path(refs[0], "doc-a"))[0]
+    assert r["extraction"] == "pdfplumber"
+
+
+def test_named_extraction_uses_separate_store_and_fixture(root, monkeypatch, tmp_path):
+    """A named extraction writes to a separate store file and reads the fixture source."""
+    # Pre-commit a fixture source for the named extraction
+    root.sources_dir.mkdir(parents=True, exist_ok=True)
+    root.source_path("doc-a", "docling").write_text("docling text")
+
+    refs = [ModelRef("ollama", "tiny:1b")]
+    # build_summary_input must NOT be called (fixture serves the text)
+    monkeypatch.setattr(sources_mod, "build_summary_input",
+                        lambda pdf: (_ for _ in ()).throw(AssertionError("should not extract")))
+
+    summarize_mod.run(root, refs, ["doc-a"], runs=1, extraction="docling",
+                      ollama_client=FakeOllama())
+
+    # Wrote to the extraction-specific store file
+    store_path = root.result_path(refs[0], "doc-a", "docling")
+    assert store_path.exists()
+    assert "_x-docling" in store_path.name
+    r = read_records(store_path)[0]
+    assert r["extraction"] == "docling"
+    assert r["ok"]
+
+    # Default store is untouched
+    assert not root.result_path(refs[0], "doc-a").exists()
