@@ -10,9 +10,16 @@
   export let data;
 
   $: ({ params, available, result, error } = data);
-  // Any in-flight navigation here is a search/scan submit — show progress
-  // while the subprocess (and, for semantic search, the BGE model) runs.
-  $: busy = !!$navigating;
+  // Show "Searching…" only when navigating TO /search with a real query —
+  // i.e. a genuine search/scan submission. Clicking a result or pressing Back
+  // also triggers $navigating while on this page, but those go elsewhere
+  // (chunks, documents, …) and are handled by the global layout indicator.
+  // Narrowing here prevents "Searching…" appearing for non-search navigations
+  // and avoids two simultaneous indicators.
+  $: busy =
+    !!$navigating &&
+    $navigating.to?.url?.pathname?.startsWith("/search") &&
+    !!$navigating.to?.url?.searchParams?.get("q");
 
   // Preserve the current query while only moving the scan offset.
   function scanHref(offset) {
