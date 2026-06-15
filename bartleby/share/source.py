@@ -104,7 +104,7 @@ def local_root_from_url(from_url: str) -> Path:
                 "file:///absolute/path (an empty or localhost host)."
             )
         root = Path(unquote(parsed.path))
-    elif parsed.scheme in ("", None) and not from_url.startswith("s3://"):
+    elif parsed.scheme == "":
         root = Path(from_url)
     else:
         raise ValueError(
