@@ -40,13 +40,12 @@ single-gutter structure and the `scrollIntoView` click handler.
 
 **Narrow-screen fallback.** The `@media (max-width: 56rem)` block (pre-existing
 from #593) collapses the ledger column to one column, folding the gutter below
-the prose as end-notes. At this breakpoint the layout function no-ops: it checks
-`citesAside.offsetWidth <= 0` (the grid track gives the aside zero width when
-the column is collapsed) and returns early. When the aside is narrow the
-`resetNoteLayout()` helper removes inline `position`/`top` styles so the CSS
+the prose as end-notes. At this breakpoint `layoutNotes()` detects narrow layout
+via `window.matchMedia("(max-width: 56rem)").matches` — the same breakpoint value
+the CSS uses — clears any inline `position`/`top` styles on `.margin-note`
+elements and the aside's inline `height`, then returns early so the CSS
 `position: static !important` rule in the media query takes full effect. The
-`†N` ordinals still tie each inline anchor to its end-note — no information
-loss.
+`†N` ordinals still tie each inline anchor to its end-note — no information loss.
 
 ## Change 2 — Click a margin note to open the source in the right pane
 
@@ -61,9 +60,10 @@ dagger) or navigate to the chunk page, with the former as the primary action.
   same function the inline dagger's click handler calls. This loads the document
   in the right-pane `SourceViewer` without any navigation. The existing `.active`
   highlight (`class:active={note.active}`) is preserved.
-- **Secondary (↗ icon):** a small `<a>` rendered after the label using the
-  existing `CHUNK_ICON` from `$lib/icons.js` (the "open in context" pixel glyph
-  already used on result cards). Clicking it calls `goto('/chunks/${note.chunkId}')`.
+- **Secondary (↗ icon):** a small `<a href="/chunks/{note.chunkId}">` rendered
+  after the label using the existing `CHUNK_ICON` from `$lib/icons.js` (the
+  "open in context" pixel glyph already used on result cards). SvelteKit's router
+  intercepts the same-origin link client-side — no `on:click` handler needed.
   Styled at 60% opacity, brightening to 100% on hover — visually minor against
   the amber label, matching the retro pixel-art aesthetic.
 

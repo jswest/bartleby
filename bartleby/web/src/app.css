@@ -749,6 +749,12 @@ input[type="number"] {
   border-left: 1px solid var(--color-rule);
   padding-left: var(--space-lg);
 }
+/* left/right are invariant — set once here so they're final before JS measures
+   offsetHeight in pass 2. Inert under position:static (narrow-screen fallback). */
+.cite-notes .margin-note {
+  left: 0;
+  right: 0;
+}
 .margin-note {
   font-family: var(--font-sans);
   font-size: var(--text-2xs);

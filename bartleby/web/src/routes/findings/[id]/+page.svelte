@@ -1,6 +1,5 @@
 <script>
   import { onMount, onDestroy, tick } from "svelte";
-  import { goto } from "$app/navigation";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
@@ -161,68 +160,59 @@
   // Each margin note's top is pinned to the vertical position of its inline
   // dagger in the prose (Tufte-style). A downward de-overlap pass ensures
   // notes never overlap. On narrow screens (≤56 rem) the gutter collapses to
-  // normal flow — the layout function no-ops there.
+  // normal flow — the layout function clears inline styles and returns early.
   //
-  // The breakpoint mirrors the `@media (max-width: 56rem)` in app.css. We
-  // check container width rather than window width so it degrades correctly
-  // even in unusual viewport configurations.
+  // The breakpoint mirrors the `@media (max-width: 56rem)` in app.css, checked
+  // via matchMedia so it matches the CSS condition exactly.
   const NOTE_GAP = 8; // px — minimum breathing room between stacked notes
 
   function layoutNotes() {
     if (!citesAside || !container) return;
-    // Guard: if the aside is not in its normal (wide) grid track, fall back to
-    // static flow. We detect this by checking whether the grid column gives the
-    // aside visible width; on narrow screens its column collapses to 0/hidden.
-    // Using the aside's offsetWidth: if it is ≤ 0 the layout is stacked (mobile).
-    if (citesAside.offsetWidth <= 0) return;
+    // Guard: on narrow screens, clear any inline absolute styles and let static
+    // CSS flow take over (the @media block handles display/position).
+    const narrow = typeof window !== "undefined" && window.matchMedia("(max-width: 56rem)").matches;
+    if (narrow) {
+      const noteEls = citesAside.querySelectorAll(".margin-note");
+      for (const el of noteEls) {
+        el.style.position = "";
+        el.style.top = "";
+      }
+      citesAside.style.height = "";
+      return;
+    }
 
     const noteEls = Array.from(citesAside.querySelectorAll(".margin-note"));
     if (noteEls.length === 0) return;
 
     const asideTop = citesAside.getBoundingClientRect().top + window.scrollY;
 
-    // Measure desired tops (aligned to dagger) and note heights.
-    const desired = noteEls.map((el) => {
+    // Pass 1: set position:absolute and initial top from the dagger offset.
+    // left/right are set via CSS (.cite-notes .margin-note { left:0; right:0 })
+    // so the final width is established before we measure heights in pass 2.
+    const items = noteEls.map((el) => {
       const n = el.dataset.note;
       const ref = container.querySelector(`.cite-ref[data-note="${n}"]`);
       let top = 0;
       if (ref) {
         top = ref.getBoundingClientRect().top + window.scrollY - asideTop;
-        // Clamp to 0 — a dagger above the aside's top edge (shouldn't happen
-        // in practice) would produce a negative top, which is invisible.
         if (top < 0) top = 0;
       }
-      return { el, top, height: el.offsetHeight };
-    });
-
-    // Downward de-overlap pass: sweep top→bottom; push a note down if it
-    // would overlap the one above.
-    let runningBottom = 0;
-    for (const item of desired) {
-      if (item.top < runningBottom) item.top = runningBottom;
-      runningBottom = item.top + item.height + NOTE_GAP;
-    }
-
-    // Apply positions and set the aside height so it doesn't collapse.
-    for (const { el, top } of desired) {
       el.style.position = "absolute";
       el.style.top = `${top}px`;
-      el.style.left = "0";
-      el.style.right = "0";
-    }
-    citesAside.style.height = `${runningBottom - NOTE_GAP}px`;
-  }
+      return { el, top };
+    });
 
-  function resetNoteLayout() {
-    if (!citesAside) return;
-    const noteEls = citesAside.querySelectorAll(".margin-note");
-    for (const el of noteEls) {
-      el.style.position = "";
-      el.style.top = "";
-      el.style.left = "";
-      el.style.right = "";
+    // Pass 2: now that each note is absolutely positioned at its final width,
+    // read offsetHeight and run the downward de-overlap sweep.
+    let runningBottom = 0;
+    for (const item of items) {
+      const height = item.el.offsetHeight;
+      if (item.top < runningBottom) item.top = runningBottom;
+      item.el.style.top = `${item.top}px`;
+      runningBottom = item.top + height + NOTE_GAP;
     }
-    citesAside.style.height = "";
+
+    citesAside.style.height = `${runningBottom - NOTE_GAP}px`;
   }
 
   // Re-run layout whenever notes or bodyHtml change (after DOM settles).
@@ -249,15 +239,7 @@
     // window resize and flex/grid reflow of the prose column.
     const proseEl = container.querySelector(".body");
     if (proseEl && typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => {
-        // On narrow screens the aside collapses; reset absolute styles so
-        // normal flow takes over; on wide screens re-layout.
-        if (citesAside && citesAside.offsetWidth <= 0) {
-          resetNoteLayout();
-        } else {
-          layoutNotes();
-        }
-      });
+      resizeObserver = new ResizeObserver(() => layoutNotes());
       resizeObserver.observe(proseEl);
     }
   });
@@ -339,7 +321,6 @@
                     href="/chunks/{note.chunkId}"
                     class="margin-note__open-chunk"
                     title="Open chunk {note.chunkId}"
-                    on:click|preventDefault={() => goto(`/chunks/${note.chunkId}`)}
                   >{@html CHUNK_ICON}</a>
                 </span>
               {/if}
