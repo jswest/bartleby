@@ -36,7 +36,7 @@ def test_save_date_writes_and_returns_old_and_new(seeded_project, capsys):
     # doc_a starts with a summary but NULL authored_date.
     save_date.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--date", "2024-03-08",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -50,7 +50,7 @@ def test_save_date_visible_through_list_documents(seeded_project, capsys):
     """The written value surfaces through a real agent-facing read path."""
     save_date.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--date", "2019-11-21",
     ])
     capsys.readouterr()  # drop save_date's output
@@ -65,7 +65,7 @@ def test_save_date_rejects_malformed(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
             "--date", "Q3 2024",
         ])
     assert exc.value.code != 0
@@ -79,7 +79,7 @@ def test_save_date_rejects_impossible_calendar_date(seeded_project, capsys):
     with pytest.raises(SystemExit):
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
             "--date", "2024-13-01",
         ])
     err = json.loads(capsys.readouterr().out)
@@ -90,14 +90,14 @@ def test_save_date_clear_nulls_the_field(seeded_project, capsys):
     # First set it, then clear it.
     save_date.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--date", "2024-03-08",
     ])
     capsys.readouterr()
 
     save_date.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--clear",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -110,12 +110,12 @@ def test_save_date_rejects_nonpositive_document_id(seeded_project, capsys):
     """Representative #413 check: an id flag now uses the shared ``positive_int``
     validator, so a non-positive id (here 0) fails at parse time and surfaces as
     the standard USAGE_ERROR JSON envelope, never a raw argparse dump. (The same
-    swap covers --document/--finding/--chunk/--into across the id-flag scripts.)
+    swap covers --document-id/--finding-id/--chunk-id/--into across the id-flag scripts.)
     """
     with pytest.raises(SystemExit) as exc:
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", "0",
+            "--document-id", "0",
             "--date", "2024-03-08",
         ])
     assert exc.value.code != 0
@@ -128,7 +128,7 @@ def test_save_date_no_summary_is_rejected(seeded_project, capsys):
     with pytest.raises(SystemExit):
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_b"]),
+            "--document-id", str(seeded_project["doc_b"]),
             "--date", "2024-03-08",
         ])
     err = json.loads(capsys.readouterr().out)
@@ -139,7 +139,7 @@ def test_save_date_unknown_document_is_rejected(seeded_project, capsys):
     with pytest.raises(SystemExit):
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", "999999",
+            "--document-id", "999999",
             "--date", "2024-03-08",
         ])
     err = json.loads(capsys.readouterr().out)
@@ -150,5 +150,5 @@ def test_save_date_requires_date_or_clear(seeded_project, capsys):
     with pytest.raises(SystemExit):
         save_date.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
         ])

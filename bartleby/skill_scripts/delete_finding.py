@@ -48,7 +48,7 @@ from bartleby.skill_scripts._common import assert_findings_accessible, positive_
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("delete_finding", __doc__)
-    p.add_argument("--finding", type=positive_int, required=True, dest="finding_id")
+    p.add_argument("--finding-id", type=positive_int, required=True, dest="finding_id")
     return p.parse_args(argv)
 
 

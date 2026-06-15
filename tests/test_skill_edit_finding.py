@@ -60,7 +60,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding", str(finding_id),
+        "--finding-id", str(finding_id),
         "--body-file", str(new_body_file),
     ])
     out = json.loads(capsys.readouterr().out)
@@ -156,7 +156,7 @@ def test_edit_finding_title_only_leaves_body_and_citations_intact(
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding", str(finding_id),
+        "--finding-id", str(finding_id),
         "--title", "Renamed title",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -182,7 +182,7 @@ def test_edit_finding_requires_at_least_one_field(seeded_project, tmp_path, caps
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -193,7 +193,7 @@ def test_edit_finding_unknown_id(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", "99999",
+            "--finding-id", "99999",
             "--title", "x",
         ])
     assert exc.value.code == 1
@@ -211,7 +211,7 @@ def test_edit_finding_rejects_body_without_citations(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -234,7 +234,7 @@ def test_edit_finding_rejects_malformed_citation(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -253,7 +253,7 @@ def test_edit_finding_rejects_unknown_chunk_marker(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -292,7 +292,7 @@ def test_edit_finding_rejects_citation_to_own_chunk(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(finding_id),
+            "--finding-id", str(finding_id),
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -329,7 +329,7 @@ def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys)
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(finding_id),
+            "--finding-id", str(finding_id),
             "--title", "Hijacked title",
         ])
     assert exc.value.code == 1
@@ -361,7 +361,7 @@ def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding", str(finding_id),
+        "--finding-id", str(finding_id),
         "--title", "Self-renamed",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -428,7 +428,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(finding_id),
+            "--finding-id", str(finding_id),
             "--title", "Doomed title",
             "--body-file", str(new_body_file),
         ])
@@ -474,7 +474,7 @@ def test_edit_finding_rejects_empty_title(seeded_project, tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
             "--title", "   ",
         ])
     assert exc.value.code == 1
@@ -487,7 +487,7 @@ def test_edit_finding_rejects_empty_description(seeded_project, tmp_path, capsys
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding", str(saved["finding_id"]),
+            "--finding-id", str(saved["finding_id"]),
             "--description", "   ",
         ])
     assert exc.value.code == 1

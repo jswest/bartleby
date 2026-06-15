@@ -29,7 +29,7 @@ _AUTHOR_MODEL = "agent"
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("save_summary", __doc__)
-    p.add_argument("--document", type=positive_int, required=True, dest="document_id")
+    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--text", type=str, required=True)

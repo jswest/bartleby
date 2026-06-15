@@ -248,12 +248,14 @@ def publish(*, name: str, to: str) -> None:
 
 
 def import_(*, name: str, from_url: str, without_tags: bool, yes: bool) -> None:
-    """Import a published corpus from an S3 URL as a fresh local project.
+    """Import a published corpus as a fresh local project.
 
-    Downloads the published ``.db`` + originals, verifies schema and embedding
-    model BEFORE trusting the corpus (a compatibility mismatch — or a missing
-    embedding-model key — is an unconditional hard refuse), then adopts the
-    ``.db`` as-is and rewrites local file paths by ``file_hash``.
+    ``from_url`` is either an ``s3://`` URL or a local directory / ``file://``
+    URL holding the same artifact ``publish`` produces. Fetches the published
+    ``.db`` + originals, verifies schema and embedding model BEFORE trusting the
+    corpus (a compatibility mismatch — or a missing embedding-model key — is an
+    unconditional hard refuse), then adopts the ``.db`` as-is and rewrites local
+    file paths by ``file_hash``.
     ``--without-tags`` drops the adopted tag definitions and assignments.
     Overwriting an existing project of the same name (which drops its local
     findings) is gated like ``project delete``: it prompts for confirmation

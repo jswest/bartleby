@@ -1,11 +1,17 @@
-"""Import a published corpus from S3 as a fresh local project.
+"""Import a published corpus as a fresh local project (S3 or local / file://).
 
 The mirror of :mod:`bartleby.share.publish`. ``import`` pulls the published
-``.db`` plus the content-addressed originals down from an ``s3://bucket/prefix``
-URL and adopts the ``.db`` **as-is** — no id rekeying, no merge into an existing
-id space (that incremental-merge machinery is deliberately out of scope). The
-imported corpus is raw material: publish already stripped the session layer, so
-there is nothing findings-related to clean up here.
+``.db`` plus the content-addressed originals from a source — an
+``s3://bucket/prefix`` URL, or a local directory / ``file://`` URL holding the
+same artifact — and adopts the ``.db`` **as-is** — no id rekeying, no merge into
+an existing id space (that incremental-merge machinery is deliberately out of
+scope). The imported corpus is raw material: publish already stripped the
+session layer, so there is nothing findings-related to clean up here.
+
+The transport is the only thing that varies: a single :class:`ArtifactSource`
+seam (:mod:`bartleby.share.source`) answers "give me the bytes of artifact
+``X``", and the entire verify + register + land path below runs against it
+identically regardless of where those bytes came from.
 
 Two compatibility gates run **before** the corpus is registered or trusted, both
 hard-refuse with no ``--force`` override:
@@ -35,7 +41,6 @@ import shutil
 from pathlib import Path
 
 import apsw
-from botocore.exceptions import ClientError
 
 from bartleby.db.connection import _attach, project_db_path
 from bartleby.db.schema import SCHEMA_VERSION
@@ -47,6 +52,14 @@ from bartleby.project import (
 )
 from bartleby.share import s3
 from bartleby.share.publish import PUBLISHED_DB_NAME
+from bartleby.share.source import (
+    ArtifactSource,
+    LocalSource,
+    MissingArtifact,
+    S3Source,
+    is_s3_url,
+    local_root_from_url,
+)
 
 
 class ImportRefused(Exception):
@@ -116,30 +129,31 @@ def _verify_compatible(db_path: Path) -> None:
         )
 
 
-def _land_files(conn: apsw.Connection, target: s3.S3Target, archive: Path,
-                client) -> int:
-    """Download each original by ``file_hash`` and rewrite its ``file_path``.
+def _land_files(conn: apsw.Connection, source: ArtifactSource,
+                archive: Path) -> int:
+    """Fetch each original by ``file_hash`` and rewrite its ``file_path``.
 
-    For every ``documents``/``images`` row, derives the published S3 key
+    For every ``documents``/``images`` row, derives the artifact name
     ``files/<file_hash><ext>`` from the recorded ``file_path``'s suffix, pulls
-    the bytes, writes them into the project ``archive`` at a path derived from
-    the stable ``file_hash``, and rewrites the row's ``file_path`` to that
-    landed path. Idempotent: the landing path depends only on ``file_hash`` (and
-    suffix), so a re-import overwrites in place to identical bytes.
+    the bytes from ``source``, writes them into the project ``archive`` at a path
+    derived from the stable ``file_hash``, and rewrites the row's ``file_path``
+    to that landed path. Idempotent: the landing path depends only on
+    ``file_hash`` (and suffix), so a re-import overwrites in place to identical
+    bytes.
 
     Error handling is deliberately strict: a row whose ``file_path`` is NOT
     rewritten still points at the *publisher's* absolute path, which is dangling
     on this machine — and the web view and search trust that column. So:
 
-    * A genuinely-absent object (boto3 ``NoSuchKey``/404 ``ClientError``) is
-      itself a sign of a corrupt artifact: publish only uploads files it
-      actually found on disk, so a published artifact missing a file it
-      advertised is broken. We refuse the whole import rather than silently
-      leave a dangling row.
+    * A genuinely-absent artifact (:class:`MissingArtifact`, which both the S3
+      and local sources raise for a not-found object) is itself a sign of a
+      corrupt artifact: publish only uploads files it actually found on disk, so
+      a published artifact missing a file it advertised is broken. We refuse the
+      whole import rather than silently leave a dangling row.
     * Any other failure (a transient S3 error, throttling, expired credentials,
-      or a disk-write failure — all brought inside the protected region) aborts
-      the import by re-raising, so the CLI maps it to a non-zero exit and the
-      half-built project is cleaned up.
+      or a disk read/write failure — all brought inside the protected region)
+      aborts the import by re-raising, so the CLI maps it to a non-zero exit and
+      the half-built project is cleaned up.
 
     Returns the count of files landed (every row, on success).
     """
@@ -153,36 +167,24 @@ def _land_files(conn: apsw.Connection, target: s3.S3Target, archive: Path,
             ext = Path(file_path).suffix
             name = f"files/{file_hash}{ext}"
             try:
-                data = s3.get_bytes(client, target, name)
-                if subdir is None:
-                    dest_dir = archive / file_hash
-                else:
-                    dest_dir = archive / subdir
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                dest = dest_dir / f"{file_hash}{ext}"
-                dest.write_bytes(data)
-            except ClientError as e:
-                if _is_missing_key(e):
-                    raise ImportRefused(
-                        f"Published artifact is missing a file it advertised "
-                        f"(object {name!r} for {table} file_hash {file_hash}). "
-                        "The artifact is corrupt — refusing to import a corpus "
-                        "with dangling file references."
-                    ) from e
-                raise
+                data = source.get_bytes(name)
+            except MissingArtifact as e:
+                raise ImportRefused(
+                    f"Published artifact is missing a file it advertised "
+                    f"(object {name!r} for {table} file_hash {file_hash}). "
+                    "The artifact is corrupt — refusing to import a corpus "
+                    "with dangling file references."
+                ) from e
+            dest_dir = archive / (subdir or file_hash)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"{file_hash}{ext}"
+            dest.write_bytes(data)
             cur.execute(
                 f"UPDATE {table} SET file_path = ? WHERE file_hash = ?",
                 (str(dest), file_hash),
             )
             landed += 1
     return landed
-
-
-def _is_missing_key(err: ClientError) -> bool:
-    """True if a boto3 ``ClientError`` is an absent-object (NoSuchKey / 404)."""
-    error = err.response.get("Error", {}) if hasattr(err, "response") else {}
-    code = str(error.get("Code", ""))
-    return code in ("NoSuchKey", "404", "NoSuchBucket")
 
 
 def _drop_tags(conn: apsw.Connection) -> None:
@@ -199,26 +201,42 @@ def _drop_tags(conn: apsw.Connection) -> None:
         cur.execute("DELETE FROM tags")
 
 
+def _make_source(from_url: str, client) -> ArtifactSource:
+    """Build the right :class:`ArtifactSource` for ``from_url``.
+
+    Decides the transport by inspecting the value: an ``s3://`` URL → S3 (using
+    the injected/real client); a ``file://`` URL or a plain local path → a local
+    directory. Raises ``ValueError`` on a value that is neither.
+    """
+    if is_s3_url(from_url):
+        target = s3.parse_s3_url(from_url)
+        if client is None:
+            client = s3._client()
+        return S3Source(target, client)
+    return LocalSource(local_root_from_url(from_url))
+
+
 def import_project(name: str, from_url: str, *, client=None,
                    without_tags: bool = False, force: bool = False) -> dict:
     """Import the corpus published at ``from_url`` as local project ``name``.
 
-    Downloads the published ``.db`` + originals from the ``s3://bucket/prefix``
-    URL, verifies schema + embedding-model compatibility **before** registering
-    anything, then adopts the ``.db`` as a fresh project, lands the originals by
-    ``file_hash``, and rewrites their ``file_path``s. ``client`` is injectable so
-    tests pass a stubbed boto3 client; production builds a real one.
+    ``from_url`` is either an ``s3://bucket/prefix`` URL or a local directory /
+    ``file://`` URL holding the same artifact ``publish`` produces. Fetches the
+    published ``.db`` + originals from that source, verifies schema +
+    embedding-model compatibility **before** registering anything, then adopts
+    the ``.db`` as a fresh project, lands the originals by ``file_hash``, and
+    rewrites their ``file_path``s. ``client`` is injectable so tests pass a
+    stubbed boto3 client (it is only consulted for an ``s3://`` source);
+    production builds a real one on demand.
 
     Raises :class:`ImportRefused` on a failed compatibility gate (no side
     effects), or when ``name`` already exists and ``force`` is not set (a
     same-name overwrite is opt-in because it drops the existing project's local
-    findings); ``ValueError`` on a bad name/URL. With ``force``, re-importing an
-    existing project overwrites it idempotently.
+    findings); ``ValueError`` on a bad name/URL/path. With ``force``,
+    re-importing an existing project overwrites it idempotently.
     """
     validate_project_name(name)
-    target = s3.parse_s3_url(from_url)
-    if client is None:
-        client = s3._client()
+    source = _make_source(from_url, client)
 
     project_dir = get_project_dir(name)
     # Whether this project already existed before the import. A re-import
@@ -238,12 +256,18 @@ def import_project(name: str, from_url: str, *, client=None,
             f"Pass --yes to overwrite, or import under a different name."
         )
 
-    # Download + verify in scratch first, so a refused import touches nothing.
+    # Fetch + verify in scratch first, so a refused import touches nothing.
     scratch = project_dir.parent / f".import-tmp-{name}"
     scratch.mkdir(parents=True, exist_ok=True)
     staged_db = scratch / PUBLISHED_DB_NAME
     try:
-        staged_db.write_bytes(s3.get_bytes(client, target, PUBLISHED_DB_NAME))
+        try:
+            staged_db.write_bytes(source.get_bytes(PUBLISHED_DB_NAME))
+        except MissingArtifact as e:
+            raise ImportRefused(
+                f"Import source has no {PUBLISHED_DB_NAME} — not a published "
+                "Bartleby artifact (or the wrong location). Refusing to import."
+            ) from e
         _verify_compatible(staged_db)
 
         # Gates passed — register the project. A re-import overwrites the prior
@@ -277,7 +301,7 @@ def import_project(name: str, from_url: str, *, client=None,
             if without_tags:
                 _drop_tags(conn)
             with conn:
-                file_count = _land_files(conn, target, archive, client)
+                file_count = _land_files(conn, source, archive)
         finally:
             conn.close()
     except BaseException:
