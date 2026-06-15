@@ -10,6 +10,8 @@ Returns enough information for ``scribe`` to:
   - pump embedded images through the image pipeline
   - fall back to Tesseract or the VLM on sparse pages (using the saved page
     render bytes — no second render needed)
+  - crop vector figure regions (charts, diagrams drawn as PDF path operators)
+    that never appear in page.images but are visible in the page render
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from pathlib import Path
 
 import pdfplumber
 from PIL import Image
+from shapely import box, unary_union
 
 from bartleby.ingest import ocr as ocr_module
 from bartleby.lib import console
@@ -80,6 +83,13 @@ PAGE_SUBSTRATE_AREA_RATIO = 0.9
 MIN_EMBEDDED_IMAGE_LONG_EDGE_PX = 128
 MIN_EMBEDDED_IMAGE_AREA_PX = 5000
 
+# Vector figure detection: proximity-merge tolerance (PDF points) and minimum
+# merged-cluster area (PDF points²). tol=3 bridges small gaps between adjacent
+# path primitives in the same figure; min_area=2500 (~50×50 pt) drops slivers,
+# hairlines, and decoration that form isolated clusters too small to be figures.
+_VECTOR_MERGE_TOL = 3.0
+_VECTOR_MIN_AREA = 2500
+
 
 @dataclass
 class EmbeddedImage:
@@ -108,12 +118,17 @@ def convert(
     *,
     sparse_text_threshold: int,
     ocr_min_confidence: int,
+    vector_ink_threshold: int = 0,
 ) -> PdfResult:
     """Extract text + embedded images from a PDF, with OCR fallback for sparse pages.
 
     OCR runs inline per-page so each page is fully resolved before the caller
     sees it — the page is never reported done while Tesseract grinds in the
     background.
+
+    ``vector_ink_threshold``: pages with fewer than this many vector primitives
+    (curves + lines + rects combined) skip the vector-figure pass entirely.
+    0 (the default) never skips.
     """
     pages: list[PdfPage] = []
     full_text_parts: list[str] = []
@@ -130,12 +145,23 @@ def convert(
             page_render_png = None
             embedded_images: list[EmbeddedImage] = []
 
-            if is_sparse or page.images:
+            # Decide upfront whether this page has enough vector ink to bother
+            # running the proximity-merge pass. The threshold is an ink-primitive
+            # count, not a figure count — it gates the shapely work only.
+            ink_count = len(page.curves) + len(page.lines) + len(page.rects)
+            has_vector_ink = ink_count >= vector_ink_threshold and ink_count > 0
+
+            needs_render = is_sparse or page.images or has_vector_ink
+            rendered = None
+            if needs_render:
                 rendered = page.to_image(resolution=PAGE_RENDER_DPI).original
                 if is_sparse:
                     page_render_png = _to_png_bytes(rendered)
                 if page.images:
                     embedded_images = _crop_embedded_images(rendered, page)
+                if has_vector_ink:
+                    vector_crops = _crop_vector_figures(rendered, page)
+                    embedded_images.extend(vector_crops)
 
             ocr_result: ocr_module.OcrResult | None = None
             if is_sparse:
@@ -191,6 +217,30 @@ def _to_png_bytes(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+def _crop_pdf_bbox(
+    rendered: Image.Image, x0: float, top: float, x1: float, bottom: float,
+    scale: float,
+) -> Image.Image | None:
+    """Crop a PDF-point bbox from a rendered page, returning None if the crop
+    is degenerate (zero dimension) or too small to be meaningful.
+
+    Used by both raster-embed and vector-figure croppers so the pixel-coord
+    computation and size-filter constants live in one place.
+    """
+    page_w, page_h = rendered.size
+    ix0 = max(0, int(x0 * scale))
+    iy0 = max(0, int(top * scale))
+    ix1 = min(page_w, int(x1 * scale))
+    iy1 = min(page_h, int(bottom * scale))
+    crop_w, crop_h = ix1 - ix0, iy1 - iy0
+    if crop_w < 1 or crop_h < 1:
+        return None
+    if (max(crop_w, crop_h) < MIN_EMBEDDED_IMAGE_LONG_EDGE_PX
+            or crop_w * crop_h < MIN_EMBEDDED_IMAGE_AREA_PX):
+        return None
+    return rendered.crop((ix0, iy0, ix1, iy1))
+
+
 def _crop_embedded_images(rendered: Image.Image, page) -> list[EmbeddedImage]:
     """Crop each pdfplumber `page.images` entry out of the rendered page.
 
@@ -200,31 +250,93 @@ def _crop_embedded_images(rendered: Image.Image, page) -> list[EmbeddedImage]:
     ``PAGE_SUBSTRATE_AREA_RATIO``.
     """
     scale = PAGE_RENDER_DPI / 72.0
-    page_w, page_h = rendered.size
     page_area_pt = max(1.0, page.width * page.height)
     out: list[EmbeddedImage] = []
     for i, im in enumerate(page.images):
         bbox_area_pt = max(0.0, im["x1"] - im["x0"]) * max(0.0, im["bottom"] - im["top"])
         if bbox_area_pt / page_area_pt >= PAGE_SUBSTRATE_AREA_RATIO:
             continue
-        # Truncate to integer pixel coords (PIL crop does this anyway). Skip
-        # crops that degenerate to zero in either dimension — happens when
-        # pdfplumber registers a thin horizontal/vertical PDF rule as an
-        # "image" with a sub-pixel bbox, and downstream JPEG encoding bails
-        # with "cannot write empty image."
-        ix0 = max(0, int(im["x0"] * scale))
-        iy0 = max(0, int(im["top"] * scale))
-        ix1 = min(page_w, int(im["x1"] * scale))
-        iy1 = min(page_h, int(im["bottom"] * scale))
-        crop_w, crop_h = ix1 - ix0, iy1 - iy0
-        if crop_w < 1 or crop_h < 1:
+        crop = _crop_pdf_bbox(rendered, im["x0"], im["top"], im["x1"], im["bottom"], scale)
+        if crop is None:
             continue
-        if (max(crop_w, crop_h) < MIN_EMBEDDED_IMAGE_LONG_EDGE_PX
-                or crop_w * crop_h < MIN_EMBEDDED_IMAGE_AREA_PX):
-            continue
-        crop = rendered.crop((ix0, iy0, ix1, iy1))
         out.append(EmbeddedImage(
             image_index_on_page=i + 1,
+            png_bytes=_to_png_bytes(crop),
+        ))
+    return out
+
+
+def _vector_figure_bboxes(page, tol: float = _VECTOR_MERGE_TOL,
+                          min_area: float = _VECTOR_MIN_AREA) -> list[tuple]:
+    """Return figure bounding boxes derived from vector ink via proximity-merge.
+
+    Uses shapely to buffer-and-union all curves/lines/rects into clusters, then
+    subtracts table bboxes (table gridlines are rects/lines but are not figures).
+    Returns bboxes as (x0, top, x1, bottom) tuples in PDF point coordinates.
+
+    Never includes ``page.chars`` — text is never vector ink for this purpose.
+    """
+    prims = page.curves + page.lines + page.rects
+    if not prims:
+        return []
+
+    merged = unary_union([
+        box(p["x0"], p["top"], p["x1"], p["bottom"]).buffer(tol / 2)
+        for p in prims
+    ])
+    geoms = merged.geoms if merged.geom_type == "MultiPolygon" else [merged]
+
+    # Collect table bboxes to exclude table-gridline clusters. find_tables()
+    # is pdfplumber's purpose-built table detector — the right tool here rather
+    # than rolling a heuristic.
+    table_boxes = [box(*tbl.bbox) for tbl in page.find_tables()]
+
+    results = []
+    for g in geoms:
+        if g.area < min_area:
+            continue
+        # Drop clusters that substantially overlap a table bbox. A cluster is
+        # "table-like" when its centroid falls inside any table bbox — simpler
+        # and cheaper than a full intersection-over-union check, and correct for
+        # the common case where the table gridlines form a cluster fully inside
+        # the table bbox.
+        cx, cy = g.centroid.x, g.centroid.y
+        is_table = any(
+            tb.bounds[0] <= cx <= tb.bounds[2] and tb.bounds[1] <= cy <= tb.bounds[3]
+            for tb in table_boxes
+        )
+        if is_table:
+            continue
+        b = g.bounds   # (minx, miny, maxx, maxy) = (x0, top, x1, bottom)
+        results.append((b[0], b[1], b[2], b[3]))
+
+    return results
+
+
+def _crop_vector_figures(rendered: Image.Image, page) -> list[EmbeddedImage]:
+    """Crop vector figure regions from the rendered page.
+
+    Vector figures (matplotlib/Illustrator charts drawn as PDF path operators)
+    never appear in page.images but are visible in the rendered raster. This
+    crops each proximity-merged cluster from the EXISTING render — no second
+    render needed.
+
+    image_index_on_page uses a high base (1000 + cluster_index) to avoid
+    colliding with raster-embed indices (which are 1-indexed from page.images).
+    """
+    bboxes = _vector_figure_bboxes(page)
+    if not bboxes:
+        return []
+
+    scale = PAGE_RENDER_DPI / 72.0
+    out: list[EmbeddedImage] = []
+    for cluster_idx, (x0, top, x1, bottom) in enumerate(bboxes):
+        crop = _crop_pdf_bbox(rendered, x0, top, x1, bottom, scale)
+        if crop is None:
+            continue
+        out.append(EmbeddedImage(
+            # High base avoids collision with raster-embed indices (1-indexed).
+            image_index_on_page=1000 + cluster_idx,
             png_bytes=_to_png_bytes(crop),
         ))
     return out
