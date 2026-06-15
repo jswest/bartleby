@@ -515,6 +515,10 @@ Bartleby is built to run end-to-end without an internet connection — the path 
 
 No prompts, source text, or research notes leave the machine.
 
+Note: We pointed three models at the same large corpus and gave each the same open-ended brief: surface accountability angles, and save them as findings. The corpus is large, repetitive, and full of near-duplicate entities, so the task rewards models that can search efficiently, ground each claim in a specific document, and exercise judgment about what the evidence actually supports. We compared a frontier model (Claude Opus 4.8) against two locally-runnable open models (Qwen 3.6, 35B; Gemma 4, 31B) on time spent, factual accuracy, and editorial restraint.
+
+Opus 4.8 worked longest but turned the time into dense, specific, well-cited output, and consistently distinguished what the documents proved from what would be an unfair leap. Qwen 3.6 was a capable middle tier: real structural insight and usable leads, but tripped on a numeric error, some tool-use sloppiness, and one overreach where it asserted wrongdoing the filings didn't support. Gemma 4 was fastest and shallowest — thematically plausible but light on specifics, with garbled citations and claims stated as fact rather than shown. Buyer beware.
+
 ### Picking models for your hardware
 
 | Hardware | Ingest (summarization and tagging) | Ingest (VLM) | Research (Goose or Pi) |
