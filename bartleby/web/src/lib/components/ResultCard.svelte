@@ -1,6 +1,6 @@
 <script>
   import { marked } from "marked";
-  import { pluralize, stripExt, isMarkdownChunk } from "$lib/format.js";
+  import { pluralize, stripExt, isMarkdownChunk, highlightTerms } from "$lib/format.js";
   import { CHUNK_ICON as chunkIcon } from "$lib/icons.js";
 
   // One card for both search hits and scan matches — they share ~90% of their
@@ -11,8 +11,11 @@
   // description, file_name, href (document detail page at the cited page, or
   // finding page), page_number, section_heading, content_type, chunk_id, text.
   // Search adds normalized_score + source_kind + source_id; scan adds text_length.
+  // `query` (the raw query string) is passed through so matched terms can be
+  // wrapped in <mark> on the client — no raw HTML injection, just Svelte {#each}.
   export let item;
   export let variant = "search"; // "search" | "scan"
+  export let query = "";
 
   $: title = item.title ?? stripExt(item.file_name) ?? item.source_name;
   $: scorePct = Math.round((item.normalized_score ?? 0) * 100);
@@ -31,6 +34,12 @@
   // marked.parse is sanitized globally (the +layout.svelte marked.use hook wires
   // DOMPurify), so {@html} here is safe.
   $: isMarkdown = isMarkdownChunk(item);
+
+  // B3: split the plain-text snippet into {text, highlight} segments so the
+  // template can wrap matched terms in <mark> without any raw-HTML injection.
+  // Markdown snippets go through `marked` and keep their own emphasis; we leave
+  // them unmarked (injecting <mark> mid-parse would corrupt the AST).
+  $: snippetSegments = isMarkdown ? null : highlightTerms(item.text, query);
 </script>
 
 <li class="result surface surface--interactive">
@@ -75,7 +84,11 @@
   {#if isMarkdown}
     <div class="snippet markdown-body markdown-body--compact">{@html marked.parse(item.text)}</div>
   {:else}
-    <p class="snippet">{item.text}</p>
+    <p class="snippet">
+      {#each snippetSegments as seg}
+        {#if seg.highlight}<mark>{seg.text}</mark>{:else}{seg.text}{/if}
+      {/each}
+    </p>
   {/if}
 </li>
 

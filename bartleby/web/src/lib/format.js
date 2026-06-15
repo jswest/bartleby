@@ -46,6 +46,46 @@ export function pluralize(count, singular, plural = `${singular}s`) {
   return `${shown} ${count === 1 ? singular : plural}`;
 }
 
+// Split a plain-text snippet into segments for client-side term highlighting.
+// Returns an array of {text: string, highlight: boolean} objects whose `text`
+// values, concatenated, equal the original snippet. Matched spans are flagged
+// so the caller can wrap them in <mark> without any raw-HTML injection.
+//
+// Matching is case-insensitive; each whitespace-separated token in `query` is
+// treated as an independent term (same tokenisation as the FTS search leg).
+// Only used on PLAIN-TEXT snippets — markdown snippets go through `marked` and
+// keep their own emphasis, so we leave them unmarked rather than injecting
+// <mark> mid-parse.
+//
+// Returns [{text, highlight: false}] when query is absent/empty so callers
+// can always iterate the return value without a guard.
+export function highlightTerms(text, query) {
+  if (!text) return [];
+  if (!query || !query.trim()) return [{ text, highlight: false }];
+
+  // Build one regex that matches any token in the query (word-boundary anchored,
+  // case-insensitive). Escape special regex chars in each token so a query like
+  // "C++ pointer" doesn't blow up.
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [{ text, highlight: false }];
+  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(`(${escaped.join('|')})`, 'gi');
+
+  const segments = [];
+  let last = 0;
+  for (const match of text.matchAll(re)) {
+    if (match.index > last) {
+      segments.push({ text: text.slice(last, match.index), highlight: false });
+    }
+    segments.push({ text: match[0], highlight: true });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    segments.push({ text: text.slice(last), highlight: false });
+  }
+  return segments.length > 0 ? segments : [{ text, highlight: false }];
+}
+
 // Whether a chunk's text is reliably markdown-authored — so it should render
 // through `marked` — versus extracted/plain text that must stay literal (running
 // it through marked would mangle stray *, _, # chars). Agent/model output
