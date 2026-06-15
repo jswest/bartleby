@@ -26,13 +26,15 @@
 
 <script>
   import "../app.css";
-  import { page } from "$app/stores";
+  import { navigating, page } from "$app/stores";
   import {
     SEARCH_ICON,
     FINDINGS_ICON,
     DOCUMENTS_ICON,
     TAGS_ICON,
   } from "$lib/icons.js";
+  import StatusBanner from "$lib/components/StatusBanner.svelte";
+  import WaitingIndicator from "$lib/components/WaitingIndicator.svelte";
   export let data;
 
   // A nav link is "active" if the current path matches exactly OR is a child
@@ -47,6 +49,20 @@
   $: path = $page.url.pathname;
   $: isActive = (href) =>
     href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
+
+  // Show a global "Loading…" indicator for any navigation that is NOT a search
+  // submission. A search submission navigates TO /search with a non-empty ?q=
+  // param — the search page's own "Searching…" banner covers that case with a
+  // richer embedding-model hint. Every other in-flight navigation (clicking a
+  // result, pressing Back, moving to /findings, etc.) gets the global banner.
+  //
+  // We check $navigating.to so the layout never shows "Loading…" during a
+  // search — preventing two simultaneous indicators and wrong copy.
+  $: isSearchNavigation =
+    !!$navigating &&
+    $navigating.to?.url?.pathname?.startsWith("/search") &&
+    !!$navigating.to?.url?.searchParams?.get("q");
+  $: loading = !!$navigating && !isSearchNavigation;
 </script>
 
 <header>
@@ -61,6 +77,14 @@
     <span class="project display">{data.project}</span>
   </nav>
 </header>
+
+{#if loading}
+  <div class="global-loading">
+    <StatusBanner variant="busy">
+      <WaitingIndicator label="Loading…" active={true} />
+    </StatusBanner>
+  </div>
+{/if}
 
 <main>
   <slot />
@@ -140,6 +164,24 @@
     margin-left: auto;
     color: var(--color-shell-text-soft);
     font-size: var(--text-base);
+  }
+  /* Global navigation loading banner: fixed just below the header so it's
+     always visible regardless of scroll position. Dismissed the instant
+     $navigating clears. The banner's own margin-bottom is ignored here since
+     it's taken out of flow; we use padding-top inside .banner instead. */
+  .global-loading {
+    position: fixed;
+    top: 3rem; /* sits just below the fixed header bar */
+    left: 0;
+    right: 0;
+    z-index: 9;
+    padding: var(--space-sm) var(--space-lg) 0;
+  }
+  /* Remove the bottom margin that StatusBanner adds (it's irrelevant when
+     the banner is fixed-positioned above the content). */
+  .global-loading :global(.banner) {
+    margin-bottom: 0;
+    max-width: none;
   }
   main {
     /* Offset the fixed header (a fixed structural height) so content doesn't
