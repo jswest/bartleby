@@ -191,6 +191,9 @@
     font-size: var(--text-4xl);
     line-height: 1;
     margin-bottom: var(--space-sm);
+    /* The dot-matrix count reads as an amber readout even on the paper card —
+       the one apparatus accent that carries onto the artifact. */
+    color: var(--color-token-dark);
   }
   .hint {
     font-size: var(--text-sm);
@@ -207,15 +210,17 @@
     font-family: var(--font-sans);
   }
 
-  /* The status strip: one value-over-label unit per stat, framed by a rule top
-     and bottom so it reads as its own band between the cards and the panels. */
+  /* The status strip is a dark LED readout band on the shell — a raised
+     near-black panel with amber dot-matrix figures and sage labels, framed by
+     dark rules top and bottom. (R2 grows the full LED-panel idiom from here.) */
   .stat-strip {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-lg) var(--space-3xl);
-    padding: var(--space-lg) 0 var(--space-xl);
-    border-top: 1px solid var(--color-rule);
-    border-bottom: 1px solid var(--color-rule);
+    padding: var(--space-lg) var(--space-xl);
+    background: var(--color-shell-raised);
+    border-top: 1px solid var(--color-shell-rule);
+    border-bottom: 1px solid var(--color-shell-rule);
   }
   .stat {
     display: flex;
@@ -226,14 +231,17 @@
     font-family: var(--font-display);
     font-size: var(--text-xl);
     line-height: 1;
-    color: var(--color-text);
+    /* Amber dot-matrix readout — the glowing-LED figure on the dark panel. */
+    color: var(--color-token-dark);
   }
   /* The authored-date range is text, not a metric — render it in readable sans
-     instead of the pixel display face, which mangles a long date string. */
+     instead of the pixel display face, which mangles a long date string. The
+     mint reads as a lit readout where dark paper text would vanish on the band. */
   .stat-value--text {
     font-family: var(--font-sans);
     font-size: var(--text-base);
     font-weight: 600;
+    color: var(--color-off-light);
   }
   .stat-label {
     font-size: var(--text-2xs);

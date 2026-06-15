@@ -37,8 +37,10 @@
     font-family: var(--font-sans);
     font-size: var(--text-sm);
   }
+  /* The pager rides loose on the dark shell: sage links read where the darkened
+     paper link-green would vanish; the disabled state is a dimmed shell rule. */
   .pager a {
-    color: var(--color-link);
+    color: var(--color-off);
     font-weight: 600;
     text-decoration: none;
   }
@@ -46,7 +48,7 @@
     text-decoration: underline;
   }
   .disabled {
-    color: var(--color-rule);
+    color: var(--color-shell-rule);
   }
   .range {
     color: var(--color-off);

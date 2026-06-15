@@ -79,5 +79,6 @@ bartleby = [
     "web/svelte.config.js",
     "web/vite.config.js",
     "web/src/**/*",
+    "web/static/**/*",
     "skill/*",
 ]
