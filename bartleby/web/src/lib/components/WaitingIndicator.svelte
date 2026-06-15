@@ -28,7 +28,7 @@
   class:active
   aria-label={label}
   aria-live={active ? "polite" : undefined}
-  aria-busy={active}
+  aria-busy={active || undefined}
   role="status"
 >
   <!--
@@ -40,16 +40,18 @@
     <span class="cell cell-0">█</span><span class="cell cell-1">█</span><!--
     --><span class="cell cell-3">█</span><span class="cell cell-2">█</span>
   </span>
-  <span class="label">{label}</span>
+  {label}
 </span>
 
 <style>
-  /* Container: inline-flex so it fits inside StatusBanner copy or a <p>. */
+  /* Container: inline-flex so it fits inside StatusBanner copy or a <p>.
+     Sets font-sans for the label text node; .track overrides to Doto for the
+     dot-matrix cells. */
   .waiting-indicator {
     display: inline-flex;
     align-items: baseline;
     gap: var(--space-sm);
-    /* Anchor font-family and size so the Doto cells share metrics with the label. */
+    font-family: var(--font-sans);
   }
 
   /* The 2×2 block track, rendered in Doto dot-matrix. Laid out as a 2-column
@@ -95,12 +97,6 @@
   .active .cell-1 { animation-delay: -1.2s; } /* 0.4 s into cycle */
   .active .cell-2 { animation-delay: -0.8s; } /* 0.8 s into cycle */
   .active .cell-3 { animation-delay: -0.4s; } /* 1.2 s into cycle */
-
-  /* Label: Iosevka (UI chrome). Inherits parent color (shell-text or banner). */
-  .label {
-    font-family: var(--font-sans);
-    font-size: inherit;
-  }
 
   /* Reduced-motion: hold a static frame — one cell lit, no animation. */
   @media (prefers-reduced-motion: reduce) {
