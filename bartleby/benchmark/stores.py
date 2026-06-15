@@ -35,6 +35,11 @@ from bartleby.benchmark.refs import ModelRef
 
 DEFAULT_ROOT = Path("benchmarks")
 
+# The extraction backend whose files omit the ``_x-<extraction>`` / ``-<extraction>``
+# segment, keeping pre-extraction-field stores backward-compatible. Defined here
+# (the file-layout owner) and re-exported from ``sources`` for callers.
+DEFAULT_EXTRACTION = "pdfplumber"
+
 
 class BenchmarkRoot:
     """Path arithmetic for one benchmarks directory."""
@@ -79,17 +84,17 @@ class BenchmarkRoot:
         return self.root / "judgements"
 
     def result_path(self, ref: ModelRef, doc_id: str,
-                    extraction: str = "pdfplumber") -> Path:
-        suffix = f"_x-{extraction}" if extraction != "pdfplumber" else ""
+                    extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"_x-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
         return self.results_dir / f"{ref.slug}_{doc_id}{suffix}.jsonl"
 
     def judgement_path(self, ref: ModelRef, doc_id: str, judge: ModelRef,
-                       extraction: str = "pdfplumber") -> Path:
-        suffix = f"_x-{extraction}" if extraction != "pdfplumber" else ""
+                       extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"_x-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
         return self.judgements_dir / f"{ref.slug}_{doc_id}{suffix}_{judge.slug}.jsonl"
 
-    def source_path(self, doc_id: str, extraction: str = "pdfplumber") -> Path:
-        suffix = f"-{extraction}" if extraction != "pdfplumber" else ""
+    def source_path(self, doc_id: str, extraction: str = DEFAULT_EXTRACTION) -> Path:
+        suffix = f"-{extraction}" if extraction != DEFAULT_EXTRACTION else ""
         return self.sources_dir / f"{doc_id}{suffix}.txt"
 
     def load_models(self) -> list[ModelRef]:

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from bartleby.benchmark.stores import BenchmarkRoot
+from bartleby.benchmark.stores import DEFAULT_EXTRACTION, BenchmarkRoot
 
 # Production parity: the same truncation limit ingest actually uses, imported
 # (not copied) so the benchmark can't silently diverge from it.
@@ -139,9 +139,6 @@ class SourceText:
     text: str
     sha: str
     tokens: int  # post-truncation — what the models actually see
-
-
-DEFAULT_EXTRACTION = "pdfplumber"
 
 
 def ensure_source(root: BenchmarkRoot, doc_id: str, pdf: Path,

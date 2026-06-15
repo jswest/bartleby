@@ -34,7 +34,7 @@ def summarize(args) -> None:
         runs=args.runs,
         seed=args.seed,
         ollama_host=args.ollama_host,
-        extraction=getattr(args, "extraction", DEFAULT_EXTRACTION) or DEFAULT_EXTRACTION,
+        extraction=args.extraction or DEFAULT_EXTRACTION,
     )
 
 
