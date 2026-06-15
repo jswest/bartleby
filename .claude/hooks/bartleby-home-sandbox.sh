@@ -12,8 +12,8 @@
 # Detection: a linked git worktree has `.git` as a FILE (containing `gitdir:`);
 # the primary checkout has `.git` as a DIRECTORY. That one distinction is "am I
 # an isolated agent worktree?" — no extra git plumbing, no knowledge of how the
-# worktree was made (sibling `../bartleby-issue-*`, `.claude/worktrees/<id>`,
-# ultraship players — all are linked worktrees).
+# worktree was made (sibling `../bartleby-issue-*`, `.claude/worktrees/<id>` —
+# all are linked worktrees).
 #
 # Caveat: this only takes effect where the harness runs SessionStart hooks and
 # provides $CLAUDE_ENV_FILE. Where it does not fire the behavior is unchanged

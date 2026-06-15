@@ -186,7 +186,9 @@ self-check honored. `gh` authed. Working tree of the base is clean. Honor
 worktree discipline below is what keeps work off the base.
 
 ## 1. Resolve target and argument
-Target = `--onto <branch>` if given, else `base_branch`. Fetch the issue; check
+Target = `--onto <branch>` if given, else `base_branch`. Fetch the issue **and
+its comments** (clarifications, scope changes, and "actually don't do X"
+corrections live there — read them every time, not just at the plan gate); check
 for **native sub-issues**. The fork is one API check — native sub-issues, **not**
 checklists or titles. `gh` has no sub-issue subcommand; use the REST API, keyed
 by the child's numeric REST **id** (the `.id` field, *not* its issue number),
@@ -206,7 +208,8 @@ Derive a kebab slug from the issue title for worktree names.
 
 ## The plan gate
 If `--plan` is set, **or** the director judges the issue underspecified or risky:
-read the issue, its comments, and (for an omnibus) every sub-issue; flesh out a
+re-read the issue and its comments (already fetched in §1) and, for an omnibus,
+every sub-issue; flesh out a
 terse spec; present the plan — files/approach/trade-offs for a leaf, the **wave
 DAG and the list of sub-issues that will fan out** for an omnibus — and **wait
 for the user's OK**. Trivial, unambiguous leaves may skip the gate — say so and

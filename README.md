@@ -551,9 +551,9 @@ See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for the full stor
 ## Contributing
 
 Bartleby is built hand-in-hand with Claude Code, and the workflow that makes that
-work — the `/ship` issue→PR loop, the `/ultraship` unattended omnibus assembly,
-the worktree convention, the commit gates, the
-safety hook — is version-controlled right in the repo. See
+work — the `/ship` issue→PR loop (leaf issues and omnibus bundles alike), the
+worktree convention, the commit gates, the safety hook — is version-controlled
+right in the repo. See
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) for how we develop here (and how to do it by
 hand if you'd rather). Architectural invariants and the decision log live in
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).

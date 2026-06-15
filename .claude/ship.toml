@@ -4,7 +4,7 @@
 # dir) for the full field reference.
 
 base_branch      = "main"                          # default branch / promotion target
-branch_prefix    = "omnibus"                       # omnibus branch stem (shared with ultraship)
+branch_prefix    = "omnibus"                       # omnibus branch stem
 version_scheme   = "leading-v"                      # omnibus issues titled `vX.Y.Z — …` → `omnibus/vX.Y.Z`
 worktree_pattern = "../{repo}-issue-{n}-{slug}"    # sibling, never nested
 

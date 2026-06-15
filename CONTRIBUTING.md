@@ -179,10 +179,10 @@ unattended except for the plan gate and the final merge.
 ### Configuring `/ship`: `.claude/ship.toml`
 
 Repo-specific facts live in `.claude/ship.toml` (committed; `signet` never touches
-it). Key fields: `base_branch`, `test_cmd` / `test_source_globs` / `auto_skip_globs`,
-`player_tier`, `max_critic_passes`, and the `guardrails` redline (injected verbatim
-into every player and director prompt — share it in git so a fresh clone gets the
-same redlines). On first run with no `.toml`, `/ship` auto-detects and proposes a
+it). Key fields: `base_branch`, `test_cmd` / `test_source_globs` / `docs_only_globs`,
+`gate_agent` (the per-commit quality pass), and the `live_data_note` redline (injected
+verbatim into the implementation guidance — share it in git so a fresh clone gets the
+same redline). On first run with no `.toml`, `/ship` auto-detects and proposes a
 config; `/ship config` or `/ship --reconfigure` re-runs it on demand.
 
 `/ship` also runs a **signet self-check** on startup: it reads

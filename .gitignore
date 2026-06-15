@@ -43,7 +43,6 @@ wheels/
 !.claude/settings.json
 !.claude/skills/
 !.claude/ship.toml
-!.claude/ultraship.toml
 .claude/scratch/
 # Machine-local press provenance — names an absolute drawer path; noise to clones.
 .claude/skills/*/.stamp
