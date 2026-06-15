@@ -262,8 +262,8 @@ proceed.
 6. **Docs sweep** (§Docs sweep) on the omnibus branch.
 7. **Promote:** reconcile the native sub-issue links against the final landed set
    (add any tracked-but-unlinked, remove a stale link), then open the **omnibus →
-   `base_branch`** PR enumerating `Closes #<N>` for the bundle, with a risk-ranked
-   report (§Report). **Stop.** A human merges — that one merge auto-closes every
+   `base_branch`** PR enumerating `Closes #<N>` for the bundle, with an at-a-glance
+   triage report (§Report). **Stop.** A human merges — that one merge auto-closes every
    sub-issue and the omnibus.
 
 ### Live progress
@@ -404,10 +404,27 @@ Sweep edits that stay within the documentation set keep the diff docs-only, so t
 test gate auto-skips (`auto_skip_globs`); a sweep that touches source re-runs it.
 
 ## Report (promotion PR body)
-Risk-ranked and plain-language, for a human skimming at a glance: what landed,
-what **parked** (with the written questions), the critics' surviving findings,
-and **which tier ran** (cheap players, `--strong`, or `--thrifty`) — a reviewer
-should weigh a cheap-tier diff a touch more skeptically.
+The omnibus→`base_branch` PR body opens with an **at-a-glance triage** — a
+red/yellow/green reading that answers a reviewer's only first question, *where do
+my eyes need to go?*, before they read a word. (Leaf issue→target PRs don't get
+this; it's a promotion-only summary over the whole bundle.)
+
+- **🔴 CHECK** — a human should look before merging: parked items (§Triage) with
+  their written questions, critic findings that survived the cap unresolved, any
+  judgment call the director made that warrants a second set of eyes. Keep red
+  rare and meaningful — its value is that it's short.
+- **🟡 FYI** — worth knowing, no action needed: decisions/tradeoffs taken, a
+  manual conflict park later resolved, and **which tier ran** (cheap players,
+  `--strong`, `--thrifty`) — a reviewer weighs a cheap-tier diff a touch more
+  skeptically. Not a dumping ground; if it won't inform a merge call, cut it.
+- **🟢 OK** — one line, not a list: what was verified and held (e.g. `tests green
+  · both critics clean · 4/4 sub-PRs landed clean`). Break out an individual green
+  item only when it's something that plausibly could have failed and didn't (a
+  risky integration seam that held).
+
+Below the triage, the plain-language detail: the `Closes #<N>` bundle that landed
+and the full text of any parked questions. Always pair the light with its word
+(🔴 CHECK / 🟡 FYI / 🟢 OK) so it survives where color alone doesn't.
 
 ## Cleanup
 After the user confirms the merge, remove the worktree(s) you created and
