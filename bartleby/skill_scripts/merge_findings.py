@@ -5,36 +5,37 @@ The after-the-fact cleanup for finding clusters that should have been one
 finding (overlapping report iterations, redundant drafts). One existing
 finding is kept as the ``--into`` target so its ``finding_id`` / provenance
 survives; the agent supplies the consolidated markdown via ``--body-file``
-(same citation rules as ``save_finding`` — at least one ``[^N]`` marker, every
-marker a real chunk_id), the target's body is replaced and its citations
+(same citation rules as ``save_finding`` — at least one ``[^chunk:N]`` marker,
+every marker a real chunk_id), the target's body is replaced and its citations
 re-extracted, and the ``--from`` sources are deleted (body chunks +
 ``finding_citations`` cleared, cited *document* chunks untouched).
 
+``--from`` / ``--into`` take type-tagged finding ids (e.g. ``finding:204``).
 ``--title`` / ``--description`` are optional; omit them to keep the target's
 current values. The target must not appear in ``--from``.
 
-Output mirrors ``save_finding`` (so the verbatim-body echo contract holds)
-plus ``merged_from``:
+Output mirrors ``save_finding`` (every id type-tagged; the verbatim-body echo
+contract holds) plus ``merged_from``:
 
     {
-      "finding_id": int,            # the surviving target
-      "session_id": int,            # the target's author
+      "finding_id": "finding:<id>",  # the surviving target
+      "session_id": int,             # the target's author
       "session_name": str, "model": str|null, "harness": str|null,
       "body": str,
-      "chunk_ids": [int, ...],
+      "chunk_ids": ["chunk:<id>", ...],
       "citations": [{
-        "chunk_id": int,
+        "chunk_id": "chunk:<id>",
         "source_kind": str, "source_name": str,
         "file_name": str|null,
         "page_number": int|null,
       }, ...],
       "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
-      "merged_from": [int, ...]     # source ids folded in and deleted
+      "merged_from": ["finding:<id>", ...]   # source ids folded in and deleted
     }
 
 ``external_citations`` echo the merged body's ``[^url:…]`` / ``[^doc:…]``
 markers — supplementary external attributions alongside (never replacing) the
-required ``[^N]`` chunk citations; no DB row, parsed from the body, ref opaque.
+required ``[^chunk:N]`` chunk citations; no DB row, parsed from the body, ref opaque.
 
 ``FINDING_NOT_FOUND`` (with the offending ids) when the target or any source
 is missing; ``TARGET_IN_SOURCES`` when ``--into`` is also in ``--from``. In a
@@ -53,11 +54,9 @@ from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
-    comma_int_list,
     embed_body_chunks,
     extract_external_citations,
     load_finding_body,
-    positive_int,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
@@ -65,15 +64,22 @@ from bartleby.skill_scripts._common import (
     validated_replacement,
     write_finding_chunks,
 )
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, prefixed_int, prefixed_int_list,
+)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("merge_findings", __doc__)
     p.add_argument(
-        "--from", type=comma_int_list("finding_id"), required=True,
-        dest="from_ids",
+        "--from", type=prefixed_int_list("finding"), required=True,
+        dest="from_ids", help="Comma-separated type-tagged finding ids, "
+        "e.g. finding:12,finding:34.",
     )
-    p.add_argument("--into", type=positive_int, required=True, dest="into")
+    p.add_argument(
+        "--into", type=prefixed_int("finding"), required=True, dest="into",
+        help="Type-tagged finding id to keep as the merge target, e.g. finding:7.",
+    )
     p.add_argument("--body-file", type=str, required=True, dest="body_file")
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)
@@ -156,7 +162,7 @@ def work(*, conn, args, session_id) -> dict:
         f"DELETE FROM findings WHERE finding_id IN ({src_ph})", sources,
     )
 
-    return {
+    return format_output_ids({
         "finding_id": target,
         "session_id": owning_session_id,
         **session_provenance(conn, owning_session_id),
@@ -164,8 +170,10 @@ def work(*, conn, args, session_id) -> dict:
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),
         "external_citations": extract_external_citations(body),
-        "merged_from": sources,
-    }
+        # merged_from is a list of finding ids; not in the output field map, so
+        # tag each explicitly as a finding id.
+        "merged_from": [format_id("finding", fid) for fid in sources],
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -173,12 +173,12 @@ def test_list_documents_has_summary_false_for_stub(dated_corpus, capsys):
     list_documents.main(["--project", dated_corpus["project"], "--limit", "100"])
     out = json.loads(capsys.readouterr().out)
     by_id = {d["id"]: d for d in out["documents"]}
-    stub = by_id[dated_corpus["stub_doc"]]
+    stub = by_id[f"document:{dated_corpus['stub_doc']}"]
     assert stub["has_summary"] is False
     assert stub["authored_date"] == "2022-07-04"
     assert stub["title"] is None
     # a real summary still reads has_summary=true
-    assert by_id[dated_corpus["summary_doc"]]["has_summary"] is True
+    assert by_id[f"document:{dated_corpus['summary_doc']}"]["has_summary"] is True
 
 
 def test_read_document_suppresses_stub_summary_but_keeps_date(dated_corpus, capsys):
@@ -186,7 +186,7 @@ def test_read_document_suppresses_stub_summary_but_keeps_date(dated_corpus, caps
     capsys.readouterr()
     read_document.main([
         "--project", dated_corpus["project"],
-        "--document-id", str(dated_corpus["stub_doc"]),
+        "--document-id", f"document:{dated_corpus['stub_doc']}",
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -199,7 +199,7 @@ def test_read_document_exposes_authored_date_for_real_summary(dated_corpus, caps
     capsys.readouterr()
     read_document.main([
         "--project", dated_corpus["project"],
-        "--document-id", str(dated_corpus["summary_doc"]),
+        "--document-id", f"document:{dated_corpus['summary_doc']}",
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)

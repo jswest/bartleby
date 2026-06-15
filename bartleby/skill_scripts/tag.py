@@ -36,16 +36,16 @@ Output:
       "tag": str|null,
       "model": str,
       "classified": [
-        {"document_id": int, "file_name": str,
-         "assigned_tag_ids": [int, ...],     # full-vocab mode
-         "applies": bool                     # single-tag mode
+        {"document_id": "document:<id>", "file_name": str,
+         "assigned_tag_ids": ["tag:<id>", ...],   # full-vocab mode
+         "applies": bool                          # single-tag mode
         }
       ],
       "skipped": [
-        {"document_id": int, "file_name": str, "reason": "already_tagged"|"no_summary"}
+        {"document_id": "document:<id>", "file_name": str, "reason": "already_tagged"|"no_summary"}
       ],
       "failed": [
-        {"document_id": int, "file_name": str, "error": str}
+        {"document_id": "document:<id>", "file_name": str, "error": str}
       ]
     }
 
@@ -61,7 +61,7 @@ import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts import _tags as tags_helpers
-from bartleby.skill_scripts._common import positive_int
+from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 from bartleby.skill_scripts._tags import (
     assign,
     classify_full_vocabulary,
@@ -76,7 +76,10 @@ from bartleby.skill_scripts._tags import (
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("tag", __doc__)
     scope = p.add_mutually_exclusive_group(required=True)
-    scope.add_argument("--document-id", type=positive_int, default=None, dest="document_id")
+    scope.add_argument(
+        "--document-id", type=prefixed_int("document"), default=None,
+        dest="document_id", help="Type-tagged document id, e.g. document:204.",
+    )
     scope.add_argument("--all", action="store_true", dest="all_documents")
     p.add_argument(
         "--tag", type=str, default=None,
@@ -209,14 +212,14 @@ def work(*, conn, args, session_id) -> dict:
         else:
             failed.append({**ident, "error": error})
 
-    return {
+    return format_output_ids({
         "mode": "single-tag" if single_tag is not None else "full-vocab",
         "tag": single_tag.name if single_tag is not None else None,
         "model": model,
         "classified": classified,
         "skipped": skipped,
         "failed": failed,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

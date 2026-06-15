@@ -229,12 +229,12 @@ def test_list_documents_in_documents_scopes_to_ids(seeded_project, capsys):
     # convention shared with search/scan).
     list_documents.main([
         "--project", seeded_project["project"],
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert [d["id"] for d in out["documents"]] == [seeded_project["doc_a"]]
+    assert [d["id"] for d in out["documents"]] == [f"document:{seeded_project['doc_a']}"]
     assert out["total"] == 1
-    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["in_documents"] == [f"document:{seeded_project['doc_a']}"]
 
 
 def test_list_documents_unscoped_default_unchanged(seeded_project, capsys):
@@ -294,7 +294,7 @@ def test_list_documents_default_sort_is_id(seeded_project, capsys):
     list_documents.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
     assert [d["id"] for d in out["documents"]] == [
-        seeded_project["doc_a"], seeded_project["doc_b"],
+        f"document:{seeded_project['doc_a']}", f"document:{seeded_project['doc_b']}",
     ]
 
 
@@ -395,7 +395,7 @@ def test_list_documents_returning_projects_exact_fields(seeded_project, capsys):
     for d in out["documents"]:
         assert list(d.keys()) == ["document_id", "file_name", "title"]
     by_id = {d["document_id"]: d for d in out["documents"]}
-    assert by_id[seeded_project["doc_a"]]["file_name"] == "alpha.pdf"
+    assert by_id[f"document:{seeded_project['doc_a']}"]["file_name"] == "alpha.pdf"
 
 
 def test_list_documents_returning_document_id_aliases_id(seeded_project, capsys):
@@ -427,7 +427,7 @@ def test_list_documents_returning_can_pull_verbose_fields(seeded_project, capsys
     ])
     out = json.loads(capsys.readouterr().out)
     by_id = {d["document_id"]: d for d in out["documents"]}
-    assert by_id[seeded_project["doc_a"]]["chunk_count"] == 4
+    assert by_id[f"document:{seeded_project['doc_a']}"]["chunk_count"] == 4
 
 
 def test_list_documents_returning_unknown_field_errors(seeded_project, capsys):

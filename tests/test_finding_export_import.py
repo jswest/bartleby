@@ -20,7 +20,13 @@ from tests._skill_fixtures import (  # noqa: F401
     mock_embed,
     project_env,
     seeded_project,
+    unprefix,
 )
+
+
+def _bare(finding_id) -> int:
+    """Strip the ``finding:`` type tag from a save/read response id (#624)."""
+    return unprefix(finding_id)
 
 
 def _save_a_finding(seeded_project, tmp_path, capsys, *, with_page=False):
@@ -51,7 +57,7 @@ def _save_a_finding(seeded_project, tmp_path, capsys, *, with_page=False):
     finally:
         conn.close()
 
-    body = "# Finding\n\n" + " ".join(f"Claim[^{c}]." for c in cited)
+    body = "# Finding\n\n" + " ".join(f"Claim[^chunk:{c}]." for c in cited)
     body_file = tmp_path / "body.md"
     body_file.write_text(body, encoding="utf-8")
     save_finding.main([
@@ -67,9 +73,10 @@ def test_export_writes_front_matter_and_inert_citations(
     seeded_project, tmp_path, capsys
 ):
     saved = _save_a_finding(seeded_project, tmp_path, capsys, with_page=True)
+    fid = _bare(saved["finding_id"])
     out_path = tmp_path / "artifact.md"
     finding_cmd.export(
-        finding_id=saved["finding_id"],
+        finding_id=fid,
         project=seeded_project["project"],
         out=str(out_path),
     )
@@ -80,7 +87,7 @@ def test_export_writes_front_matter_and_inert_citations(
     assert parsed["title"] == "Air quality gaps"
     assert parsed["description"] == "Where PM2.5 monitoring is thin."
     assert parsed["provenance"]["source_corpus"] == seeded_project["project"]
-    assert parsed["provenance"]["source_finding_id"] == saved["finding_id"]
+    assert parsed["provenance"]["source_finding_id"] == fid
     assert parsed["provenance"]["exported_on"]
 
     # The live [^N] chunk marker is gone, replaced by an inert file · page marker.
@@ -90,9 +97,10 @@ def test_export_writes_front_matter_and_inert_citations(
 
 def test_round_trip_import_into_fresh_corpus(seeded_project, tmp_path, capsys):
     saved = _save_a_finding(seeded_project, tmp_path, capsys)
+    fid = _bare(saved["finding_id"])
     out_path = tmp_path / "artifact.md"
     finding_cmd.export(
-        finding_id=saved["finding_id"],
+        finding_id=fid,
         project=seeded_project["project"],
         out=str(out_path),
     )
@@ -115,7 +123,7 @@ def test_round_trip_import_into_fresh_corpus(seeded_project, tmp_path, capsys):
 
         # Provenance baked into the body text (no schema column for it).
         assert "Imported from" in body
-        assert f"orig. finding #{saved['finding_id']}" in body
+        assert f"orig. finding #{fid}" in body
         assert f"corpus `{seeded_project['project']}`" in body
 
         # Corpus citations are inert markers carrying file metadata, NOT live
@@ -148,7 +156,7 @@ def test_imported_finding_reads_back_like_a_local_one(
     saved = _save_a_finding(seeded_project, tmp_path, capsys)
     out_path = tmp_path / "artifact.md"
     finding_cmd.export(
-        finding_id=saved["finding_id"], project=seeded_project["project"],
+        finding_id=_bare(saved["finding_id"]), project=seeded_project["project"],
         out=str(out_path),
     )
     capsys.readouterr()
@@ -163,7 +171,7 @@ def test_imported_finding_reads_back_like_a_local_one(
     finally:
         conn.close()
 
-    read_finding.main(["--project", "fresh", "--finding-id", str(new_id)])
+    read_finding.main(["--project", "fresh", "--finding-id", f"finding:{new_id}"])
     read_out = json.loads(capsys.readouterr().out)
     assert read_out["title"] == "Air quality gaps"
     assert "Imported from" in read_out["body"]
@@ -190,7 +198,7 @@ def test_export_default_filename_slug(seeded_project, tmp_path, capsys, monkeypa
     """Omitting --out writes <slug>.md in the cwd, mirroring the web download."""
     saved = _save_a_finding(seeded_project, tmp_path, capsys)
     monkeypatch.chdir(tmp_path)
-    finding_cmd.export(finding_id=saved["finding_id"],
+    finding_cmd.export(finding_id=_bare(saved["finding_id"]),
                        project=seeded_project["project"], out=None)
     assert (tmp_path / "air-quality-gaps.md").is_file()
 
@@ -206,7 +214,7 @@ def test_finding_to_finding_citation_inlines_title(
         finding_chunk = conn.cursor().execute(
             "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
             "AND source_id = ? LIMIT 1",
-            (first["finding_id"],),
+            (_bare(first["finding_id"]),),
         ).fetchone()[0]
         doc_chunk = conn.cursor().execute(
             "SELECT chunk_id FROM chunks WHERE source_kind='document' "
@@ -218,7 +226,10 @@ def test_finding_to_finding_citation_inlines_title(
 
     # Second finding cites both a document chunk (required) and the first
     # finding's chunk.
-    body = f"Builds on prior work[^{finding_chunk}], grounded in evidence[^{doc_chunk}]."
+    body = (
+        f"Builds on prior work[^chunk:{finding_chunk}], "
+        f"grounded in evidence[^chunk:{doc_chunk}]."
+    )
     body_file = tmp_path / "second.md"
     body_file.write_text(body, encoding="utf-8")
     save_finding.main([
@@ -229,7 +240,7 @@ def test_finding_to_finding_citation_inlines_title(
     second = json.loads(capsys.readouterr().out)
 
     out_path = tmp_path / "second.artifact.md"
-    finding_cmd.export(finding_id=second["finding_id"],
+    finding_cmd.export(finding_id=_bare(second["finding_id"]),
                        project=seeded_project["project"], out=str(out_path))
     artifact = out_path.read_text(encoding="utf-8")
     assert "[corpus: finding · Air quality gaps]" in artifact

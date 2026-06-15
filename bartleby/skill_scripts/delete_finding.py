@@ -22,11 +22,11 @@ web finding view), not counted here.
 Output:
     {
       "status": "deleted",
-      "finding_id": int,
+      "finding_id": "finding:<id>",
       "title": str,
-      "removed_chunks": int,        # finding body chunks removed
+      "removed_chunks": int,        # finding body chunks removed (a count, bare)
       # this finding's OWN outgoing finding_citations rows removed — NOT the
-      # incoming citations the cascade severs in other findings.
+      # incoming citations the cascade severs in other findings (a count, bare).
       "removed_citations": int
     }
 
@@ -43,12 +43,16 @@ import argparse
 
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import assert_findings_accessible, positive_int
+from bartleby.skill_scripts._common import assert_findings_accessible
+from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("delete_finding", __doc__)
-    p.add_argument("--finding-id", type=positive_int, required=True, dest="finding_id")
+    p.add_argument(
+        "--finding-id", type=prefixed_int("finding"), required=True,
+        dest="finding_id", help="Type-tagged finding id, e.g. finding:204.",
+    )
     return p.parse_args(argv)
 
 
@@ -80,13 +84,13 @@ def work(*, conn, args, session_id) -> dict:
         "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
     )
 
-    return {
+    return format_output_ids({
         "status": "deleted",
         "finding_id": args.finding_id,
         "title": title,
         "removed_chunks": removed_chunks,
         "removed_citations": n_citations,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

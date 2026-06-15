@@ -94,7 +94,7 @@ def test_env_var_attributes_written_finding_to_pinned_session(  # noqa: F811
         conn.close()
 
     body_file = tmp_path / "finding.md"
-    body_file.write_text(f"A pinned-session claim[^{cited_id}].", encoding="utf-8")
+    body_file.write_text(f"A pinned-session claim[^chunk:{cited_id}].", encoding="utf-8")
     save_finding.main([
         "--project", project,
         "--title", "pinned write",
@@ -105,13 +105,15 @@ def test_env_var_attributes_written_finding_to_pinned_session(  # noqa: F811
 
     # The finding is attributed to the pinned session by name ...
     assert out["session_name"] == "web-writer"
+    assert out["finding_id"].startswith("finding:")
+    finding_id = int(out["finding_id"].split(":", 1)[1])
 
     conn = open_db(project)
     try:
         cur = conn.cursor()
         row_session_id = cur.execute(
             "SELECT session_id FROM findings WHERE finding_id = ?",
-            (out["finding_id"],),
+            (finding_id,),
         ).fetchone()[0]
         pinned_id = cur.execute(
             "SELECT session_id FROM sessions WHERE name = ?",

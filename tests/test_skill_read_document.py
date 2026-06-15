@@ -13,7 +13,7 @@ from tests._skill_fixtures import project_env, seeded_project  # noqa: F401
 def test_read_document_default_returns_both(seeded_project, capsys):
     read_document.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["document"]["file_name"] == "alpha.pdf"
@@ -25,7 +25,7 @@ def test_read_document_default_returns_both(seeded_project, capsys):
 def test_read_document_summary_only(seeded_project, capsys):
     read_document.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -36,7 +36,7 @@ def test_read_document_summary_only(seeded_project, capsys):
 def test_read_document_full_only(seeded_project, capsys):
     read_document.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--full",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -52,7 +52,7 @@ def test_read_document_too_large_without_force(seeded_project, capsys, monkeypat
     with pytest.raises(SystemExit) as exc:
         read_document.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]),
+            "--document-id", f"document:{seeded_project['doc_a']}",
             "--full",
         ])
     assert exc.value.code == 1
@@ -69,7 +69,7 @@ def test_read_document_force_bypasses_gate(seeded_project, capsys, monkeypatch):
     )
     read_document.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--full", "--force",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -79,7 +79,7 @@ def test_read_document_force_bypasses_gate(seeded_project, capsys, monkeypatch):
 def test_read_document_unknown_document(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_document.main([
-            "--project", seeded_project["project"], "--document-id", "999999",
+            "--project", seeded_project["project"], "--document-id", "document:999999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -91,7 +91,7 @@ def test_read_document_summary_null_when_undocumented(seeded_project, capsys):
     # with summary == null (not an error).
     read_document.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_b"]),
+        "--document-id", f"document:{seeded_project['doc_b']}",
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -106,7 +106,7 @@ def test_read_document_summary_and_full_mutually_exclusive(seeded_project, capsy
     with pytest.raises(SystemExit) as exc:
         read_document.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]),
+            "--document-id", f"document:{seeded_project['doc_a']}",
             "--summary", "--full",
         ])
     assert exc.value.code == 1

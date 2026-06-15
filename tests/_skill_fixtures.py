@@ -23,6 +23,11 @@ def _emb(seed: float = 0.0) -> list[float]:
     return [seed + 0.001 * j for j in range(EMBEDDING_DIM)]
 
 
+def unprefix(tagged: str) -> int:
+    """Strip a ``"<type>:<int>"`` output id back to its bare int (#624)."""
+    return int(tagged.split(":", 1)[1])
+
+
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
     """Autouse stub so finding/summary skill tests never reach the real BGE model.
@@ -92,7 +97,7 @@ def seed_finding_via_main(seeded_project, tmp_path, capsys, *, title,
 
     body_file = tmp_path / "seed.md"
     body_file.write_text(
-        f"# Seed\n\nClaim one[^{a}]. Claim two[^{b}].{body_suffix}",
+        f"# Seed\n\nClaim one[^chunk:{a}]. Claim two[^chunk:{b}].{body_suffix}",
         encoding="utf-8",
     )
     save_finding.main([

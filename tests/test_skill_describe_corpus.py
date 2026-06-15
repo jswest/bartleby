@@ -62,10 +62,10 @@ def test_describe_corpus_happy_path(seeded_project, capsys):
 
     # Largest first, by token_count.
     assert [d["id"] for d in out["largest_documents"]] == [
-        seeded_project["doc_a"], seeded_project["doc_b"],
+        f"document:{seeded_project['doc_a']}", f"document:{seeded_project['doc_b']}",
     ]
     assert out["largest_documents"][0] == {
-        "id": seeded_project["doc_a"], "file_name": "alpha.pdf",
+        "id": f"document:{seeded_project['doc_a']}", "file_name": "alpha.pdf",
         "title": "Alpha", "token_count": 1000,
     }
     assert out["largest_documents"][1]["title"] is None  # beta has no summary
@@ -147,7 +147,7 @@ def test_describe_corpus_enriched(seeded_project, capsys):
 def test_describe_corpus_top_n(seeded_project, capsys):
     out = _run(seeded_project["project"], capsys, extra=["--top-n", "1"])
     assert len(out["largest_documents"]) == 1
-    assert out["largest_documents"][0]["id"] == seeded_project["doc_a"]
+    assert out["largest_documents"][0]["id"] == f"document:{seeded_project['doc_a']}"
 
 
 def test_describe_corpus_chunk_length_controlled(project_env, capsys):
@@ -178,7 +178,7 @@ def test_describe_corpus_chunk_length_controlled(project_env, capsys):
 def test_describe_corpus_chunk_length_scopes_to_slice(seeded_project, capsys):
     # Scoped to beta alone (chunk lengths 26, 28): stats narrow to that document.
     out = _run(seeded_project["project"], capsys,
-               extra=["--in-documents", str(seeded_project["doc_b"])])
+               extra=["--in-documents", f"document:{seeded_project['doc_b']}"])
     assert out["chunk_length"] == {"median": 26, "p90": 28, "max": 28}
 
 
@@ -203,15 +203,15 @@ def test_describe_corpus_unfiltered_omits_filters(seeded_project, capsys):
 def test_describe_corpus_scoped_to_one_document(seeded_project, capsys):
     # Scope to alpha alone: every aggregate narrows to that single document.
     out = _run(seeded_project["project"], capsys,
-               extra=["--in-documents", str(seeded_project["doc_a"])])
+               extra=["--in-documents", f"document:{seeded_project['doc_a']}"])
     assert out["document_count"] == 1
     assert out["token_count"] == 1000
     assert out["chunk_count"] == 4
     assert {r["content_type"]: r["chunk_count"] for r in out["content_mix"]} == {"text": 4}
     assert out["summary_coverage"] == {"summarized": 1, "unsummarized": 0}
-    assert [d["id"] for d in out["largest_documents"]] == [seeded_project["doc_a"]]
+    assert [d["id"] for d in out["largest_documents"]] == [f"document:{seeded_project['doc_a']}"]
     assert out["authored_date"]["undated_document_count"] == 1  # alpha summary has no date
-    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["in_documents"] == [f"document:{seeded_project['doc_a']}"]
     assert out["filters"]["tags"] is None
     assert out["filters"]["excluded_null_dated"] == 0
 
@@ -297,7 +297,7 @@ def test_describe_corpus_scoped_content_mix_reaches_images(seeded_project, capsy
         conn.close()
 
     out = _run(project, capsys,
-               extra=["--in-documents", str(seeded_project["doc_b"])])
+               extra=["--in-documents", f"document:{seeded_project['doc_b']}"])
     assert {r["content_type"]: r["chunk_count"] for r in out["content_mix"]} == {
         None: 2, "image_ocr": 1, "image_description": 1,
     }
@@ -306,7 +306,7 @@ def test_describe_corpus_scoped_content_mix_reaches_images(seeded_project, capsy
 
 def test_describe_corpus_empty_slice_is_all_zeros_with_filters(seeded_project, capsys):
     out = _run(seeded_project["project"], capsys,
-               extra=["--in-documents", "999999"])
+               extra=["--in-documents", "document:999999"])
     assert out["document_count"] == 0
     assert out["chunk_count"] == 0
     assert out["token_count"] == 0
@@ -318,7 +318,7 @@ def test_describe_corpus_empty_slice_is_all_zeros_with_filters(seeded_project, c
         "dated_document_count": 0, "undated_document_count": 0,
     }
     # Still self-describing — the filter that emptied the slice is echoed.
-    assert out["filters"]["in_documents"] == [999999]
+    assert out["filters"]["in_documents"] == ["document:999999"]
 
 
 def test_describe_corpus_invalid_date_raises(seeded_project):

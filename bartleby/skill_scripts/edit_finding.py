@@ -2,31 +2,31 @@
 """edit_finding — update an existing finding's title, description, and/or body.
 
 The primary use case is fixing citation formatting on a finding written by a
-local model that produced ``[chunks 1, 2]`` instead of ``[^1][^2]``. The
-agent re-writes the body with proper markers and calls this script; the body
+local model that produced ``[chunks 1, 2]`` instead of ``[^chunk:1][^chunk:2]``.
+The agent re-writes the body with proper markers and calls this script; the body
 is re-chunked, re-embedded, and the ``finding_citations`` rows are rebuilt.
 
 At least one of ``--title``, ``--description``, or ``--body-file`` is required.
 When ``--body-file`` is provided, the new body must contain at least one
-``[^N]`` citation marker and every marker must reference a real chunk_id —
+``[^chunk:N]`` citation marker and every marker must reference a real chunk_id —
 same rules as ``save_finding``.
 
-Output mirrors ``save_finding`` (so the agent's echo-the-body contract still
-works after an edit):
+Output mirrors ``save_finding`` (every id type-tagged; the echo-the-body
+contract still works after an edit):
 
     {
-      "finding_id": int,
+      "finding_id": "finding:<id>",
       "session_id": int, "session_name": str,
       "model": str|null, "harness": str|null,
       "body": str,
-      "chunk_ids": [int, ...],
+      "chunk_ids": ["chunk:<id>", ...],
       "citations": [{...}, ...],
       "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...]
     }
 
 ``external_citations`` echo the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in
 the body — supplementary external attributions alongside (never replacing) the
-required ``[^N]`` chunk citations; no DB row, parsed from the body, ref opaque.
+required ``[^chunk:N]`` chunk citations; no DB row, parsed from the body, ref opaque.
 
 ``session_id`` / ``session_name`` (and ``model`` / ``harness``) describe the
 session that *owns* the finding (its original author), not the current
@@ -49,7 +49,6 @@ from bartleby.skill_scripts._common import (
     extract_external_citations,
     finding_chunk_and_citation_ids,
     load_finding_body,
-    positive_int,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
@@ -57,11 +56,15 @@ from bartleby.skill_scripts._common import (
     validated_replacement,
     write_finding_chunks,
 )
+from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("edit_finding", __doc__)
-    p.add_argument("--finding-id", type=positive_int, required=True, dest="finding_id")
+    p.add_argument(
+        "--finding-id", type=prefixed_int("finding"), required=True,
+        dest="finding_id", help="Type-tagged finding id, e.g. finding:204.",
+    )
     p.add_argument("--title", type=str, default=None)
     p.add_argument("--description", type=str, default=None)
     p.add_argument("--body-file", type=str, default=None, dest="body_file")
@@ -131,7 +134,7 @@ def work(*, conn, args, session_id) -> dict:
     else:
         chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 
-    return {
+    return format_output_ids({
         "finding_id": args.finding_id,
         "session_id": owning_session_id,
         **session_provenance(conn, owning_session_id),
@@ -139,7 +142,7 @@ def work(*, conn, args, session_id) -> dict:
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citation_ids),
         "external_citations": extract_external_citations(new_body),
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

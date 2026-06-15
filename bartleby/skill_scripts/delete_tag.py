@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
+from bartleby.skill_scripts._ids import format_output_ids
 from bartleby.skill_scripts._tags import require_tag_by_name
 
 
@@ -31,12 +32,12 @@ def work(*, conn, args, session_id) -> dict:
         "SELECT COUNT(*) FROM document_tags WHERE tag_id = ?", (tag.tag_id,),
     ).fetchone()[0]
     cur.execute("DELETE FROM tags WHERE tag_id = ?", (tag.tag_id,))
-    return {
+    return format_output_ids({
         "status": "deleted",
         "tag_id": tag.tag_id,
         "name": tag.name,
         "removed_assignments": n_assignments,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

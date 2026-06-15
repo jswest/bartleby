@@ -2,7 +2,7 @@
 """save_summary — write (or replace) the agent-authored summary for a document.
 
 Output:
-    {"summary_id": int, "document_id": int, "chunk_ids": [int, ...]}
+    {"summary_id": "summary:<id>", "document_id": "document:<id>", "chunk_ids": ["chunk:<id>", ...]}
 
 Title and description are required so summaries written by the agent show up
 in ``list_documents`` the same way ingest-time summaries do.
@@ -21,7 +21,8 @@ import argparse
 from bartleby.db.chunks import delete_chunks_for, insert_summary_chunks
 from bartleby.ingest.summarize import normalize_authored_date
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import embed_body_chunks, positive_int
+from bartleby.skill_scripts._common import embed_body_chunks
+from bartleby.skill_scripts._ids import format_id, format_output_ids, prefixed_int
 
 
 _AUTHOR_MODEL = "agent"
@@ -29,7 +30,10 @@ _AUTHOR_MODEL = "agent"
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("save_summary", __doc__)
-    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
+    p.add_argument(
+        "--document-id", type=prefixed_int("document"), required=True,
+        dest="document_id", help="Type-tagged document id, e.g. document:204.",
+    )
     p.add_argument("--title", type=str, required=True)
     p.add_argument("--description", type=str, required=True)
     p.add_argument("--text", type=str, required=True)
@@ -102,11 +106,12 @@ def work(*, conn, args, session_id) -> dict:
 
     chunk_ids = insert_summary_chunks(conn, summary_id, chunk_inputs)
 
-    return {
-        "summary_id": summary_id,
+    return format_output_ids({
+        # summary_id is a summary id (not in the field map): tag it explicitly.
+        "summary_id": format_id("summary", summary_id),
         "document_id": args.document_id,
         "chunk_ids": chunk_ids,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

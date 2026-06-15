@@ -42,7 +42,7 @@ def _other_session(conn, name: str = "author") -> int:
 def test_read_chunks_happy_path(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "document"
@@ -57,7 +57,7 @@ def test_read_chunks_happy_path(seeded_project, capsys):
 def test_read_chunks_pagination(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--offset", "1", "--limit", "2",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -70,7 +70,7 @@ def test_read_chunks_unknown_document(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", "999",
+            "--document-id", "document:999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -126,13 +126,13 @@ def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys)
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", str(chunk_id),
+            "--document-id", f"document:{chunk_id}",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "DOCUMENT_NOT_FOUND"
     assert out["hint"] == (
-        f"{chunk_id} is a chunk_id — did you mean --chunks {chunk_id}?"
+        f"chunk:{chunk_id} is a chunk_id — did you mean --chunks chunk:{chunk_id}?"
     )
 
 
@@ -144,13 +144,14 @@ def test_read_chunks_by_id_hints_when_missing_is_a_document_id(seeded_project, c
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(doc_id),
+        "--chunks", f"chunk:{doc_id}",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["missing"] == [doc_id]
+    assert out["missing"] == [f"chunk:{doc_id}"]
     assert out["chunks"] == []
     assert out["hints"] == {
-        str(doc_id): f"{doc_id} is a document_id — did you mean --document-id {doc_id}?"
+        f"chunk:{doc_id}":
+            f"chunk:{doc_id} is a document_id — did you mean --document-id document:{doc_id}?"
     }
 
 
@@ -159,11 +160,11 @@ def test_read_chunks_by_id_no_hint_for_valid_id(seeded_project, capsys):
     chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(chunk_id),
+        "--chunks", f"chunk:{chunk_id}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["missing"] == []
-    assert [c["chunk_id"] for c in out["chunks"]] == [chunk_id]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{chunk_id}"]
     assert "hints" not in out
 
 
@@ -201,7 +202,7 @@ def test_read_chunks_document_mode_includes_page_number(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
     pages = [c["page_number"] for c in out["chunks"]]
@@ -215,17 +216,17 @@ def test_read_chunks_by_id_returns_requested(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", ",".join(str(c) for c in target),
+        "--chunks", ",".join(f"chunk:{c}" for c in target),
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "chunks"
-    assert out["requested"] == target
+    assert out["requested"] == [f"chunk:{c}" for c in target]
     assert out["missing"] == []
     # Returned in requested order, with source metadata populated.
-    assert [c["chunk_id"] for c in out["chunks"]] == target
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{c}" for c in target]
     for c in out["chunks"]:
         assert c["source_kind"] == "document"
-        assert c["source_id"] == seeded_project["doc_a"]
+        assert c["source_id"] == f"document:{seeded_project['doc_a']}"
         assert c["source_name"] == "alpha.pdf"
         assert c["file_name"] == "alpha.pdf"
         assert c["page_number"] is None    # seeded headings aren't 'page N'
@@ -238,11 +239,11 @@ def test_read_chunks_by_id_reports_missing(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", ",".join(str(c) for c in target),
+        "--chunks", ",".join(f"chunk:{c}" for c in target),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["missing"] == [999999]
-    assert [c["chunk_id"] for c in out["chunks"]] == [chunk_ids[0]]
+    assert out["missing"] == ["chunk:999999"]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{chunk_ids[0]}"]
 
 
 def test_read_chunks_requires_document_or_chunks(seeded_project, capsys):
@@ -254,8 +255,8 @@ def test_read_chunks_document_and_chunks_mutually_exclusive(seeded_project, caps
     with pytest.raises(SystemExit):
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]),
-            "--chunks", "1,2,3",
+            "--document-id", f"document:{seeded_project['doc_a']}",
+            "--chunks", "chunk:1,chunk:2,chunk:3",
         ])
 
 
@@ -282,7 +283,7 @@ def test_read_chunks_preview_truncates_text(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--offset", "4", "--limit", "2",
         "--preview", "50",
     ])
@@ -299,7 +300,7 @@ def test_read_chunks_emits_text_length_without_preview(seeded_project, capsys):
     """text_length is always present and reflects the actual stored text length."""
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["preview"] is None
@@ -328,7 +329,7 @@ def test_read_chunks_preview_in_chunk_id_mode(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(target),
+        "--chunks", f"chunk:{target}",
         "--preview", "100",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -343,7 +344,7 @@ def test_read_chunks_preview_rejects_invalid(seeded_project, bad):
     with pytest.raises(SystemExit):
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]),
+            "--document-id", f"document:{seeded_project['doc_a']}",
             "--preview", bad,
         ])
 
@@ -365,9 +366,9 @@ def test_read_chunks_memory_off_drops_foreign_finding_chunk(seeded_project, caps
 
     start_session(project, memory_enabled=False)
 
-    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    read_chunks.main(["--project", project, "--chunks", f"chunk:{foreign}"])
     out = json.loads(capsys.readouterr().out)
-    assert out["missing"] == [foreign]
+    assert out["missing"] == [f"chunk:{foreign}"]
     assert out["chunks"] == []
     # The body text and finding title must not appear anywhere in the response.
     assert "confidential prior conclusion" not in json.dumps(out)
@@ -391,11 +392,11 @@ def test_read_chunks_memory_off_keeps_own_and_document_chunks(seeded_project, ca
 
     read_chunks.main([
         "--project", project,
-        "--chunks", f"{foreign},{own},{doc_chunk}",
+        "--chunks", f"chunk:{foreign},chunk:{own},chunk:{doc_chunk}",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["missing"] == [foreign]
-    assert [c["chunk_id"] for c in out["chunks"]] == [own, doc_chunk]
+    assert out["missing"] == [f"chunk:{foreign}"]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{own}", f"chunk:{doc_chunk}"]
     assert "foreign body" not in json.dumps(out)
 
 
@@ -410,10 +411,10 @@ def test_read_chunks_memory_on_returns_foreign_finding_chunk(seeded_project, cap
         conn.close()
     # No start_session → the default active session is memory-on.
 
-    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    read_chunks.main(["--project", project, "--chunks", f"chunk:{foreign}"])
     out = json.loads(capsys.readouterr().out)
     assert out["missing"] == []
-    assert [c["chunk_id"] for c in out["chunks"]] == [foreign]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{foreign}"]
     assert out["chunks"][0]["text"] == "visible body"
     assert out["chunks"][0]["source_kind"] == "finding"
 
@@ -431,7 +432,7 @@ def test_read_chunks_around_memory_off_foreign_finding_walled(seeded_project, ca
     start_session(project, memory_enabled=False)
 
     with pytest.raises(SystemExit) as exc:
-        read_chunks.main(["--project", project, "--around-chunk", str(foreign)])
+        read_chunks.main(["--project", project, "--around-chunk", f"chunk:{foreign}"])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "MEMORY_OFF"
@@ -466,10 +467,10 @@ def test_read_chunks_no_hint_for_walled_finding_chunk_colliding_with_document(
 
     start_session(project, memory_enabled=False)
 
-    read_chunks.main(["--project", project, "--chunks", str(foreign)])
+    read_chunks.main(["--project", project, "--chunks", f"chunk:{foreign}"])
     out = json.loads(capsys.readouterr().out)
     # The walled chunk is missing (no leak)...
-    assert out["missing"] == [foreign]
+    assert out["missing"] == [f"chunk:{foreign}"]
     assert out["chunks"] == []
     # ...and despite the document_id collision, no misleading hint fires.
     assert "hints" not in out
@@ -487,11 +488,11 @@ def test_read_chunks_around_memory_off_own_finding_allowed(seeded_project, capsy
     finally:
         conn.close()
 
-    read_chunks.main(["--project", project, "--around-chunk", str(own)])
+    read_chunks.main(["--project", project, "--around-chunk", f"chunk:{own}"])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "around"
-    assert out["target"]["chunk_id"] == own
-    assert [c["chunk_id"] for c in out["chunks"]] == [own]
+    assert out["target"]["chunk_id"] == f"chunk:{own}"
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{own}"]
 
 
 # --- around-chunk window mechanics (#409) --------------------------------
@@ -531,17 +532,17 @@ def test_read_chunks_around_interior_default_window(seeded_project, capsys):
     doc_id, chunk_ids = _wide_document(project, n=9)
     target = chunk_ids[4]  # chunk_index 4, comfortably interior for window 3
 
-    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    read_chunks.main(["--project", project, "--around-chunk", f"chunk:{target}"])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "around"
     assert out["window"] == 3  # default window
-    assert out["target"]["chunk_id"] == target
+    assert out["target"]["chunk_id"] == f"chunk:{target}"
     assert out["target"]["chunk_index"] == 4
     assert out["target"]["source_kind"] == "document"
-    assert out["target"]["source_id"] == doc_id
+    assert out["target"]["source_id"] == f"document:{doc_id}"
     assert out["target"]["source_name"] == "wide.pdf"
     # 3 each side + target, in chunk_index order.
-    assert [c["chunk_id"] for c in out["chunks"]] == chunk_ids[1:8]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{c}" for c in chunk_ids[1:8]]
     assert [c["chunk_index"] for c in out["chunks"]] == [1, 2, 3, 4, 5, 6, 7]
 
 
@@ -552,7 +553,7 @@ def test_read_chunks_around_explicit_window(seeded_project, capsys):
     target = chunk_ids[4]
 
     read_chunks.main([
-        "--project", project, "--around-chunk", str(target), "--window", "1",
+        "--project", project, "--around-chunk", f"chunk:{target}", "--window", "1",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["window"] == 1
@@ -566,11 +567,11 @@ def test_read_chunks_around_window_zero_returns_only_target(seeded_project, caps
     target = chunk_ids[4]
 
     read_chunks.main([
-        "--project", project, "--around-chunk", str(target), "--window", "0",
+        "--project", project, "--around-chunk", f"chunk:{target}", "--window", "0",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["window"] == 0
-    assert [c["chunk_id"] for c in out["chunks"]] == [target]
+    assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{target}"]
     assert [c["chunk_index"] for c in out["chunks"]] == [4]
 
 
@@ -580,11 +581,11 @@ def test_read_chunks_around_clamps_at_document_start(seeded_project, capsys):
     _doc_id, chunk_ids = _wide_document(project, n=9)
     target = chunk_ids[0]
 
-    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    read_chunks.main(["--project", project, "--around-chunk", f"chunk:{target}"])
     out = json.loads(capsys.readouterr().out)
     # No negative indexes; just the target and its 3 right neighbours.
     assert [c["chunk_index"] for c in out["chunks"]] == [0, 1, 2, 3]
-    assert out["chunks"][0]["chunk_id"] == target
+    assert out["chunks"][0]["chunk_id"] == f"chunk:{target}"
 
 
 def test_read_chunks_around_clamps_at_document_end(seeded_project, capsys):
@@ -593,11 +594,11 @@ def test_read_chunks_around_clamps_at_document_end(seeded_project, capsys):
     _doc_id, chunk_ids = _wide_document(project, n=9)
     target = chunk_ids[-1]  # chunk_index 8
 
-    read_chunks.main(["--project", project, "--around-chunk", str(target)])
+    read_chunks.main(["--project", project, "--around-chunk", f"chunk:{target}"])
     out = json.loads(capsys.readouterr().out)
     # No overrun past the last chunk; target and its 3 left neighbours only.
     assert [c["chunk_index"] for c in out["chunks"]] == [5, 6, 7, 8]
-    assert out["chunks"][-1]["chunk_id"] == target
+    assert out["chunks"][-1]["chunk_id"] == f"chunk:{target}"
 
 
 def test_read_chunks_around_unknown_chunk(seeded_project, capsys):
@@ -605,7 +606,7 @@ def test_read_chunks_around_unknown_chunk(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--around-chunk", "999999",
+            "--around-chunk", "chunk:999999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -623,7 +624,7 @@ def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, ba
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]), *bad,
+            "--document-id", f"document:{seeded_project['doc_a']}", *bad,
         ])
     assert exc.value.code == 1
     assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
@@ -635,7 +636,7 @@ def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, ba
 def test_read_chunks_document_mode_returning(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
         "--returning", "chunk_id,document_id,source_name",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -643,14 +644,14 @@ def test_read_chunks_document_mode_returning(seeded_project, capsys):
     assert out["chunks"]
     for c in out["chunks"]:
         assert list(c.keys()) == ["chunk_id", "document_id", "source_name"]
-        assert c["document_id"] == seeded_project["doc_a"]
+        assert c["document_id"] == f"document:{seeded_project['doc_a']}"
         assert c["source_name"] == "alpha.pdf"
 
 
 def test_read_chunks_document_default_projection_unchanged(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document-id", str(seeded_project["doc_a"]),
+        "--document-id", f"document:{seeded_project['doc_a']}",
     ])
     out = json.loads(capsys.readouterr().out)
     # Locator-light default row (no source_*/file_name/document_id leak).
@@ -664,13 +665,13 @@ def test_read_chunks_by_id_returning(seeded_project, capsys):
     chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(chunk_id),
+        "--chunks", f"chunk:{chunk_id}",
         "--returning", "chunk_id,document_id",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["missing"] == []  # envelope unchanged
     assert out["chunks"] == [
-        {"chunk_id": chunk_id, "document_id": seeded_project["doc_a"]},
+        {"chunk_id": f"chunk:{chunk_id}", "document_id": f"document:{seeded_project['doc_a']}"},
     ]
 
 
@@ -678,7 +679,7 @@ def test_read_chunks_by_id_default_projection_unchanged(seeded_project, capsys):
     chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[0]
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(chunk_id),
+        "--chunks", f"chunk:{chunk_id}",
     ])
     out = json.loads(capsys.readouterr().out)
     # Pre-#419 --chunks row: document_id is NOT in the default contract.
@@ -693,7 +694,7 @@ def test_read_chunks_around_returning(seeded_project, capsys):
     chunk_id = _doc_chunk_ids(seeded_project["project"], seeded_project["doc_a"])[1]
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--around-chunk", str(chunk_id), "--window", "1",
+        "--around-chunk", f"chunk:{chunk_id}", "--window", "1",
         "--returning", "chunk_id,document_id,file_name",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -701,7 +702,7 @@ def test_read_chunks_around_returning(seeded_project, capsys):
     assert out["chunks"]
     for c in out["chunks"]:
         assert list(c.keys()) == ["chunk_id", "document_id", "file_name"]
-        assert c["document_id"] == seeded_project["doc_a"]
+        assert c["document_id"] == f"document:{seeded_project['doc_a']}"
         assert c["file_name"] == "alpha.pdf"
 
 
@@ -709,7 +710,7 @@ def test_read_chunks_returning_unknown_field_errors(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", str(seeded_project["doc_a"]),
+            "--document-id", f"document:{seeded_project['doc_a']}",
             "--returning", "chunk_id,bogus",
         ])
     assert exc.value.code == 1
@@ -727,7 +728,7 @@ def test_read_chunks_returning_unknown_field_errors_on_zero_rows(
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document-id", "999999",
+            "--document-id", "document:999999",
             "--returning", "chunk_id,bogus",
         ])
     assert exc.value.code == 1

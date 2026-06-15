@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._ids import format_output_ids
 from bartleby.skill_scripts._tags import (
     find_tag_by_normalized_name, normalize_name, require_tag_by_name,
 )
@@ -50,12 +51,12 @@ def work(*, conn, args, session_id) -> dict:
     conn.cursor().execute(
         "UPDATE tags SET name = ? WHERE tag_id = ?", (new_name, tag.tag_id),
     )
-    return {
+    return format_output_ids({
         "status": "renamed",
         "tag_id": tag.tag_id,
         "old_name": tag.name,
         "new_name": new_name,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

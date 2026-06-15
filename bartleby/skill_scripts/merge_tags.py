@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._ids import format_output_ids
 from bartleby.skill_scripts._tags import require_tag_by_name
 
 
@@ -118,14 +119,14 @@ def work(*, conn, args, session_id) -> dict:
     )
     inserted = conn.changes()
     cur.execute("DELETE FROM tags WHERE tag_id = ?", (src.tag_id,))
-    return {
+    return format_output_ids({
         "status": "merged",
         "from": {"tag_id": src.tag_id, "name": src.name},
         "into": {"tag_id": dst.tag_id, "name": dst.name},
         "inserted": inserted,
         "already_present": moved_before - inserted,
         "value_collisions": collisions,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

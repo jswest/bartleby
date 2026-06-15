@@ -147,7 +147,7 @@ def test_concurrent_save_findings_serialize(seeded_project, tmp_path):
     argvs = []
     for i in range(n):
         bf = tmp_path / f"save_{i}.md"
-        bf.write_text(f"Concurrent claim {i}[^{cited}].", encoding="utf-8")
+        bf.write_text(f"Concurrent claim {i}[^chunk:{cited}].", encoding="utf-8")
         argvs.append([
             "--project", project,
             "--title", f"concurrent-{i}",
@@ -185,7 +185,8 @@ def _save_one(project, title, body_file) -> int:
         ])
     finally:
         sys.stdout = old
-    return json.loads(buf.getvalue())["finding_id"]
+    # finding_id is now a type-tagged "finding:<id>"; return the bare int.
+    return int(json.loads(buf.getvalue())["finding_id"].split(":", 1)[1])
 
 
 def test_concurrent_edit_findings_serialize(seeded_project, tmp_path):
@@ -202,16 +203,16 @@ def test_concurrent_edit_findings_serialize(seeded_project, tmp_path):
     # Seed N findings up front (sequentially) so each thread edits its own.
     for i in range(n):
         bf = tmp_path / f"seed_{i}.md"
-        bf.write_text(f"Seed body {i}[^{cited}].", encoding="utf-8")
+        bf.write_text(f"Seed body {i}[^chunk:{cited}].", encoding="utf-8")
         finding_ids.append(_save_one(project, f"edit-seed-{i}", bf))
 
     argvs = []
     for i in range(n):
         bf = tmp_path / f"edit_{i}.md"
-        bf.write_text(f"Edited body {i}[^{cited}].", encoding="utf-8")
+        bf.write_text(f"Edited body {i}[^chunk:{cited}].", encoding="utf-8")
         argvs.append([
             "--project", project,
-            "--finding-id", str(finding_ids[i]),
+            "--finding-id", f"finding:{finding_ids[i]}",
             "--body-file", str(bf),
         ])
 
@@ -226,6 +227,6 @@ def test_concurrent_edit_findings_serialize(seeded_project, tmp_path):
             body = cur.execute(
                 "SELECT body FROM findings WHERE finding_id = ?", (fid,)
             ).fetchone()[0]
-            assert body == f"Edited body {i}[^{cited}]."
+            assert body == f"Edited body {i}[^chunk:{cited}]."
     finally:
         conn.close()

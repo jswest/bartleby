@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._ids import format_output_ids
 from bartleby.skill_scripts._tags import (
     VALUE_TYPES,
     compile_pattern,
@@ -91,7 +92,7 @@ def work(*, conn, args, session_id) -> dict:
 
     conflict = find_similar_tag(conn, name=name, description=description)
     if conflict is not None:
-        return {
+        return format_output_ids({
             "status": "conflict",
             "similar_to": {
                 "tag_id": conflict.tag_id,
@@ -100,7 +101,7 @@ def work(*, conn, args, session_id) -> dict:
                 "similarity": conflict.similarity,
             },
             "proposed": {"name": name, "description": description},
-        }
+        })
 
     cur = conn.cursor()
     cur.execute(
@@ -109,13 +110,13 @@ def work(*, conn, args, session_id) -> dict:
         (name, description, value_type, pattern),
     )
     tag_id = conn.last_insert_rowid()
-    return {
+    return format_output_ids({
         "status": "created",
         "tag": {
             "tag_id": tag_id, "name": name, "description": description,
             "value_type": value_type, "pattern": pattern,
         },
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

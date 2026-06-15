@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""save_finding — persist a finding (markdown with inline `[^chunk_id]` citations).
+"""save_finding — persist a finding (markdown with inline `[^chunk:<id>]` citations).
 
 The body comes from ``--body-file`` (not ``--body``) because findings can be
 long markdown and shell-escaping them is a nightmare.
 
-Citations are derived from the body itself: every ``[^N]`` marker in the
-prose is a citation, where ``N`` is a chunk_id. The body is the single source
-of truth — there is no separate ``--citations`` argument.
+Citations are derived from the body itself: every ``[^chunk:N]`` marker in the
+prose is a citation, where ``N`` is a chunk_id you were handed this session. The
+body is the single source of truth — there is no separate ``--citations``
+argument. Untyped (``[N]`` / ``[^N]``) and wrong-type (``[^document:N]`` /
+``[^finding:N]``) markers are rejected.
 
-Output:
+Output (every id is type-tagged, e.g. ``"chunk:15837"``, ``"finding:204"``):
     {
-      "finding_id": int,
+      "finding_id": "finding:<id>",
       "session_id": int, "session_name": str,
       "model": str|null, "harness": str|null,
       "body": str,
-      "chunk_ids": [int, ...],
+      "chunk_ids": ["chunk:<id>", ...],
       "citations": [{
-        "chunk_id": int,
+        "chunk_id": "chunk:<id>",
         "source_kind": str, "source_name": str,
         "file_name": str|null,
         "page_number": int|null,
@@ -26,8 +28,8 @@ Output:
 
 ``external_citations`` echo the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in
 the body — supplementary external attributions that ride alongside (never
-replace) the required ``[^N]`` chunk citations. They carry no DB row; the body
-text is their source of truth. The ref is opaque (never fetched).
+replace) the required ``[^chunk:N]`` chunk citations. They carry no DB row; the
+body text is their source of truth. The ref is opaque (never fetched).
 
 ``body`` is the exact markdown that landed in ``findings.body``. The agent
 is expected to echo it verbatim back to the user — see SKILL.md for the
@@ -51,6 +53,7 @@ from bartleby.skill_scripts._common import (
     session_provenance,
     write_finding_chunks,
 )
+from bartleby.skill_scripts._ids import format_output_ids
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -87,7 +90,7 @@ def work(*, conn, args, session_id) -> dict:
     chunk_ids = write_finding_chunks(conn, finding_id, chunk_inputs)
     replace_finding_citations(conn, finding_id, citations)
 
-    return {
+    return format_output_ids({
         "finding_id": finding_id,
         "session_id": session_id,
         **session_provenance(conn, session_id),
@@ -95,7 +98,7 @@ def work(*, conn, args, session_id) -> dict:
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citations),
         "external_citations": extract_external_citations(body),
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

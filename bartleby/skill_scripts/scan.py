@@ -58,9 +58,9 @@ Output (compact by default):
         "include_nulls": bool, "excluded_null_dated": int
       },
       "matches": [{
-        "document_id": int,
+        "document_id": "document:<id>",
         "file_name": str,
-        "chunk_id": int,
+        "chunk_id": "chunk:<id>",
         "chunk_index": int,
         "page_number": int | null,
         "section_heading": str | null,
@@ -101,7 +101,7 @@ Count-by aggregate (``--count-by document``):
       "distinct_document_count": int,   # the headline
       "total_chunk_count": int,         # the old `total`
       "documents": [
-        {"document_id": int, "file_name": str, "chunk_count": int}, ...
+        {"document_id": "document:<id>", "file_name": str, "chunk_count": int}, ...
       ]              # default --sort document: chunk_count DESC, document_id;
                      # --sort date: authored_date oldest-first, undated last
     }
@@ -172,15 +172,15 @@ Extract capture table (``--extract '/regex/'``, repeatable):
 
         scan "Income reported" --extract '/reported:\\s*\\$(?P<amount>[\\d,]+)/'
         → columns: ["amount"],
-          rows: [{"chunk_id": 12, "document_id": 3, "file_name": "f1.txt",
-                  "amount": "120,000"}, ...]
+          rows: [{"chunk_id": "chunk:12", "document_id": "document:3",
+                  "file_name": "f1.txt", "amount": "120,000"}, ...]
 
     {
       "query": str, "match_mode": "phrase" | "terms",
       "offset": int, "limit": int, "total": int,
       "columns": [str, ...],   # the capture column names, in pattern order
       "rows": [
-        {"chunk_id": int, "document_id": int, "file_name": str,
+        {"chunk_id": "chunk:<id>", "document_id": "document:<id>", "file_name": str,
          "<col>": str | null, ...}, ...
       ]
     }
@@ -245,9 +245,10 @@ from collections import Counter
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
-    apply_preview, comma_int_list, nonneg_int, parse_capture_regex,
+    apply_preview, nonneg_int, parse_capture_regex,
     positive_int, project_row, text_qualified_fts, validate_returning,
 )
+from bartleby.skill_scripts._ids import format_output_ids, prefixed_int_list
 from bartleby.skill_scripts._tags import resolve_scope
 
 
@@ -289,10 +290,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--in-documents",
-        type=comma_int_list("document_id"),
+        type=prefixed_int_list("document"),
         default=None,
         dest="in_documents",
-        help="Comma-separated document_ids to restrict the scan to.",
+        help="Comma-separated type-tagged document ids to restrict the scan to "
+             "(e.g. document:12,document:34).",
     )
     p.add_argument(
         "--tag", action="append", default=None, dest="tags",
@@ -682,7 +684,10 @@ def work(*, conn, args, session_id) -> dict:
             # document-level echo; fold it into the same filters object (creating
             # one if the scope alone was unfiltered).
             env.setdefault("filters", {})["heading_like"] = args.heading_like
-        return env
+        # Type-tag every id field (document_id/chunk_id in matches, count-by docs,
+        # extract rows, and the filters echo's in_documents). The diagnosis block
+        # added later by _with_diagnosis carries only counts, no ids.
+        return format_output_ids(env)
 
     fts_query = _build_fts_query(args.query, match_mode)
     # Nothing can match: an empty token set, or a scope that resolved to no
