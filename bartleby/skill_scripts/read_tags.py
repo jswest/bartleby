@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
+from bartleby.skill_scripts._ids import format_output_ids
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -48,7 +49,7 @@ def work(*, conn, args, session_id) -> dict:
         f"{where}"
         "ORDER BY t.name"
     )
-    return {
+    return format_output_ids({
         "tags": [
             {
                 "tag_id": tid, "name": n, "description": d,
@@ -56,7 +57,7 @@ def work(*, conn, args, session_id) -> dict:
             }
             for tid, n, d, vt, p, dc in rows
         ],
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

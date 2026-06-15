@@ -114,7 +114,7 @@ def test_read_tags_reports_doc_count(seeded_project, capsys):
     read_tags.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
     assert out["tags"] == [{
-        "tag_id": tag_id, "name": "ch",
+        "tag_id": f"tag:{tag_id}", "name": "ch",
         "description": "Central Hudson rate-case filings", "doc_count": 1,
         "value_type": None, "pattern": None,
     }]
@@ -132,6 +132,8 @@ def test_add_tag_creates(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "created"
     assert out["tag"]["name"] == "ch"
+    # The emitted id is type-tagged (#624), never a bare int.
+    assert out["tag"]["tag_id"].startswith("tag:")
 
 
 def test_add_tag_detects_normalized_name_conflict(seeded_project, capsys):
@@ -150,6 +152,8 @@ def test_add_tag_detects_normalized_name_conflict(seeded_project, capsys):
     assert out["status"] == "conflict"
     assert out["similar_to"]["name"] == "NYSEG"
     assert out["similar_to"]["similarity"] == 1.0
+    # The conflicting tag's id is type-tagged too (#624).
+    assert out["similar_to"]["tag_id"].startswith("tag:")
 
 
 def test_add_tag_detects_similar_description(seeded_project, capsys):
@@ -218,6 +222,7 @@ def test_delete_tag_cascades_assignments(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "deleted"
     assert out["removed_assignments"] == 1
+    assert out["tag_id"] == f"tag:{tag_id}"  # type-tagged id (#624)
 
 
 def test_delete_tag_unknown_tag(seeded_project, capsys):
@@ -254,7 +259,7 @@ def test_rename_tag_renames_and_preserves_assignment(seeded_project, capsys):
     assert out.pop("run")["session_id"]  # every result echoes the run (#547)
     assert out == {
         "status": "renamed",
-        "tag_id": tag_id,
+        "tag_id": f"tag:{tag_id}",
         "old_name": "ch",
         "new_name": "central-hudson",
     }
@@ -390,6 +395,9 @@ def test_merge_tags_moves_assignments_and_deletes_source(seeded_project, capsys)
     assert out["status"] == "merged"
     assert out["from"]["name"] == "a"
     assert out["into"]["name"] == "b"
+    # Both endpoints' ids are type-tagged (#624).
+    assert out["from"]["tag_id"] == f"tag:{a_id}"
+    assert out["into"]["tag_id"] == f"tag:{b_id}"
     # Partial overlap: doc_a is new on b, doc_b already on b.
     assert out["inserted"] == 1
     assert out["already_present"] == 1
@@ -1286,7 +1294,8 @@ def test_merge_value_tags_keeps_target_reports_dropped(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
 
     assert out["value_collisions"] == [
-        {"document_id": seeded_project["doc_a"], "kept": "100", "dropped": "999"},
+        {"document_id": f"document:{seeded_project['doc_a']}",
+         "kept": "100", "dropped": "999"},
     ]
     # Target kept its value on the overlap doc.
     assert _doc_value(

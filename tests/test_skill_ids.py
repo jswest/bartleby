@@ -25,6 +25,7 @@ from tests._skill_fixtures import (  # noqa: F401
     mock_embed,
     project_env,
     seeded_project,
+    unprefix,
 )
 
 
@@ -200,7 +201,7 @@ def test_chunk_marker_accepted_and_stored(seeded_project, tmp_path, capsys):
     assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{cid}"]
 
     # Storage stays integer: the finding_citations row is a bare int.
-    finding_id = int(out["finding_id"].split(":")[1])
+    finding_id = unprefix(out["finding_id"])
     conn = open_db(seeded_project["project"])
     try:
         stored = [r[0] for r in conn.cursor().execute(
@@ -238,6 +239,19 @@ def test_finding_typed_marker_rejected(seeded_project, tmp_path, capsys):
               f"Good[^chunk:{cid}]. Bad[^finding:1].")
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "WRONG_CITATION_TYPE"
+
+
+def test_nondigit_chunk_ref_rejected(seeded_project, tmp_path, capsys):
+    # A [^chunk:<ref>] whose ref isn't all-digits (e.g. [^chunk:9z]) matches the
+    # marker grammar but never extracts (extract_citations needs \d+) — it would
+    # be silently dropped. It must be rejected loudly, even alongside a good one.
+    (cid,) = _cited_ids(seeded_project, 1)
+    with pytest.raises(SystemExit):
+        _save(seeded_project, tmp_path,
+              f"Good[^chunk:{cid}]. Bad[^chunk:9z].")
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "MALFORMED_CITATION"
+    assert any("9z" in m for m in out["malformed_markers"])
 
 
 def test_external_markers_still_ride_alongside_chunk(seeded_project, tmp_path, capsys):

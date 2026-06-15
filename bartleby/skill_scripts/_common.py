@@ -136,6 +136,35 @@ def reject_wrong_typed_citations(body: str) -> None:
     )
 
 
+def reject_malformed_internal_citations(body: str) -> None:
+    """Raise ``MALFORMED_CITATION`` for a ``[^chunk:<ref>]`` whose ref isn't all-digits.
+
+    A marker like ``[^chunk:42abc]`` carries the internal ``chunk`` scheme, so it
+    slips every other guard: it's scrubbed by :func:`reject_malformed_citations`
+    (matches the ``[^<scheme>:<ref>]`` grammar), skipped by
+    :func:`reject_wrong_typed_citations` (``chunk`` isn't a rejected scheme), and
+    skipped by :func:`reject_malformed_external_citations` (``chunk`` is the
+    internal scheme, excluded there). But :func:`extract_citations` requires
+    ``\\d+``, so a non-digit ref never extracts — the citation is *silently
+    dropped*, exactly the loss #624 exists to kill. Refuse loudly so the agent
+    fixes the ref before persisting.
+    """
+    bad = [
+        m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
+        if m.group(1).lower() == _INTERNAL_SCHEME and not m.group(2).strip().isdigit()
+    ]
+    if not bad:
+        return
+    bad = list(dict.fromkeys(bad))
+    raise SkillError(
+        "MALFORMED_CITATION",
+        f"Found {len(bad)} malformed chunk citation marker(s): "
+        f"{', '.join(bad)}. A chunk citation must be [^chunk:<int>] "
+        "(e.g. [^chunk:4192]) — the ref must be a bare integer chunk_id.",
+        malformed_markers=bad,
+    )
+
+
 def reject_malformed_external_citations(body: str) -> None:
     """Raise ``MALFORMED_EXTERNAL_CITATION`` for an ill-formed external marker.
 
@@ -350,7 +379,8 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
 
     The single read+validate path shared by ``save_finding``, ``edit_finding``,
     and ``merge_findings``: existence (``BODY_FILE_NOT_FOUND``), non-empty
-    (``EMPTY_BODY``), no untyped ``[N]`` / ``[^N]`` markers (``MALFORMED_CITATION``),
+    (``EMPTY_BODY``), no untyped ``[N]`` / ``[^N]`` markers and no non-integer
+    ``[^chunk:<ref>]`` ref (``MALFORMED_CITATION``),
     no ``[^document:N]`` / ``[^finding:N]`` wrong-type markers
     (``WRONG_CITATION_TYPE``), every external ``[^url:…]``/``[^doc:…]`` marker
     well-formed (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^chunk:N]`` chunk
@@ -369,6 +399,7 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
     reject_malformed_citations(body)
+    reject_malformed_internal_citations(body)
     reject_wrong_typed_citations(body)
     reject_malformed_external_citations(body)
     citations = extract_citations(body)
