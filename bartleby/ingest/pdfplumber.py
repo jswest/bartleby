@@ -307,8 +307,8 @@ def _vector_figure_bboxes(page, tol: float = _VECTOR_MERGE_TOL,
         )
         if is_table:
             continue
-        b = g.bounds   # (minx, miny, maxx, maxy) = (x0, top, x1, bottom)
-        results.append((b[0], b[1], b[2], b[3]))
+        # shapely bounds (minx, miny, maxx, maxy) maps directly to (x0, top, x1, bottom)
+        results.append(g.bounds)
 
     return results
 
