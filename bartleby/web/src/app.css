@@ -647,3 +647,190 @@ input[type="number"] {
 }
 /* Entity rows render as cards by composing the shared `.surface` primitive in
    the markup (class="entity surface"); the box styling lives there, not here. */
+
+/* =========================================================================
+   R4 · Finding-detail ledger treatment (#593)
+   Owns ONLY the finding-detail (.ledger) selectors. Builds on the R1
+   foundation (Doto display / Iosevka chrome / Source Serif prose, square
+   corners, amber + danger tokens) — adds nothing to :root.
+
+   Three moves:
+     1. Doto drop-cap opening the body, with TIGHT spacing around it.
+     2. Iosevka Term hed (.ledger-hed) + dek (.ledger-dek), replacing the
+        serif-italic dek.
+     3. A two-column ledger: ~62–66ch prose measure + a right-hand gutter of
+        margin-note citations. Inline daggers (†/‡ + ordinal) in the prose tie
+        back to matching gutter notes. Resolved = amber "source"; missing =
+        danger-toned "no longer available".
+
+   Citation markup (stable for R3/#592 to splice a pixel icon into):
+     inline   <sup class="cite-ref cite-ref--source|--gone" data-note="N">†N</sup>
+     gutter   <div class="margin-note margin-note--source|--gone" data-note="N">
+                <p class="margin-note__head"><span class="margin-note__dagger">†N</span> source</p>
+                <… class="margin-note__body">label</…>
+              </div>
+   The dagger glyph + ordinal is the tie-back; data-note pairs them for JS.
+   ========================================================================= */
+
+/* The ledger needs room for prose + gutter, so widen its report column and
+   let the sticky viewer take what's left. Scoped to the ledger so the
+   document-detail split (which shares .split) is untouched. */
+.split:has(.ledger) {
+  grid-template-columns: minmax(0, 54rem) minmax(0, 1fr);
+}
+
+/* --- Hed + dek: Iosevka chrome, not serif --- */
+.ledger-hed {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ledger-dek {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: var(--text-base);
+  /* lining figures: this is chrome, not running prose — no oldstyle. */
+  font-feature-settings: "lnum" 1;
+  color: var(--color-text-soft);
+  margin-bottom: var(--space-lg);
+}
+/* The shared `.split .desc` rule italicises + serif-spaces the dek; the ledger
+   overrides that to plain Iosevka. (Equal-ish specificity — pin it here.) */
+.split .ledger-dek {
+  font-style: normal;
+}
+
+/* --- Ledger column: prose (capped at a readable measure) + note gutter --- */
+.ledger-column {
+  display: grid;
+  /* ~62–66 characters at the body serif size, then the margin-note gutter. */
+  grid-template-columns: minmax(0, 36rem) minmax(0, 14rem);
+  gap: var(--space-xl);
+  align-items: start;
+  margin: var(--space-xl) 0;
+}
+/* The body already carries `.body` from the shared split rules; the ledger
+   column owns its own margins, so neutralise the shared `.split .body` block
+   margin to avoid doubling. */
+.split .ledger-column .body {
+  margin: 0;
+}
+
+/* --- Doto drop-cap, tight --- *
+   First letter of the first body paragraph, set in the display face. Floated
+   so the prose wraps around it; tight margins per the brief ("needs less space
+   around it"). Honours the display floor implicitly — a drop-cap is large. */
+.drop-cap-body > p:first-of-type::first-letter {
+  font-family: var(--font-display);
+  font-weight: 500;
+  float: left;
+  /* ~3 lines tall; line-height 0.8 + small top nudge seats it on the baseline
+     grid without a tall gap above. */
+  font-size: 3.1em;
+  line-height: 0.78;
+  margin: 0.02em 0.06em 0 0;
+  color: var(--color-text);
+}
+
+/* --- Margin-note citation gutter --- */
+.cite-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  /* Sits beside the prose; on the dark-ledger paper it reads as a quiet rail. */
+  border-left: 1px solid var(--color-rule);
+  padding-left: var(--space-lg);
+}
+.margin-note {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+.margin-note__head {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-weight: 500;
+}
+.margin-note__dagger {
+  font-weight: 700;
+}
+.margin-note__body {
+  margin: var(--space-3xs) 0 0;
+  /* font-size inherits --text-2xs from .margin-note */
+  font-feature-settings: "lnum" 1;
+  word-break: break-word;
+}
+.margin-note__body--doc {
+  font-style: italic;
+  color: var(--color-text-soft);
+}
+/* The resolved-source note links to the chunk; a bare button styled as text. */
+.margin-note__link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-token-text); /* amber-as-text, tuned for paper */
+}
+.margin-note__link:hover,
+.margin-note__link.active {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Resolved = amber "source". */
+.margin-note--source .margin-note__head {
+  color: var(--color-token-text);
+}
+/* Missing = danger tone. */
+.margin-note--gone .margin-note__head {
+  color: var(--color-danger-text);
+}
+.margin-note--gone .margin-note__body {
+  color: var(--color-danger-text);
+  font-style: italic;
+}
+
+/* --- Inline dagger anchors in the prose --- */
+.cite-ref {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 0.7em;
+  cursor: pointer;
+  /* sit snug after the word it annotates */
+  padding-left: 0.05em;
+}
+.cite-ref--source {
+  color: var(--color-token-text);
+}
+.cite-ref--gone {
+  color: var(--color-danger-text);
+}
+.cite-ref:hover {
+  text-decoration: underline;
+}
+
+/* --- Narrow screens: the gutter can't survive, so fold notes below the prose
+   as a stacked list. Margin notes degrade to end-notes; the dagger ordinals
+   still tie inline marker → note. --- */
+@media (max-width: 56rem) {
+  /* Stack the prose-over-viewer split (this is the ledger's own override of the
+     shared .split grid, so collapsing it here is in-scope for R4). */
+  .split:has(.ledger) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ledger-column {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cite-notes {
+    /* already column-stacked; only swap the rail from left edge to top */
+    border-left: 0;
+    border-top: 1px solid var(--color-rule);
+    padding-left: 0;
+    padding-top: var(--space-lg);
+    margin-top: var(--space-md);
+  }
+}
