@@ -179,6 +179,7 @@
      (--width-content); it's a grid of panels, not a reading column. */
   .home {
     max-width: 52rem;
+    margin-inline: auto;
   }
   h1.display {
     font-family: var(--font-display);

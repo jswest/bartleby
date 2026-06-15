@@ -21,6 +21,7 @@
   }
 </script>
 
+<div class="search">
 <h1>Search</h1>
 
 <SearchForm {params} availableTags={available.tags} />
@@ -85,10 +86,14 @@
     {/if}
   {/if}
 </div>
+</div>
 
 <style>
-  .results {
+  .search {
     max-width: var(--width-content);
+    margin-inline: auto;
+  }
+  .results {
     transition: opacity 0.15s;
   }
   .results.dim {
