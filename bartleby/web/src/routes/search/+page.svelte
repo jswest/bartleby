@@ -6,20 +6,16 @@
   import Pagination from "$lib/components/Pagination.svelte";
   import WaitingIndicator from "$lib/components/WaitingIndicator.svelte";
   import { pluralize } from "$lib/format.js";
+  import { isSearchNavigation } from "$lib/navigation.js";
 
   export let data;
 
   $: ({ params, available, result, error } = data);
-  // Show "Searching…" only when navigating TO /search with a real query —
-  // i.e. a genuine search/scan submission. Clicking a result or pressing Back
-  // also triggers $navigating while on this page, but those go elsewhere
-  // (chunks, documents, …) and are handled by the global layout indicator.
-  // Narrowing here prevents "Searching…" appearing for non-search navigations
-  // and avoids two simultaneous indicators.
-  $: busy =
-    !!$navigating &&
-    $navigating.to?.url?.pathname?.startsWith("/search") &&
-    !!$navigating.to?.url?.searchParams?.get("q");
+  // Show "Searching…" only for a genuine search/scan submission. Clicking a
+  // result or pressing Back also triggers $navigating while on this page, but
+  // those go elsewhere and are owned by the global layout "Loading…" indicator.
+  // The shared isSearchNavigation predicate keeps the two in lockstep.
+  $: busy = isSearchNavigation($navigating);
 
   // Preserve the current query while only moving the scan offset.
   function scanHref(offset) {

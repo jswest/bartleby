@@ -35,6 +35,7 @@
   } from "$lib/icons.js";
   import StatusBanner from "$lib/components/StatusBanner.svelte";
   import WaitingIndicator from "$lib/components/WaitingIndicator.svelte";
+  import { isSearchNavigation } from "$lib/navigation.js";
   export let data;
 
   // A nav link is "active" if the current path matches exactly OR is a child
@@ -50,19 +51,12 @@
   $: isActive = (href) =>
     href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
 
-  // Show a global "Loading…" indicator for any navigation that is NOT a search
-  // submission. A search submission navigates TO /search with a non-empty ?q=
-  // param — the search page's own "Searching…" banner covers that case with a
-  // richer embedding-model hint. Every other in-flight navigation (clicking a
-  // result, pressing Back, moving to /findings, etc.) gets the global banner.
-  //
-  // We check $navigating.to so the layout never shows "Loading…" during a
-  // search — preventing two simultaneous indicators and wrong copy.
-  $: isSearchNavigation =
-    !!$navigating &&
-    $navigating.to?.url?.pathname?.startsWith("/search") &&
-    !!$navigating.to?.url?.searchParams?.get("q");
-  $: loading = !!$navigating && !isSearchNavigation;
+  // Show a global "Loading…" indicator for any in-flight navigation that is NOT
+  // a search submission — clicking a result, pressing Back, moving to /findings,
+  // etc. A real search is owned by the search page's richer "Searching…" banner;
+  // isSearchNavigation (shared with that page) is the single source of truth for
+  // the distinction, so the two indicators never both fire or show wrong copy.
+  $: loading = !!$navigating && !isSearchNavigation($navigating);
 </script>
 
 <header>
@@ -233,6 +227,11 @@
     main {
       /* Taller offset: two-line header is ~3rem taller at mobile. */
       padding-top: 6.5rem;
+    }
+    .global-loading {
+      /* Clear the taller two-line mobile header (matches main's offset above);
+         otherwise the fixed banner overlaps the header on phones. */
+      top: 6rem;
     }
   }
 </style>
