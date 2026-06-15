@@ -1,6 +1,6 @@
-"""Drift gate for the vendored, drawer-pressed skills (`ship`, `ultraship`).
+"""Drift gate for the vendored, drawer-pressed `ship` skill.
 
-These two skill dirs under `.claude/skills/` are *pressed* from a local skill
+The `ship` skill dir under `.claude/skills/` is *pressed* from a local skill
 drawer by `signet`, not hand-authored here. This test fails if the checked-in
 copy diverges from the drawer — so a hand-edit in the repo (or a drawer that
 advanced without a re-press) is caught at the normal `uv run pytest` gate.
@@ -27,7 +27,7 @@ IN_SYNC = 0
 DRIFT = 1
 NO_DRAWER = 2
 
-PRESSED_SKILLS = ["ship", "ultraship"]
+PRESSED_SKILLS = ["ship"]
 
 
 @pytest.mark.parametrize("skill", PRESSED_SKILLS)
