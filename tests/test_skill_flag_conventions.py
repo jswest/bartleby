@@ -37,11 +37,11 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
 from bartleby import skill_scripts
 from bartleby.commands.skill import SCRIPTS
 from bartleby.skill_scripts._common import nonneg_int, positive_int
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---- parser introspection -------------------------------------------------

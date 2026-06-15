@@ -261,7 +261,7 @@ def _read_by_chunk_ids(
             )})
 
     # Cross-namespace hint: a missing chunk_id that exists as a document_id is
-    # very likely a --document-id id passed to --chunks. Surface a per-id hint so a
+    # very likely a document id passed to --chunks. Surface a per-id hint so a
     # silently-wrong-namespace lookup gets caught before it becomes a citation.
     # Memory-walled foreign finding chunks also land in ``missing``, but their
     # ids ARE chunk ids (chunk and document ids overlap freely), so a walled id
