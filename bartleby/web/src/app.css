@@ -38,12 +38,11 @@
   --text-display-floor: 1.25rem;
 
   /* Color — brand. Sage / mint / amber are the constant accents across both
-     grounds; --color-glow is the amber halo behind the wordmark on the shell. */
+     grounds. */
   --color-off: #698879;        /* sage   */
   --color-off-light: #dbfaeb;  /* mint   */
   --color-token: #ffecb9;      /* amber, pale fill */
   --color-token-dark: #ffbd08; /* amber, accent / glow */
-  --color-glow: #ffbd08;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
 
