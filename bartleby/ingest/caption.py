@@ -31,6 +31,7 @@ def _analyze_image(
     *,
     vision_provider: Provider,
     vision_model: str,
+    vision_temperature: float,
 ) -> image_pipeline.ImageAnalysis:
     """Run the §7 image pipeline (Tesseract → VLM) on one recorded image row.
 
@@ -45,7 +46,10 @@ def _analyze_image(
         width=pending.width,
         height=pending.height,
     )
-    return image_pipeline.analyze(vision_provider, prepared, model=vision_model)
+    return image_pipeline.analyze(
+        vision_provider, prepared,
+        model=vision_model, temperature=vision_temperature,
+    )
 
 def _caption_from_analysis(
     pending: PendingImage,
@@ -71,6 +75,7 @@ def _caption_all(
     *,
     vision_provider: Provider | None,
     vision_model: str | None,
+    vision_temperature: float,
     vision_enabled: bool,
     caption_workers: int,
     timings: bool,
@@ -155,6 +160,7 @@ def _caption_all(
             phase.lane(threading.get_ident(), owner[image_id].file_name, "captioning")
         return _analyze_image(
             pi, vision_provider=vision_provider, vision_model=vision_model,
+            vision_temperature=vision_temperature,
         )
 
     if caption_workers <= 1:

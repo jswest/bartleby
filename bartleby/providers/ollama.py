@@ -59,6 +59,7 @@ class OllamaProvider:
         image_bytes: bytes,
         *,
         model: str,
+        temperature: float,
         media_type: str = "image/jpeg",
     ) -> VlmDescription:
         # Ollama's chat API takes raw image bytes (or paths) via `images=`.
@@ -70,6 +71,7 @@ class OllamaProvider:
                 "images": [image_bytes],
             }],
             format=VlmDescription.model_json_schema(),
+            options={"temperature": temperature},
         )
         return _validate(response.message.content, VlmDescription)
 

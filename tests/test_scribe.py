@@ -110,12 +110,14 @@ class _StubVisionProvider:
             description="A test image.", notes="",
         )
         self.calls = 0
+        self.temperatures: list[float] = []
 
     def summarize(self, *a, **k):  # protocol completeness
         raise NotImplementedError
 
-    def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+    def analyze_image(self, image_bytes, *, model, temperature, media_type="image/jpeg"):
         self.calls += 1
+        self.temperatures.append(temperature)
         return self.description
 
 
@@ -658,6 +660,47 @@ def test_scribe_captions_many_images_concurrently_in_one_run(
         conn.close()
 
 
+def test_scribe_threads_configured_vision_temperature_to_provider(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#223: an explicit ``vision_temperature`` is resolved and handed to the VLM,
+    independent of the summarize ``temperature``."""
+    config = _vision_pdf_config()
+    config["temperature"] = 0.0
+    config["vision_temperature"] = 0.7
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes(), text="Body of the document. " * 12)
+    scribe.main(project="test_proj", files=[str(pdf)])
+
+    assert vision.temperatures == [0.7]
+
+
+def test_scribe_vision_temperature_defaults_to_summarize_temperature(
+    isolated_project, tmp_path, mock_embed, monkeypatch
+):
+    """#223: with no ``vision_temperature`` set, captioning inherits the summarize
+    ``temperature`` so an unconfigured corpus keeps one knob."""
+    config = _vision_pdf_config()
+    config["temperature"] = 0.3  # no vision_temperature → falls back to this
+    monkeypatch.setattr("bartleby.commands.scribe.load_config", lambda: config)
+    vision = _StubVisionProvider()
+    monkeypatch.setattr(
+        "bartleby.ingest.resolve.get_provider", lambda name, **k: vision,
+    )
+
+    pdf = tmp_path / "doc.pdf"
+    _pdf_with_image(pdf, _png_bytes(), text="Body of the document. " * 12)
+    scribe.main(project="test_proj", files=[str(pdf)])
+
+    assert vision.temperatures == [0.3]
+
+
 def test_scribe_dedupes_shared_image_within_one_run(
     isolated_project, tmp_path, mock_embed, monkeypatch
 ):
@@ -715,7 +758,7 @@ def test_scribe_one_caption_failure_does_not_block_the_rest(
         def summarize(self, *a, **k):  # protocol completeness
             raise NotImplementedError
 
-        def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+        def analyze_image(self, image_bytes, *, model, temperature, media_type="image/jpeg"):
             # Lock so the "first call fails" rule is deterministic under the pool.
             with self._lock:
                 self.calls += 1
@@ -1357,6 +1400,7 @@ def test_caption_all_progress_callback_fires_per_image(
             writer,
             [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_temperature=0.0,
             vision_enabled=True, caption_workers=1, timings=False,
             phase=phase,
         )
@@ -1394,6 +1438,7 @@ def test_caption_all_zero_work_reveals_a_zero_total(
             writer,
             [parse.DocUnit(document_id, "doc.txt", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_temperature=0.0,
             vision_enabled=True, caption_workers=1, timings=False,
             phase=phase,
         )
@@ -1433,6 +1478,7 @@ def test_caption_all_lane_callback_reports_owning_document(
             writer,
             [parse.DocUnit(document_id, "img.pdf", "h")],
             vision_provider=_StubVisionProvider(), vision_model="stub-vl:1",
+            vision_temperature=0.0,
             vision_enabled=True, caption_workers=1, timings=False,
             phase=phase,
         )
@@ -2220,7 +2266,7 @@ class _FlakyVisionProvider:
     def summarize(self, *a, **k):  # protocol completeness
         raise NotImplementedError
 
-    def analyze_image(self, image_bytes, *, model, media_type="image/jpeg"):
+    def analyze_image(self, image_bytes, *, model, temperature, media_type="image/jpeg"):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("VLM unavailable")

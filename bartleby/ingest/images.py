@@ -121,6 +121,7 @@ def analyze(
     prepared: PreparedImage,
     *,
     model: str,
+    temperature: float,
 ) -> ImageAnalysis:
     """Decide text-image vs scene-image and produce the merged analysis.
 
@@ -151,7 +152,8 @@ def analyze(
             notes="",
         )
     vlm = provider.analyze_image(
-        prepared.jpeg_bytes, model=model, media_type="image/jpeg",
+        prepared.jpeg_bytes, model=model, temperature=temperature,
+        media_type="image/jpeg",
     )
     return ImageAnalysis(
         kind="scene",

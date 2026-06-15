@@ -167,12 +167,14 @@ class AnthropicProvider:
         image_bytes: bytes,
         *,
         model: str,
+        temperature: float,
         media_type: str = "image/jpeg",
     ) -> VlmDescription:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-        response = self._client.messages.create(
+        kwargs: dict = dict(
             model=model,
             max_tokens=2048,
+            temperature=temperature,
             messages=[{
                 "role": "user",
                 "content": [
@@ -194,6 +196,12 @@ class AnthropicProvider:
             }],
             tool_choice={"type": "tool", "name": _IMAGE_TOOL},
         )
+        # Temperature-rejecting vision models (Opus 4.7+, Fable 5, future) 400 on
+        # temperature just like the summarizer path — drop it wherever it would 400.
+        if _drops_temperature(model):
+            _warn_dropped_temperature(temperature, model)
+            del kwargs["temperature"]
+        response = self._client.messages.create(**kwargs)
         return _extract_tool_input(response, _IMAGE_TOOL, VlmDescription)
 
 
