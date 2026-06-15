@@ -3,35 +3,32 @@
 # this file is the hand-edit reference. Every repo-specific value `/ship` needs
 # lives here — the pressed SKILL.md reads from it and hard-codes nothing.
 
-base_branch      = "main"                          # default branch / promotion target
-branch_prefix    = "omnibus"                       # omnibus branch stem (shared with ultraship)
-version_scheme   = ""                              # "" = {prefix}-{slug};
-                                                   #   "leading-v" = prefer {prefix}/vX.Y.Z when a
-                                                   #   version is parseable from the omnibus title.
-worktree_pattern = "../{repo}-issue-{n}-{slug}"    # sibling, never nested
+base_branch       = "main"                          # ultimate promotion target / default --onto
+branch_prefix     = "omnibus"                       # omnibus branch stem
+worktree_pattern  = "../{repo}-issue-{n}-{slug}"    # sibling, never nested
 
-test_cmd          = "uv run pytest"                # "" = no suite (rare; warn)
-test_source_globs = ["*.py", "pyproject.toml"]     # a diff touching any of these is "test-affecting"
-docs_only_globs   = ["*.md", "LICENSE*", "docs/**"] # a diff wholly within these auto-skips the suite
-skip_tests_token  = true                           # honor a `skip-tests` opt-in
-gate_agent        = "simplify-refactor"            # per-commit quality pass; "" = skip that gate + note
+test_cmd          = "uv run pytest"                 # "" = no suite (rare; warn)
+test_source_globs = ["*.py", "pyproject.toml"]      # a diff touching any of these is "test-affecting"
+auto_skip_globs   = ["*.md", "docs/**", "*.html", "*.css", "*.ts"]  # diff wholly within these → tests auto-skip
 
-architecture_doc  = "ARCHITECTURE.md"              # current-state doc swept in step 9 ("" = none)
-decisions_dir     = "docs/decisions"               # "" = project keeps no decision log
-decisions_index   = "docs/decisions/README.md"     # "" = no newest-first index to maintain
+architecture_doc  = "ARCHITECTURE.md"               # current-state doc swept before promotion ("" = none)
+decisions_dir     = "docs/decisions"                # "" = project keeps no decision log
+decisions_index   = "docs/decisions/README.md"      # "" = no newest-first index to maintain
 
-guard_hook        = ".claude/hooks/guard-main-write.sh"  # detected; informational only
-
-# Free text injected VERBATIM into the step-8 implementation guidance — a repo's
-# "never touch live X" redline (analog of ultraship's player_guardrails). "" = none.
+# Free text injected VERBATIM into every player prompt AND the director's own
+# work — the repo's redline. "" = none.
 #   e.g. "Tests run on checked-in fixtures only. Probe the live site once, by hand,
 #         then turn it into a fixture — never a network-touching test."
-live_data_note = ""
+guardrails        = ""
+guard_hook        = ".claude/hooks/guard-main-write.sh"  # detected; informational only
 
-# Optional feature block — present ⇒ `with-playwright` is available; absent ⇒
-# the token is unknown and ignored. (Keep this table LAST: in TOML every bare key
+player_tier       = "cheap"                         # default model tier for players: "cheap" | "strong"
+max_critic_passes = 3                               # critic → triage loop cap before parking
+
+# Optional feature block — present ⇒ `--with-playwright` is available; absent ⇒
+# the flag is unknown and ignored. (Keep this table LAST: in TOML every bare key
 # after a [table] header belongs to that table.)
 # [playwright]
-# frontend_glob = "web/**"                         # with-playwright fires only if the diff touches this
-# dev_server    = "npm run dev"                    # how to launch the dev server in the worktree
-# url           = "http://127.0.0.1:5173"          # where to point the browser
+# frontend_glob = "web/**"                          # --with-playwright fires only if a player's diff touches this
+# dev_server    = "npm run dev"                     # how to launch the dev server in the worktree
+# url           = "http://localhost:3000"           # where to point the browser
