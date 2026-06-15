@@ -5,7 +5,7 @@
 
   // One card for both search hits and scan matches — they share ~90% of their
   // shape. `variant` picks the two differences: a search hit shows a normalized
-  // score badge; a scan match shows a character count and a truncation ellipsis.
+  // score badge; a scan match shows a character count.
   //
   // `item` is enriched server-side with title (summary/finding title),
   // description, file_name, href (document detail page at the cited page, or
@@ -16,7 +16,6 @@
 
   $: title = item.title ?? stripExt(item.file_name) ?? item.source_name;
   $: scorePct = Math.round((item.normalized_score ?? 0) * 100);
-  $: truncated = variant === "scan" && item.text_length > item.text.length;
 
   // The "open chunk in context" link → /chunks/<id>. Built as a string (chunk_id
   // is an integer, so no escaping) and {@html}'d so the identical markup isn't
@@ -76,7 +75,7 @@
   {#if isMarkdown}
     <div class="snippet markdown-body markdown-body--compact">{@html marked.parse(item.text)}</div>
   {:else}
-    <p class="snippet">{item.text}{#if truncated}<span class="trunc">…</span>{/if}</p>
+    <p class="snippet">{item.text}</p>
   {/if}
 </li>
 
@@ -155,8 +154,5 @@
     margin-top: var(--space-sm);
     font-family: var(--font-serif);
     line-height: 1.5;
-  }
-  .trunc {
-    color: var(--color-off);
   }
 </style>
