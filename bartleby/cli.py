@@ -86,12 +86,14 @@ def main():
     )
     pimp = project_sub.add_parser(
         "import",
-        help="Import a published corpus from S3 as a new local project",
+        help="Import a published corpus (from S3 or a local/file:// path) "
+             "as a new local project",
     )
     pimp.add_argument("name", type=str)
     pimp.add_argument(
-        "--from", required=True, metavar="S3_URL", dest="from_url",
-        help="Source S3 URL, e.g. s3://my-bucket/corpora/acme",
+        "--from", required=True, metavar="SOURCE", dest="from_url",
+        help="Source: an s3:// URL (s3://my-bucket/corpora/acme), a local "
+             "directory, or a file:// URL pointing at a published artifact",
     )
     pimp.add_argument(
         "--without-tags", action="store_true",

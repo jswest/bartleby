@@ -597,6 +597,161 @@ def test_publish_command_handler_maps_boto3_error_to_exit(tmp_path, monkeypatch)
     assert exc.value.code == 1
 
 
+# --------------------------------------------------------------------------- #
+# #521 — local / file:// import transport. The same published artifact, fetched
+# from a local directory instead of S3, runs the identical verify + adopt + land
+# path. We materialize the artifact a publish produced (the stub's objects) into
+# a local dir laid out exactly as publish writes it (bartleby.db at the root,
+# files/<file_hash><ext>), then import --from that dir and from a file:// URL.
+# --------------------------------------------------------------------------- #
+
+from bartleby.share import source as source_mod  # noqa: E402
+
+
+def _materialize_artifact_dir(client: FakeS3Client, bucket: str, prefix: str,
+                              dest: Path) -> Path:
+    """Write the stub's objects under ``prefix`` into ``dest`` (publish layout)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    plen = len(prefix.rstrip("/")) + 1
+    for (b, key), data in client.objects.items():
+        if b != bucket or not key.startswith(prefix.rstrip("/") + "/"):
+            continue
+        rel = key[plen:]
+        out = dest / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    return dest
+
+
+def _local_artifact(published_corpus, tmp_path) -> Path:
+    """Publish ``pub`` to a stub, then lay the artifact out on local disk."""
+    client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
+    return _materialize_artifact_dir(
+        client, "bucket", "corpora/pub", tmp_path / "artifact"
+    )
+
+
+def test_import_from_local_directory(published_corpus, tmp_path):
+    artifact = _local_artifact(published_corpus, tmp_path)
+
+    result = import_mod.import_project("from-local", str(artifact))
+
+    assert result["project"] == "from-local"
+    assert result["source"] == str(artifact)
+    assert result["file_count"] == 2
+    assert bartleby.project.get_active_project() == "from-local"
+
+    archive = import_mod.get_project_dir("from-local") / "archive"
+    conn = open_db("from-local")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+        # file_path rewritten under the imported archive, keyed by file_hash.
+        for file_hash, file_path in cur.execute(
+            "SELECT file_hash, file_path FROM documents"
+        ).fetchall():
+            assert str(archive) in file_path
+            assert file_hash in file_path
+            assert Path(file_path).is_file()
+    finally:
+        conn.close()
+
+
+def test_import_from_file_url(published_corpus, tmp_path):
+    artifact = _local_artifact(published_corpus, tmp_path)
+    file_url = artifact.as_uri()  # file:///abs/path
+    assert file_url.startswith("file://")
+
+    result = import_mod.import_project("from-file-url", file_url)
+
+    assert result["file_count"] == 2
+    conn = open_db("from-file-url")
+    try:
+        n = conn.cursor().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 2
+
+
+def test_import_local_without_tags(published_corpus, tmp_path):
+    artifact = _local_artifact(published_corpus, tmp_path)
+
+    import_mod.import_project("local-no-tags", str(artifact), without_tags=True)
+    conn = open_db("local-no-tags")
+    try:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0
+        assert cur.execute("SELECT COUNT(*) FROM document_tags").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_import_local_refuses_embedding_model_mismatch(published_corpus, tmp_path):
+    artifact = _local_artifact(published_corpus, tmp_path)
+    # Mutate the on-disk .db so its embedding model no longer matches.
+    db = artifact / "bartleby.db"
+    conn = apsw.Connection(str(db))
+    try:
+        with conn:
+            conn.cursor().execute(
+                "UPDATE meta SET value = 'some/other-model' "
+                "WHERE key = 'embedding_model'"
+            )
+    finally:
+        conn.close()
+
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("nope", str(artifact))
+    assert not import_mod.get_project_dir("nope").exists()
+
+
+def test_import_local_refuses_missing_db(tmp_path):
+    empty = tmp_path / "empty-artifact"
+    empty.mkdir()
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("nope", str(empty))
+    assert not import_mod.get_project_dir("nope").exists()
+
+
+def test_import_local_refuses_missing_advertised_file(published_corpus, tmp_path):
+    artifact = _local_artifact(published_corpus, tmp_path)
+    # Delete one advertised original from the local artifact -> corrupt.
+    for f in (artifact / "files").iterdir():
+        f.unlink()
+        break
+
+    with pytest.raises(import_mod.ImportRefused):
+        import_mod.import_project("nope", str(artifact))
+    assert not import_mod.get_project_dir("nope").exists()
+
+
+def test_import_nonexistent_local_path_is_value_error(tmp_path):
+    missing = tmp_path / "does-not-exist"
+    with pytest.raises(ValueError):
+        import_mod.import_project("nope", str(missing))
+
+
+def test_local_root_from_url_forms(tmp_path):
+    d = tmp_path / "art"
+    d.mkdir()
+    assert source_mod.local_root_from_url(str(d)) == d
+    assert source_mod.local_root_from_url(d.as_uri()) == d
+    # An s3:// URL is not a local source.
+    with pytest.raises(ValueError):
+        source_mod.local_root_from_url("s3://bucket/prefix")
+    # A non-directory path refuses.
+    with pytest.raises(ValueError):
+        source_mod.local_root_from_url(str(tmp_path / "nope"))
+
+
+def test_make_source_routes_by_value(tmp_path):
+    d = tmp_path / "art"
+    d.mkdir()
+    assert source_mod.is_s3_url("s3://bucket/prefix")
+    assert not source_mod.is_s3_url(str(d))
+    assert not source_mod.is_s3_url(d.as_uri())
+
+
 def test_import_without_tags_drops_tags(published_corpus, tmp_path):
     client = _publish_to_stub("pub", "s3://bucket/corpora/pub")
 
