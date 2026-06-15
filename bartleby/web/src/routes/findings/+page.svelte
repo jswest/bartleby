@@ -14,7 +14,7 @@
 
   // Index view: a scannable table by default, or the same findings grouped by
   // the research session that produced them. Client-side only.
-  let mode = "table";
+  let mode = "grouped";
 
   // Group findings by session, preserving first-appearance order. Because
   // `findings` is newest-first, sessions sort newest-first too, and each

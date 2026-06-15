@@ -4,14 +4,18 @@
   import ResultCard from "$lib/components/ResultCard.svelte";
   import StatusBanner from "$lib/components/StatusBanner.svelte";
   import Pagination from "$lib/components/Pagination.svelte";
+  import WaitingIndicator from "$lib/components/WaitingIndicator.svelte";
   import { pluralize } from "$lib/format.js";
+  import { isSearchNavigation } from "$lib/navigation.js";
 
   export let data;
 
   $: ({ params, available, result, error } = data);
-  // Any in-flight navigation here is a search/scan submit — show progress
-  // while the subprocess (and, for semantic search, the BGE model) runs.
-  $: busy = !!$navigating;
+  // Show "Searching…" only for a genuine search/scan submission. Clicking a
+  // result or pressing Back also triggers $navigating while on this page, but
+  // those go elsewhere and are owned by the global layout "Loading…" indicator.
+  // The shared isSearchNavigation predicate keeps the two in lockstep.
+  $: busy = isSearchNavigation($navigating);
 
   // Preserve the current query while only moving the scan offset.
   function scanHref(offset) {
@@ -21,13 +25,14 @@
   }
 </script>
 
+<div class="search">
 <h1>Search</h1>
 
 <SearchForm {params} availableTags={available.tags} />
 
 {#if busy}
   <StatusBanner variant="busy">
-    Searching<span class="cursor" aria-hidden="true">█</span>
+    <WaitingIndicator label="Searching…" active={true} />
     <span class="hint">semantic queries load the embedding model and can take a few seconds.</span>
   </StatusBanner>
 {/if}
@@ -40,7 +45,7 @@
     </StatusBanner>
   {:else if !params.q}
     <p class="empty empty--terminal">
-      awaiting query<span class="cursor" aria-hidden="true">█</span>
+      <WaitingIndicator label="awaiting query" active={false} />
     </p>
   {:else if params.mode === "scan"}
     {#if result.matches.length === 0}
@@ -85,10 +90,14 @@
     {/if}
   {/if}
 </div>
+</div>
 
 <style>
-  .results {
+  .search {
     max-width: var(--width-content);
+    margin-inline: auto;
+  }
+  .results {
     transition: opacity 0.15s;
   }
   .results.dim {
