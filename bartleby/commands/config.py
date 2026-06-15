@@ -96,8 +96,7 @@ def _prompt_api_key(provider: str, existing: dict, *, help_text: str | None = No
     return entered or None
 
 
-def _prompt_temperature(existing: dict, *, help_text: str) -> float:
-    default = float(existing.get("temperature", DEFAULT_TEMPERATURE))
+def _prompt_temperature(default: float, *, help_text: str) -> float:
     _help(help_text)
     while True:
         t = FloatPrompt.ask("Temperature", default=default)
@@ -225,7 +224,7 @@ def main():
         config["summary_depth"] = depth
         if depth == "one-shot":
             config["temperature"] = _prompt_temperature(
-                existing,
+                float(existing.get("temperature", DEFAULT_TEMPERATURE)),
                 help_text="0 = deterministic, repeatable summaries; higher = "
                 "more varied wording.\nLeave at 0 unless summaries feel too rigid.",
             )
@@ -340,6 +339,17 @@ def main():
             help_text="Tesseract average confidence (0-100); pages scoring below "
             "this fall back to the VLM.\nHigher = trust OCR less, use the VLM more "
             "(0 = always trust OCR).",
+        )
+        # Captioning temperature, defaulting to the summarize temperature so an
+        # unconfigured corpus keeps one knob (#223). Prefer a value already set
+        # this run, then the existing vision_temperature, then summarize temperature.
+        summarize_temp = float(
+            config.get("temperature", existing.get("temperature", DEFAULT_TEMPERATURE))
+        )
+        config["vision_temperature"] = _prompt_temperature(
+            float(existing.get("vision_temperature", summarize_temp)),
+            help_text="0 = deterministic, repeatable captions; higher = more "
+            "varied wording.\nDefaults to the summarize temperature above.",
         )
         if vprovider != "ollama":
             # Ollama serializes (OLLAMA_NUM_PARALLEL=1), so caption workers

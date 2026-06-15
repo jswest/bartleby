@@ -81,8 +81,11 @@ class WsjptProvider:
         image_bytes: bytes,
         *,
         model: str,
+        temperature: float,
         media_type: str = "image/jpeg",
     ) -> VlmDescription:
+        # temperature intentionally ignored (see summarize) — wsjpt owns model
+        # settings centrally so callers can't drift from the toolkit defaults.
         jpt = self._Jpt(
             VlmDescription,
             model_config=self._model_config(model),
