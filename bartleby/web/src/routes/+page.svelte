@@ -1,5 +1,5 @@
 <script>
-  import { pluralize, stripExt } from "$lib/format.js";
+  import { formatDateRange, pluralize, stripExt } from "$lib/format.js";
   import StatusBanner from "$lib/components/StatusBanner.svelte";
   export let data;
 
@@ -84,8 +84,8 @@
         </div>
         <div class="stat">
           <span class="stat-value stat-value--text">
-            {#if corpus.authored_date.min}
-              {corpus.authored_date.min} – {corpus.authored_date.max}
+            {#if formatDateRange(corpus.authored_date)}
+              {formatDateRange(corpus.authored_date)}
             {:else}
               no dated documents
             {/if}

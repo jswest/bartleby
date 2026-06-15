@@ -31,6 +31,17 @@ export function clampSnippet(text, maxLen = 280) {
   return trimmed + '…';
 }
 
+// Render a date range as "YYYY-MM-DD – YYYY-MM-DD", collapsing to a single
+// date when start == end (e.g. a one-day corpus or a single-day session span).
+// Accepts either two separate strings or a single object with `.min`/`.max`.
+// Returns null when `a` is falsy so callers can use {#if formatDateRange(...)}.
+export function formatDateRange(a, b) {
+  const lo = typeof a === 'object' && a !== null ? a.min : a;
+  const hi = typeof a === 'object' && a !== null ? a.max : b;
+  if (!lo) return null;
+  return lo === hi ? lo : `${lo} – ${hi}`;
+}
+
 // Strip a trailing extension (e.g. .pdf) so a file name reads as a title when
 // no summary-derived title exists. Returns falsy input unchanged so callers can
 // chain a further `?? fallback`. Shared by the list, detail, and search views.
