@@ -1,11 +1,38 @@
 <script>
-  import { pluralize, stripExt } from "$lib/format.js";
+  import { formatDateRange, pluralize, stripExt } from "$lib/format.js";
   import StatusBanner from "$lib/components/StatusBanner.svelte";
+  import { FINDINGS_ICON, DOCUMENTS_ICON } from "$lib/icons.js";
   export let data;
 
   $: ({ project, counts, corpus, error } = data);
 
   const fmt = (n) => (n ?? 0).toLocaleString("en-US");
+
+  // Count-up action for the LED readout numerals (#591): on mount, ramp the
+  // displayed figure from 0 → target so the panel reads as a screen powering
+  // on. Honours prefers-reduced-motion (and SSR / no-rAF) by snapping straight
+  // to the final value, so the number is always correct without JS.
+  function countUp(node, target) {
+    const final = Number(target) || 0;
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduce || typeof requestAnimationFrame === "undefined" || final === 0) {
+      node.textContent = fmt(final);
+      return;
+    }
+    const duration = 700;
+    const start = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      // Ease-out so it decelerates into the final reading like a settling dial.
+      const eased = 1 - Math.pow(1 - t, 3);
+      node.textContent = fmt(Math.round(final * eased));
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    node.textContent = fmt(0);
+    requestAnimationFrame(tick);
+  }
 
   // Tallest bar in the year histogram, floored at 1 so an empty corpus doesn't
   // divide by zero.
@@ -26,14 +53,14 @@
   <ul class="cards">
     <li>
       <a class="surface surface--finding surface--interactive" href="/findings">
-        <h2>Findings</h2>
+        <h2><span class="card-eyebrow-icon">{@html FINDINGS_ICON}</span>Findings</h2>
         <p class="count">{fmt(counts.findings)}</p>
         <p class="hint">Saved research notes with inline citations.</p>
       </a>
     </li>
     <li>
       <a class="surface surface--interactive" href="/documents">
-        <h2>Documents</h2>
+        <h2><span class="card-eyebrow-icon">{@html DOCUMENTS_ICON}</span>Documents</h2>
         <p class="count">{fmt(counts.documents)}</p>
         <p class="hint">Ingested source material with summaries.</p>
       </a>
@@ -49,17 +76,17 @@
     <div class="overview">
       <div class="stat-strip">
         <div class="stat">
-          <span class="stat-value">{fmt(corpus.chunk_count)}</span>
+          <span class="stat-value" use:countUp={corpus.chunk_count}>{fmt(corpus.chunk_count)}</span>
           <span class="stat-label">chunks</span>
         </div>
         <div class="stat">
-          <span class="stat-value">{fmt(corpus.token_count)}</span>
+          <span class="stat-value" use:countUp={corpus.token_count}>{fmt(corpus.token_count)}</span>
           <span class="stat-label">tokens</span>
         </div>
         <div class="stat">
           <span class="stat-value stat-value--text">
-            {#if corpus.authored_date.min}
-              {corpus.authored_date.min} – {corpus.authored_date.max}
+            {#if formatDateRange(corpus.authored_date)}
+              {formatDateRange(corpus.authored_date)}
             {:else}
               no dated documents
             {/if}
@@ -73,7 +100,7 @@
           </span>
         </div>
         <div class="stat">
-          <span class="stat-value">{fmt(corpus.summary_coverage.summarized)}</span>
+          <span class="stat-value" use:countUp={corpus.summary_coverage.summarized}>{fmt(corpus.summary_coverage.summarized)}</span>
           <span class="stat-label">
             summarized{#if corpus.summary_coverage.unsummarized} · {fmt(corpus.summary_coverage.unsummarized)} without{/if}
           </span>
@@ -185,12 +212,23 @@
     text-transform: uppercase;
     letter-spacing: var(--tracking-wide);
     margin-bottom: var(--space-sm);
+    /* R3 (#592): a Pixelarticon eyebrow rides before the card label, inheriting
+       the sage --color-off the heading already carries. */
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+  }
+  .card-eyebrow-icon {
+    display: inline-flex;
   }
   .count {
     font-family: var(--font-display);
     font-size: var(--text-4xl);
     line-height: 1;
     margin-bottom: var(--space-sm);
+    /* The dot-matrix count reads as an amber readout even on the paper card —
+       the one apparatus accent that carries onto the artifact. */
+    color: var(--color-token-dark);
   }
   .hint {
     font-size: var(--text-sm);
@@ -207,33 +245,89 @@
     font-family: var(--font-sans);
   }
 
-  /* The status strip: one value-over-label unit per stat, framed by a rule top
-     and bottom so it reads as its own band between the cards and the panels. */
+  /* ──────────────────────────────────────────────────────────────────────
+     R2 · Dot-matrix LED readout panel (#591)
+     Grows R1's seeded stat band into a glowing dark "screen" distinct from
+     the paper cards: a recessed near-black readout with amber Doto numerals
+     (soft glow), a green dot-matrix date readout, muted-green caps labels,
+     framing rules, an inset shadow, and a faint scanline overlay. Numerals
+     count up on load. All selectors here are owned by this issue; the only
+     shared tokens consumed are R1's :root vars (read-only).
+     ────────────────────────────────────────────────────────────────────── */
+
+  /* Local readout palette, derived from R1 tokens — kept here so the panel
+     can be tuned without touching the foundation :root. */
   .stat-strip {
+    --led-amber: var(--color-token-dark);
+    --led-green: var(--color-off-light);
+    --led-glow-amber: rgba(var(--color-token-dark-rgb), 0.45);
+    --led-glow-green: rgba(var(--color-off-light-rgb), 0.3);
+
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-lg) var(--space-3xl);
-    padding: var(--space-lg) 0 var(--space-xl);
-    border-top: 1px solid var(--color-rule);
-    border-bottom: 1px solid var(--color-rule);
+    padding: var(--space-xl);
+    position: relative;
+    /* A touch darker than the shell so the readout reads as a recessed screen
+       rather than a raised card; the inset shadow seals the "behind glass" feel. */
+    background:
+      linear-gradient(180deg, rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0)) ,
+      var(--color-shell);
+    border-top: 1px solid var(--color-shell-rule);
+    border-bottom: 1px solid var(--color-shell-rule);
+    box-shadow:
+      inset 0 1px 0 rgba(0, 0, 0, 0.5),
+      inset 0 12px 24px -12px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+  }
+  /* Faint horizontal scanlines drawn over the panel — a repeating 1px dark
+     line every 3px. Sits above the background but below the figures (the
+     readout content stays at the default stacking, this layer is z-index:0
+     and pointer-events:none so it never intercepts clicks). */
+  .stat-strip::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.18) 0,
+      rgba(0, 0, 0, 0.18) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    z-index: 0;
   }
   .stat {
     display: flex;
     flex-direction: column;
     gap: var(--space-3xs);
+    position: relative;
+    z-index: 1; /* float the figures above the scanline overlay */
   }
   .stat-value {
     font-family: var(--font-display);
-    font-size: var(--text-xl);
+    /* Honour the dot-matrix size floor (--text-display-floor: 1.25rem) — bumped
+       above R1's --text-xl so the LED figures read crisp, never muddy. */
+    font-size: var(--text-2xl);
     line-height: 1;
-    color: var(--color-text);
+    /* Amber dot-matrix readout with a soft LED glow. */
+    color: var(--led-amber);
+    text-shadow: 0 0 6px var(--led-glow-amber);
+    font-variant-numeric: tabular-nums;
   }
-  /* The authored-date range is text, not a metric — render it in readable sans
-     instead of the pixel display face, which mangles a long date string. */
+  /* The authored-date range is text, not a metric, but on the LED panel it
+     becomes the green dot-matrix readout from the prototype — Doto, sized at
+     the display floor, glowing green where amber marks the metrics. */
   .stat-value--text {
-    font-family: var(--font-sans);
-    font-size: var(--text-base);
-    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: var(--text-display-floor);
+    line-height: 1;
+    color: var(--led-green);
+    text-shadow: 0 0 6px var(--led-glow-green);
+    /* The range is a single token visually — keep it on one line and let it
+       drive its own column width rather than wrapping mid-date. */
+    white-space: nowrap;
   }
   .stat-label {
     font-size: var(--text-2xs);

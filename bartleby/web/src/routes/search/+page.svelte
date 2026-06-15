@@ -27,7 +27,8 @@
 
 {#if busy}
   <StatusBanner variant="busy">
-    Searching… <span class="hint">semantic queries load the embedding model and can take a few seconds.</span>
+    Searching<span class="cursor" aria-hidden="true">█</span>
+    <span class="hint">semantic queries load the embedding model and can take a few seconds.</span>
   </StatusBanner>
 {/if}
 
@@ -38,10 +39,12 @@
       {#if error.code}<span class="code">({error.code})</span>{/if}
     </StatusBanner>
   {:else if !params.q}
-    <p class="empty">Enter a query to search the corpus.</p>
+    <p class="empty empty--terminal">
+      awaiting query<span class="cursor" aria-hidden="true">█</span>
+    </p>
   {:else if params.mode === "scan"}
     {#if result.matches.length === 0}
-      <p class="empty">No chunks match “{result.query}”.</p>
+      <p class="empty empty--terminal">no chunks match “{result.query}”</p>
     {:else}
       <p class="summary">
         {pluralize(result.total, "match", "matches")} for the
@@ -55,7 +58,7 @@
       />
       <ul class="list">
         {#each result.matches as m (m.chunk_id)}
-          <ResultCard item={m} variant="scan" />
+          <ResultCard item={m} variant="scan" query={result.query} />
         {/each}
       </ul>
       <Pagination
@@ -67,7 +70,7 @@
     {/if}
   {:else}
     {#if result.results.length === 0}
-      <p class="empty">No results for “{result.query}”.</p>
+      <p class="empty empty--terminal">no results for “{result.query}”</p>
     {:else}
       <p class="summary">
         {pluralize(result.results.length, "result")}
@@ -76,7 +79,7 @@
       </p>
       <ul class="list">
         {#each result.results as h (h.chunk_id)}
-          <ResultCard item={h} variant="search" />
+          <ResultCard item={h} variant="search" query={result.query} />
         {/each}
       </ul>
     {/if}

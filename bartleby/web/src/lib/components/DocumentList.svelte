@@ -5,7 +5,7 @@
   export let documents;
 </script>
 
-<ul class="entity-list">
+<ul class="card-grid">
   {#each documents as d}
     <li class="entity surface surface--interactive">
       <h2>

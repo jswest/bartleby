@@ -5,7 +5,7 @@
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
   import { stripExt } from "$lib/format.js";
-  import { CHUNK_ICON } from "$lib/icons.js";
+
   export let data;
 
   $: byId = new Map(data.finding.citations.map((c) => [c.chunk_id, c]));
@@ -17,47 +17,65 @@
     ? `${data.finding.model}${data.finding.model_set_by_llm ? " (Set by LLM)" : ""}`
     : null;
 
-  // Substitute each citation marker in the markdown source before marked parses.
-  // Two kinds: digit [^N] → a corpus-chunk chip (resolves against byId); and
-  // [^url:…]/[^doc:…] → a visibly-distinct external-citation chip. External
-  // markers are matched first so the digit pass can't see their alpha schemes.
-  // Marked passes inline HTML through, so chips sit inside the same <p> as the
-  // surrounding prose. Reactive on `active` so .active bakes into the HTML.
-  $: bodyHtml = marked.parse(
-    data.finding.body
-      .replace(/\[\^([A-Za-z]+):([^\]]+)\]/g, (match, scheme, ref) =>
-        renderExternal(scheme.toLowerCase(), ref.trim()),
-      )
-      .replace(/\[\^(\d+)\]/g, (match, idStr) => {
-        const c = byId.get(Number(idStr));
-        return c ? renderChip(c, c === active) : renderTombstone(Number(idStr));
-      }),
-  );
+  // ===== R4 ledger treatment (#593) =================================
+  // Citations leave the prose and move into a right-hand gutter as margin
+  // notes. Each marker in the body becomes an inline DAGGER anchor (†/‡ +
+  // ordinal); the matching note carries the same dagger+ordinal in the gutter.
+  // The ordinal is the tie-back — daggers repeat, the number disambiguates.
+  //
+  // Two kinds of marker:
+  //   [^N]            corpus-chunk citation. Resolves against byId →
+  //                     resolved  → † "source" note (amber, filename, jumps)
+  //                     unresolved → ‡ "no longer available" note (danger)
+  //   [^url:…]/[^doc:…]  external citation → † "source" note (link / ref)
+  //
+  // `notes` is rebuilt alongside `bodyHtml` in one ordered pass so the gutter
+  // order matches reading order. Reactive on `active` so the .active state
+  // bakes into the rendered HTML.
+  let notes = [];
+  $: bodyHtml = renderBody(data.finding.body, byId, active);
 
-  // An external (URL / external-dataset doc) citation that rides alongside the
-  // corpus-chunk citations. No DB row backs it — it's parsed straight from the
-  // body marker. Rendered as a distinct chip: a url scheme becomes a real link
-  // (new tab via the layout's marked hook), a doc scheme a muted ref label.
-  // Unknown schemes are dropped (left to the well-formedness check at save time).
-  function renderExternal(scheme, ref) {
-    if (scheme === "url") {
-      return `<a class="cite-external cite-external--url" href="${esc(ref)}" title="${esc(`external source · ${ref}`)}">${esc(ref)}</a>`;
-    }
-    if (scheme === "doc") {
-      return `<span class="cite-external cite-external--doc" title="${esc(`external dataset doc · ${ref}`)}">${esc(ref)}</span>`;
-    }
-    return esc(`[^${scheme}:${ref}]`);
+  function renderBody(body, byId, active) {
+    const collected = [];
+    let n = 0;
+    const html = marked.parse(
+      body
+        .replace(/\[\^([A-Za-z]+):([^\]]+)\]/g, (match, scheme, ref) => {
+          const note = externalNote(++n, scheme.toLowerCase(), ref.trim());
+          if (!note) {
+            n--; // unknown scheme: drop, don't burn an ordinal
+            return esc(match);
+          }
+          collected.push(note);
+          return marker(note);
+        })
+        .replace(/\[\^(\d+)\]/g, (match, idStr) => {
+          const id = Number(idStr);
+          const c = byId.get(id);
+          const note = c
+            ? sourceNote(++n, c, c === active)
+            : goneNote(++n, id);
+          collected.push(note);
+          return marker(note);
+        }),
+    );
+    notes = collected;
+    return html;
   }
 
-  // An unresolved [^N] marker: the cited source has been removed (deleted, or
-  // rebuilt under new chunk ids by an edit/merge), so only the id survives. We
-  // can't say what it was or whether it was truly deleted — render a muted
-  // tombstone that keeps the marker present rather than leaking raw [^N] text.
-  function renderTombstone(chunkId) {
-    return `<span class="cite-gone" title="${esc(`chunk ${chunkId} · cited source no longer available`)}">cited source no longer available</span>`;
+  // The inline dagger anchor that sits at the cited point in the prose. A
+  // superscript <sup> with the dagger glyph + ordinal; the ordinal ties it to
+  // its gutter note. Stable class hooks (`cite-ref`, kind modifier) so R3 (#592)
+  // can splice a pixel icon in without touching this code.
+  function marker(note) {
+    const kindCls = note.gone ? "cite-ref--gone" : "cite-ref--source";
+    const title = note.gone
+      ? `${note.dagger} cited source no longer available`
+      : `${note.dagger} source · ${note.title}`;
+    return `<sup class="cite-ref ${kindCls}" data-note="${note.n}" title="${esc(title)}">${note.dagger}${note.n}</sup>`;
   }
 
-  function renderChip(c, isActive) {
+  function sourceNote(n, c, isActive) {
     const name = stripExt(c.file_name);
     const label =
       name && c.page_number ? `${name} p.${c.page_number}`
@@ -69,12 +87,42 @@
       c.page_number && `page ${c.page_number}`,
       `chunk ${c.chunk_id}`,
     ].filter(Boolean).join(" · ");
-    const cls = `cite-chip${isActive ? " active" : ""}`;
-    const chip = `<button type="button" class="${cls}" data-chunk-id="${c.chunk_id}" title="${esc(title)}">${esc(label)}</button>`;
-    // A sibling jump button → /chunks/<id>. A <button> (not <a>) so it routes
-    // in-tab via goto; the layout's marked hook rewrites every <a> to a new tab.
-    const jump = `<button type="button" class="cite-jump" data-chunk-id="${c.chunk_id}" title="Open chunk ${c.chunk_id} in context" aria-label="Open chunk ${c.chunk_id} in context">${CHUNK_ICON}</button>`;
-    return `<span class="cite">${chip}${jump}</span>`;
+    return {
+      n,
+      dagger: "†",
+      gone: false,
+      chunkId: c.chunk_id,
+      active: isActive,
+      label,
+      title,
+    };
+  }
+
+  // An unresolved [^N]: the cited source has been removed (deleted, or rebuilt
+  // under new chunk ids by an edit/merge), so only the id survives. Danger-toned
+  // gutter note rather than leaking raw [^N] text.
+  function goneNote(n, chunkId) {
+    return {
+      n,
+      dagger: "‡",
+      gone: true,
+      chunkId,
+      label: "no longer available",
+      title: `chunk ${chunkId} · cited source no longer available`,
+    };
+  }
+
+  // An external (URL / external-dataset doc) citation parsed straight from the
+  // body marker — no DB row backs it. A url scheme becomes a real link, a doc
+  // scheme a muted ref. Unknown schemes return null (dropped upstream).
+  function externalNote(n, scheme, ref) {
+    if (scheme === "url") {
+      return { n, dagger: "†", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
+    }
+    if (scheme === "doc") {
+      return { n, dagger: "†", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
+    }
+    return null;
   }
 
   function esc(s) {
@@ -92,22 +140,26 @@
     return `/files/${c.document_id}${page}`;
   }
 
-  // Chips are static HTML inside {@html}, so click delegation on the container
-  // is simpler than wiring each as a Svelte component.
+  function activate(chunkId) {
+    const c = byId.get(chunkId);
+    if (c) active = c;
+  }
+
+  // Clicking an inline dagger scrolls its gutter note into view and activates
+  // it (loads the source in the viewer). Delegated on the report container
+  // since the markers are static {@html}.
   let container;
   onMount(() => {
     container.addEventListener("click", (e) => {
-      const jump = e.target.closest(".cite-jump");
-      if (jump) {
-        e.preventDefault();
-        goto(`/chunks/${jump.dataset.chunkId}`);
-        return;
-      }
-      const btn = e.target.closest(".cite-chip");
-      if (!btn) return;
+      const ref = e.target.closest(".cite-ref");
+      if (!ref) return;
       e.preventDefault();
-      const c = byId.get(Number(btn.dataset.chunkId));
-      if (c) active = c;
+      const el = container.querySelector(
+        `.margin-note[data-note="${ref.dataset.note}"]`,
+      );
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const noteEl = el?.querySelector("[data-chunk-id]");
+      if (noteEl) activate(Number(noteEl.dataset.chunkId));
     });
   });
 
@@ -129,12 +181,12 @@
 </script>
 
 <div class="split">
-  <article class="report surface surface--finding" bind:this={container}>
-    <h1>{data.finding.title}</h1>
+  <article class="report surface surface--finding ledger" bind:this={container}>
+    <h1 class="ledger-hed">{data.finding.title}</h1>
     <p class="meta">
       <span class="finding-id">#{data.finding.finding_id}</span> · {data.finding.session_name}{#if modelMeta} · {modelMeta}{/if} · {data.finding.created_at}
     </p>
-    <p class="desc">{data.finding.description}</p>
+    <p class="ledger-dek">{data.finding.description}</p>
 
     <div class="toolbar">
       <Button size="sm" type="button" on:click={copyMarkdown}>
@@ -143,8 +195,46 @@
       <Button size="sm" type="button" on:click={downloadMarkdown}>Download .md</Button>
     </div>
 
-    <div class="body markdown-body">
-      {@html bodyHtml}
+    <!-- Ledger column: drop-capped prose + a margin-note gutter. The body
+         carries inline dagger anchors; the gutter carries the matching notes. -->
+    <div class="ledger-column">
+      <div class="body markdown-body drop-cap-body">
+        {@html bodyHtml}
+      </div>
+
+      {#if notes.length}
+        <aside class="cite-notes" aria-label="Citations">
+          {#each notes as note (note.n)}
+            <div
+              class="margin-note margin-note--{note.gone ? 'gone' : 'source'}"
+              data-note={note.n}
+            >
+              <p class="margin-note__head">
+                <span class="margin-note__dagger">{note.dagger}{note.n}</span>
+                {note.gone ? "missing source" : "source"}
+              </p>
+              {#if note.gone}
+                <p class="margin-note__body">no longer available</p>
+              {:else if note.external === "url"}
+                <p class="margin-note__body">
+                  <a href={note.href} title={note.title}>{note.label}</a>
+                </p>
+              {:else if note.external === "doc"}
+                <p class="margin-note__body margin-note__body--doc" title={note.title}>{note.label}</p>
+              {:else}
+                <button
+                  type="button"
+                  class="margin-note__body margin-note__link"
+                  class:active={note.active}
+                  data-chunk-id={note.chunkId}
+                  title={note.title}
+                  on:click={() => goto(`/chunks/${note.chunkId}`)}
+                >{note.label}</button>
+              {/if}
+            </div>
+          {/each}
+        </aside>
+      {/if}
     </div>
   </article>
 
@@ -158,94 +248,5 @@
     display: flex;
     gap: var(--space-sm);
     margin-top: var(--space-md);
-  }
-  /* Inline citation chips are emitted as raw HTML strings inside {@html}
-     (see renderChip), so they sit outside Svelte's scoping and must be styled
-     :global. Padding/size use em so the chip tracks the surrounding prose. */
-  :global(.cite-chip) {
-    display: inline-block;
-    vertical-align: baseline;
-    max-width: 20ch;
-    padding: 0 0.4em;
-    margin: 0 0.15em;
-    background: var(--color-token);
-    border: 1px solid var(--color-token-dark);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-sans);
-    font-size: 0.8em;
-    line-height: 1.4;
-    color: var(--color-off);
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  :global(.cite-chip:hover),
-  :global(.cite-chip.active) {
-    background: var(--color-off);
-    color: var(--color-surface);
-    border-color: var(--color-off);
-  }
-  /* Tombstone for a [^N] whose cited source is gone. Raw {@html}, hence :global.
-     Muted + italic so it reads as an absence, not a live citation chip. */
-  :global(.cite-gone) {
-    font-style: italic;
-    font-size: 0.85em;
-    color: var(--color-token-dark);
-    cursor: help;
-  }
-  /* External (URL / external-dataset doc) citations. Distinct from the corpus
-     chunk chips: a dashed border + accent tint signals "not from the corpus."
-     Raw {@html}, hence :global. */
-  :global(.cite-external) {
-    display: inline-block;
-    vertical-align: baseline;
-    max-width: 24ch;
-    padding: 0 0.4em;
-    margin: 0 0.15em;
-    border: 1px dashed var(--color-link);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-sans);
-    font-size: 0.8em;
-    line-height: 1.4;
-    color: var(--color-link);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  :global(a.cite-external--url) {
-    text-decoration: none;
-    cursor: pointer;
-  }
-  :global(a.cite-external--url:hover) {
-    background: var(--color-link);
-    color: var(--color-surface);
-  }
-  :global(.cite-external--doc) {
-    font-style: italic;
-    cursor: help;
-  }
-  /* The chip and its jump button travel together as one inline unit, so a line
-     break never splits them. Also raw {@html}, hence :global. */
-  :global(.cite) {
-    white-space: nowrap;
-  }
-  :global(.cite-jump) {
-    display: inline-flex;
-    align-items: center;
-    vertical-align: baseline;
-    margin: 0 0.15em 0 0.1em;
-    padding: 0;
-    background: none;
-    border: none;
-    color: var(--color-off);
-    cursor: pointer;
-  }
-  :global(.cite-jump:hover) {
-    color: var(--color-link);
-  }
-  :global(.cite-jump .icon) {
-    position: relative;
-    top: 1px;
   }
 </style>

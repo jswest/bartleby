@@ -1,25 +1,68 @@
 /* =========================================================================
+   Self-hosted @font-face declarations (Doto, Iosevka Term, Source Serif 4).
+   Imported first so the families resolve before any rule below references them.
+   ========================================================================= */
+@import "./fonts.css";
+
+/* =========================================================================
    Design tokens — the single source of truth for color, spacing, type, and
    radius. Components and routes reference these; raw literals in a route's
    <style> block are a smell (the only sanctioned literals are structural
    dimensions: input widths, grid track sizes, fixed heights).
+
+   THEME — "dark console + paper cards." The apparatus (page background, header,
+   nav chrome, LED readout panels) is a near-black machine shell; the artifacts
+   it holds (documents, findings, prose) sit on light PAPER cards for
+   readability. Two token families keep the two grounds from bleeding into each
+   other: `--color-shell-*` is the dark apparatus, the paper/surface/text tokens
+   are the light cards. Pick by ground, not by guess.
    ========================================================================= */
 :root {
-  /* Type families */
+  /* Type — three voices.
+       --font-display  Doto, dot-matrix. DISPLAY ONLY: wordmark, H1s, numeric
+                       readouts. Honour --text-display-floor so small dot-matrix
+                       text never renders muddy.
+       --font-sans     Iosevka Term. UI chrome: nav, labels, meta, filenames,
+                       inputs. (Name kept --font-sans: it's the chrome/UI role.)
+       --font-serif    Source Serif 4, prose. Oldstyle figures are enabled with
+                       `font-feature-settings: "onum" 1` on serif body contexts
+                       (the base `li, p` rule, `.desc`, `.markdown-body`). */
   --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Iosevka Term", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "Iosevka Term", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Color — brand */
-  --color-off: #698879;
-  --color-off-light: #dbfaeb;
-  --color-token: #ffecb9;
-  --color-token-dark: #ffbd08;
+  /* The display-face size floor. Doto below this renders as illegible mud, so
+     anything in --font-display must sit at or above it (wordmark, H1, readouts
+     all clear it; this is the contract downstream readout panels honour). */
+  --text-display-floor: 1.25rem;
+
+  /* Color — brand. Sage / mint / amber are the constant accents across both
+     grounds. */
+  --color-off: #698879;        /* sage   */
+  --color-off-light: #dbfaeb;  /* mint   */
+  --color-token: #ffecb9;      /* amber, pale fill */
+  --color-token-dark: #ffbd08; /* amber, accent / glow */
+  /* RGB triples of the glow colors, so rgba() glow sites vary alpha off one
+     source instead of re-typing the channels (CSS can't derive an rgba alpha
+     from a hex var()). Keep in sync with --color-token-dark / --color-off-light. */
+  --color-token-dark-rgb: 255, 189, 8;
+  --color-off-light-rgb: 219, 250, 235;
   --color-rule: #e3e1d5;
   --color-bg-soft: #f6f5ef;
 
-  /* Color — text & surface */
+  /* Color — shell (the dark apparatus). Near-black page ground, a hair-lighter
+     raised band for LED readout panels / header, light chrome text, and a faint
+     rule for dark-on-dark separation (shadows don't read on a dark ground —
+     borders and the amber glow carry figure/ground instead). */
+  --color-shell: #14171a;
+  --color-shell-raised: #1c2024;
+  --color-shell-text: #e8eae6;
+  --color-shell-text-soft: #9aa39c;
+  --color-shell-rule: #2c3238;
+
+  /* Color — paper (the light cards). Text & surface live here unchanged; this
+     is the readable ground for content the agent works over. */
   --color-text: #222;
   --color-text-soft: #444;
   --color-surface: #fff;
@@ -66,17 +109,22 @@
   /* Letter-spacing for small-caps section labels (legends, panel/card eyebrows) */
   --tracking-wide: 0.05em;
 
-  /* Radius */
-  --radius-sm: 3px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
-  --radius-pill: 999px;
+  /* Radius — SQUARE CORNERS EVERYWHERE. All radii are 0: cards, inputs, banners,
+     and tag pills become rectangular labels. The four token names are kept (the
+     codebase references them in ~30 places) so the redesign is a one-line per
+     token change, not a sweep — but they all resolve to 0. */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-pill: 0;
 
-  /* Elevation — a faint resting lift gives cards figure/ground (so a list of
-     them reads as distinct objects, not a flat wall); the hover step is the
-     one shared "this is interactive" cue across every clickable card. */
-  --shadow-card: 0 1px 2px rgba(34, 40, 36, 0.05);
-  --shadow-card-hover: 0 2px 10px rgba(34, 40, 36, 0.1);
+  /* Elevation — paper cards sit on the dark shell, where a drop shadow doesn't
+     read (no lighter ground to cast onto). Figure/ground comes from the card's
+     own border + a faint amber glow; the hover step brightens that glow as the
+     shared "this is interactive" cue. (Tokens kept as box-shadow values so the
+     existing `box-shadow: var(--shadow-card)` sites need no markup change.) */
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 0 0 1px var(--color-token-dark), 0 0 12px rgba(var(--color-token-dark-rgb), 0.25);
 
   /* Layout */
   --width-content: 48rem;
@@ -93,7 +141,9 @@
 
 body {
   font-size: var(--unit);
-  color: var(--color-text);
+  color: var(--color-shell-text);
+  /* The page is the dark machine shell; content rides paper cards on top. */
+  background: var(--color-shell);
 }
 
 /* =========================================================================
@@ -101,6 +151,8 @@ body {
    ========================================================================= */
 .display {
   font-family: var(--font-display);
+  /* Doto is display-only — never below the floor where the dots turn to mud. */
+  font-size: max(var(--text-display-floor), 1em);
 }
 
 h1,
@@ -124,6 +176,28 @@ li,
 p {
   font-family: var(--font-serif);
   line-height: 1.55;
+  /* Source Serif 4 carries oldstyle (lowercase) figures — numerals that sit on
+     the baseline with ascenders/descenders, the right texture for running
+     prose. Enable them wherever serif body text runs. UI chrome (sans/Iosevka)
+     and the Doto readouts keep lining figures by not inheriting this. */
+  font-feature-settings: "onum" 1;
+}
+
+/* =========================================================================
+   Two grounds, one rule of inheritance.
+
+   The page is the dark shell (body sets color:var(--color-shell-text)), so any
+   text that sits LOOSE on the background — page H1s, the home tagline, filter
+   forms, pagination — inherits light. PAPER CARDS reverse that: a `.surface`,
+   a `.report` article, or a sandbox-free `.markdown-body` report re-establishes
+   the dark-ink-on-paper context for everything inside it. Setting the colour at
+   these two container boundaries (not on every leaf) is what lets the existing
+   per-element colours (--color-text on titles, sage on .meta) keep working on
+   paper while loose chrome flips to light without touching each call site.
+   ========================================================================= */
+.surface,
+.report {
+  color: var(--color-text);
 }
 
 /* =========================================================================
@@ -184,21 +258,23 @@ p.meta,
   margin-bottom: var(--space-lg);
 }
 
-/* A standout note in the amber accent (e.g. "N undated hidden — show"). Uses
-   the readable amber so the callout doesn't sacrifice legibility. */
+/* A standout note in the amber accent (e.g. "N undated hidden — show"). Loose on
+   the dark shell, so it takes the bright brand amber (the darkened amber-as-text
+   token is tuned for paper and would go muddy here). */
 .note {
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  color: var(--color-token-text);
+  color: var(--color-token-dark);
   margin-bottom: var(--space-lg);
 }
 .note a {
-  color: var(--color-token-text);
+  color: var(--color-token-dark);
 }
 
 /* A description paragraph beneath a title. */
 .desc {
   font-family: var(--font-serif);
+  font-feature-settings: "onum" 1;
   color: var(--color-text-soft);
 }
 
@@ -286,8 +362,12 @@ a.tag:hover {
   max-width: var(--width-content);
   font-family: var(--font-sans);
 }
+/* The filter form sits loose on the dark shell: its frame is a dark rule and its
+   labels are light chrome (the legends keep the sage eyebrow, which reads on
+   dark). The input controls themselves stay paper-white boxes — a small light
+   field the user types dark ink into, consistent with the paper-card idiom. */
 fieldset {
-  border: 1px solid var(--color-rule);
+  border: 1px solid var(--color-shell-rule);
   border-radius: var(--radius-md);
   padding: var(--space-sm) var(--space-md);
 }
@@ -309,7 +389,7 @@ legend {
   align-items: center;
   gap: var(--space-xs);
   font-size: var(--text-xs);
-  color: var(--color-text-soft);
+  color: var(--color-shell-text-soft);
 }
 .inline + .inline,
 .inline + button,
@@ -329,6 +409,8 @@ select {
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: var(--text-xs);
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 input[type="number"] {
   width: 4rem;
@@ -342,10 +424,19 @@ input[type="number"] {
    ========================================================================= */
 .markdown-body {
   font-family: var(--font-serif);
+  /* Oldstyle figures throughout rendered prose — the running-text numeral
+     texture (years, dollar figures, counts in a finding body read as prose). */
+  font-feature-settings: "onum" 1;
   line-height: 1.6;
   /* Long unbreakable tokens (URLs, hashes, dotted entity strings) wrap inside
      the column instead of spilling past its right edge onto the viewer. */
   overflow-wrap: break-word;
+}
+/* Tabular data inside prose wants aligned LINING figures, not oldstyle — a
+   column of oldstyle numbers jitters. Tables set sans (Iosevka) already; pin
+   lining figures so a serif cell that slips through still aligns. */
+.markdown-body table {
+  font-feature-settings: "lnum" 1;
 }
 .markdown-body > * + * {
   margin-top: var(--space-lg);
@@ -561,3 +652,362 @@ input[type="number"] {
 }
 /* Entity rows render as cards by composing the shared `.surface` primitive in
    the markup (class="entity surface"); the box styling lives there, not here. */
+
+/* =========================================================================
+   R4 · Finding-detail ledger treatment (#593)
+   Owns ONLY the finding-detail (.ledger) selectors. Builds on the R1
+   foundation (Doto display / Iosevka chrome / Source Serif prose, square
+   corners, amber + danger tokens) — adds nothing to :root.
+
+   Three moves:
+     1. Doto drop-cap opening the body, with TIGHT spacing around it.
+     2. Iosevka Term hed (.ledger-hed) + dek (.ledger-dek), replacing the
+        serif-italic dek.
+     3. A two-column ledger: ~62–66ch prose measure + a right-hand gutter of
+        margin-note citations. Inline daggers (†/‡ + ordinal) in the prose tie
+        back to matching gutter notes. Resolved = amber "source"; missing =
+        danger-toned "no longer available".
+
+   Citation markup (stable for R3/#592 to splice a pixel icon into):
+     inline   <sup class="cite-ref cite-ref--source|--gone" data-note="N">†N</sup>
+     gutter   <div class="margin-note margin-note--source|--gone" data-note="N">
+                <p class="margin-note__head"><span class="margin-note__dagger">†N</span> source</p>
+                <… class="margin-note__body">label</…>
+              </div>
+   The dagger glyph + ordinal is the tie-back; data-note pairs them for JS.
+   ========================================================================= */
+
+/* The ledger needs room for prose + gutter, so widen its report column and
+   let the sticky viewer take what's left. Scoped to the ledger so the
+   document-detail split (which shares .split) is untouched. */
+.split:has(.ledger) {
+  grid-template-columns: minmax(0, 54rem) minmax(0, 1fr);
+}
+
+/* --- Hed + dek: Iosevka chrome, not serif --- */
+.ledger-hed {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ledger-dek {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: var(--text-base);
+  /* lining figures: this is chrome, not running prose — no oldstyle. */
+  font-feature-settings: "lnum" 1;
+  color: var(--color-text-soft);
+  margin-bottom: var(--space-lg);
+}
+/* The shared `.split .desc` rule italicises + serif-spaces the dek; the ledger
+   overrides that to plain Iosevka. (Equal-ish specificity — pin it here.) */
+.split .ledger-dek {
+  font-style: normal;
+}
+
+/* --- Ledger column: prose (capped at a readable measure) + note gutter --- */
+.ledger-column {
+  display: grid;
+  /* ~62–66 characters at the body serif size, then the margin-note gutter. */
+  grid-template-columns: minmax(0, 36rem) minmax(0, 14rem);
+  gap: var(--space-xl);
+  align-items: start;
+  margin: var(--space-xl) 0;
+}
+/* The body already carries `.body` from the shared split rules; the ledger
+   column owns its own margins, so neutralise the shared `.split .body` block
+   margin to avoid doubling. */
+.split .ledger-column .body {
+  margin: 0;
+}
+
+/* --- Doto drop-cap, tight --- *
+   First letter of the first body paragraph, set in the display face. Floated
+   so the prose wraps around it; tight margins per the brief ("needs less space
+   around it"). Honours the display floor implicitly — a drop-cap is large. */
+.drop-cap-body > p:first-of-type::first-letter {
+  font-family: var(--font-display);
+  font-weight: 500;
+  float: left;
+  /* ~3 lines tall; line-height 0.8 + small top nudge seats it on the baseline
+     grid without a tall gap above. */
+  font-size: 3.1em;
+  line-height: 0.78;
+  margin: 0.02em 0.06em 0 0;
+  color: var(--color-text);
+}
+
+/* --- Margin-note citation gutter --- */
+.cite-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  /* Sits beside the prose; on the dark-ledger paper it reads as a quiet rail. */
+  border-left: 1px solid var(--color-rule);
+  padding-left: var(--space-lg);
+}
+.margin-note {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+.margin-note__head {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-weight: 500;
+}
+.margin-note__dagger {
+  font-weight: 700;
+}
+.margin-note__body {
+  margin: var(--space-3xs) 0 0;
+  /* font-size inherits --text-2xs from .margin-note */
+  font-feature-settings: "lnum" 1;
+  word-break: break-word;
+}
+.margin-note__body--doc {
+  font-style: italic;
+  color: var(--color-text-soft);
+}
+/* The resolved-source note links to the chunk; a bare button styled as text. */
+.margin-note__link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-token-text); /* amber-as-text, tuned for paper */
+}
+.margin-note__link:hover,
+.margin-note__link.active {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Resolved = amber "source". */
+.margin-note--source .margin-note__head {
+  color: var(--color-token-text);
+}
+/* Missing = danger tone. */
+.margin-note--gone .margin-note__head {
+  color: var(--color-danger-text);
+}
+.margin-note--gone .margin-note__body {
+  color: var(--color-danger-text);
+  font-style: italic;
+}
+
+/* --- Inline dagger anchors in the prose --- */
+.cite-ref {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 0.7em;
+  cursor: pointer;
+  /* sit snug after the word it annotates */
+  padding-left: 0.05em;
+}
+.cite-ref--source {
+  color: var(--color-token-text);
+}
+.cite-ref--gone {
+  color: var(--color-danger-text);
+}
+.cite-ref:hover {
+  text-decoration: underline;
+}
+
+/* --- Narrow screens: the gutter can't survive, so fold notes below the prose
+   as a stacked list. Margin notes degrade to end-notes; the dagger ordinals
+   still tie inline marker → note. --- */
+@media (max-width: 56rem) {
+  /* Stack the prose-over-viewer split (this is the ledger's own override of the
+     shared .split grid, so collapsing it here is in-scope for R4). */
+  .split:has(.ledger) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .split:has(.ledger) .viewer {
+    /* Stacked under the prose: drop the desktop sticky-tall height so an idle or
+       empty SourceViewer collapses to its content (B5) instead of leaving a tall
+       dead frame below the citations. */
+    height: auto;
+  }
+  .ledger-column {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cite-notes {
+    /* already column-stacked; only swap the rail from left edge to top */
+    border-left: 0;
+    border-top: 1px solid var(--color-rule);
+    padding-left: 0;
+    padding-top: var(--space-lg);
+    margin-top: var(--space-md);
+  }
+}
+
+/* =========================================================================
+   R5 · Boot/loading flourish (#594) — dot-matrix cursor + terminal empties.
+
+   A restrained retro affordance for the search route. Two pieces, both loose
+   on the dark shell:
+     - `.cursor`  a blinking Doto block, shown while a search/scan is in flight
+                  (a console "working…" tick). Honours the display floor.
+     - `.empty--terminal`  a console-prompt empty state ("> no results …").
+                  A modifier on the shared `.empty`; the base `.empty` (used by
+                  documents/findings/tags/source-viewer) is left untouched so
+                  this stays scoped to search and clear of B5 (#599).
+   ========================================================================= */
+
+/* The block tick. Doto, so it reads as one lit dot-matrix cell; held at the
+   display floor so the dots never turn to mud. Sits inline at the end of the
+   line it follows (busy banner copy, terminal-empty prompt). */
+@keyframes r5-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.cursor {
+  font-family: var(--font-display);
+  font-size: max(var(--text-display-floor), 1em);
+  /* The lit cell. A filled block glyph reads as a terminal cursor at any size. */
+  line-height: 0;
+  /* No layout shift: the cell reserves its width and only its opacity animates. */
+  animation: r5-blink 1.06s steps(1, end) infinite;
+}
+/* Respect reduced-motion: hold the cursor lit rather than blinking it. */
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+}
+
+/* Terminal-prompt empty state. Iosevka (UI chrome, not prose), a lit amber
+   prompt mark, and a trailing blinking cursor — a console waiting for input
+   with nothing to show. Overrides the base `.empty` (inherited serif + its
+   italic); equal specificity, wins on declaration order (defined after it). */
+.empty--terminal {
+  font-family: var(--font-sans);
+  font-style: normal;
+  color: var(--color-shell-text-soft);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+/* The amber `>` prompt mark that opens the line. */
+.empty--terminal::before {
+  content: ">";
+  color: var(--color-token-dark);
+  font-weight: 500;
+}
+
+/* =========================================================================
+   B3 · Highlight matched terms in search/scan result snippets (#597).
+
+   <mark> inside .snippet wraps the exact token(s) the query matched, rendered
+   client-side by ResultCard as a {#each} over {text, highlight} segments — no
+   raw-HTML injection, no XSS surface. Markdown snippets are left untouched
+   (they go through `marked`; injecting <mark> mid-parse would corrupt the AST).
+
+   Snippets render on PAPER cards (.surface, light ground), so the highlight
+   color must read on a light background. We use --color-token (pale amber fill)
+   with --color-token-dark as the underline accent — consistent with the tag
+   chips and the amber design language throughout.
+   ========================================================================= */
+
+/* Reset browser's default <mark> yellow and use the design-system amber wash. */
+.snippet mark {
+  background: var(--color-token);        /* pale amber fill, legible on paper */
+  color: inherit;                        /* keep the serif text color */
+  border-radius: 0;                      /* square corners, per the R1 radius reset */
+  padding: 0 0.1em;
+  /* A hairline amber underline gives the highlight a second visual anchor
+     beyond fill alone — visible even in printed / high-contrast contexts. */
+  text-decoration: underline;
+  text-decoration-color: var(--color-token-dark);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* =========================================================================
+   B2 · Use the width — card grids for "cardable" list pages.
+
+   .card-grid    Responsive CSS grid for documents and tags. `auto-fill` with
+                 an 18rem floor means one column on mobile, two at ~36rem,
+                 three at ~54rem+, etc. Cards inside carry
+                 `.surface .surface--interactive`.
+   ========================================================================= */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--space-xl);
+  list-style: none;
+  padding: 0;
+}
+.card-grid h2 {
+  font-size: var(--text-lg);
+}
+.card-grid a {
+  color: inherit;
+  text-decoration: none;
+}
+.card-grid a:hover {
+  color: var(--color-off);
+}
+.card-grid .desc {
+  margin: var(--space-2xs) 0 0;
+}
+
+/* =========================================================================
+   R3 · Pixelarticons 1-bit icon set (#592)
+   Adopts Pixelarticons (https://pixelarticons.com, MIT) — 1-bit pixel-art
+   glyphs — for nav links, card eyebrows, the chunk "open in context" link, and
+   the citation daggers. Glyphs are inline <svg> strings in lib/icons.js
+   (tree-shaken; no runtime icon dependency), emitted via {@html} so they pick
+   up `currentColor` at each site — nav shell-text, card ink, citation amber.
+
+   This block owns ONLY icon presentation (sizing + the pixelated render hint
+   + the citation-dagger glyph). It adds nothing to :root and touches none of
+   R1's tokens or the two-grounds rules.
+   ========================================================================= */
+
+/* Shared glyph rule. Every Pixelarticon carries `.pixel`; the inline width/
+   height set its box, but when a glyph is scaled up `image-rendering: pixelated`
+   keeps the 1-bit squares crisp instead of blurring them. `fill: currentColor`
+   is also on the element, so the glyph inherits its site's text color. */
+.pixel {
+  display: inline-block;
+  image-rendering: pixelated;
+  /* Don't let the glyph stretch the line-box it rides in. */
+  vertical-align: middle;
+  flex: none;
+}
+
+/* --- Citation daggers (R4 #593) get a Pixelarticons bookmark mark ---
+   R4's render emits `<sup class="cite-ref …">†N</sup>` inline and a
+   `.margin-note__dagger` in the gutter, with the †/ordinal as the tie-back. We
+   DON'T touch that markup: a ::before pseudo on the gutter dagger paints a small
+   pixel bookmark via CSS mask, so it inherits the head color (amber for source,
+   danger for gone) and the †N tie-back text stays exactly as R4 wrote it. */
+.margin-note__dagger::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 0.25em;
+  vertical-align: -1px;
+  background-color: currentColor;
+  image-rendering: pixelated;
+  -webkit-mask: var(--pixel-bookmark) center / contain no-repeat;
+  mask: var(--pixel-bookmark) center / contain no-repeat;
+}
+:root {
+  /* Pixelarticons "bookmark" (MIT), inlined as a mask data-URI. Mask uses alpha
+     only, so the fill is irrelevant — the dagger's currentColor shows through. */
+  --pixel-bookmark: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M6%202h12v2H6zM4%204h2v18H4zm14%200h2v18h-2zm-2%2016h2v2h-2zm-2-2h2v2h-2zm-8%202h2v2H6zm2-2h2v2H8zm2-2h4v2h-4z%22%2F%3E%3C%2Fsvg%3E");
+}

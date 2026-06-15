@@ -1,5 +1,5 @@
 <script>
-  import { pluralize } from "$lib/format.js";
+  import { formatDateRange, pluralize } from "$lib/format.js";
 
   export let data;
 
@@ -37,7 +37,7 @@
       // All findings in one session share its run, so the model is the first
       // item's — the axis the multi-model comparison cares about (#547).
       const model = modelLabel(items[0]);
-      return { name, items, total, model, span: lo === hi ? hi : `${lo} – ${hi}` };
+      return { name, items, total, model, span: formatDateRange(lo, hi) };
     });
   })();
 
@@ -97,6 +97,10 @@
       </button>
     </div>
 
+    <!-- The index is content (the agent's findings), so it rides a paper card on
+         the dark shell — the .surface ground re-establishes dark-ink-on-paper so
+         the dense table and its mint hover rows stay readable. -->
+    <div class="index-card surface">
     {#if mode === "table"}
       <table class="findings-table">
         <thead>
@@ -156,15 +160,17 @@
         {/each}
       </div>
     {/if}
+    </div>
   {/if}
 </div>
 
 <style>
-  /* The findings page runs wider than the reading column so the index table has
-     room for its columns and the heroes can sit two-up. 72rem is a structural
-     width, not a token (the design system reserves --width-content for prose). */
+  /* The findings page fills available width: the heroes grid expands to fill the
+     viewport, and the index table gets room for all its columns. The old 72rem
+     cap was a placeholder; B2 removes it so findings use the full width like
+     document and tag card grids (#596). */
   .findings {
-    max-width: 72rem;
+    /* No max-width: let the heroes grid and index table expand to the viewport. */
   }
 
   .findings-head {
@@ -192,10 +198,12 @@
      mint .surface--finding base reads as "agent output" (same signal as the
      detail report); .hero only enlarges them and lays them side by side. They
      also reappear in the index below: a spotlight over a complete list, by
-     design — not a de-dupe bug. */
+     design — not a de-dupe bug.
+     auto-fill with 24rem floor: stays 2-up on most desktops, collapses to 1
+     on mobile — consistent with the document/tag card-grid idiom (#596). */
   .heroes {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
     gap: var(--space-lg);
     margin-bottom: var(--space-xl);
   }
@@ -444,9 +452,6 @@
     color: var(--color-off);
   }
 
-  @media (max-width: 48rem) {
-    .heroes {
-      grid-template-columns: 1fr;
-    }
-  }
+  /* Heroes collapse to single column automatically via auto-fill/minmax above;
+     no manual breakpoint needed (#596). */
 </style>

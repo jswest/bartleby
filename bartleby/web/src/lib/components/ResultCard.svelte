@@ -1,22 +1,28 @@
 <script>
   import { marked } from "marked";
-  import { pluralize, stripExt, isMarkdownChunk } from "$lib/format.js";
-  import { CHUNK_ICON as chunkIcon } from "$lib/icons.js";
+  import { pluralize, stripExt, isMarkdownChunk, highlightTerms } from "$lib/format.js";
+  import {
+    CHUNK_ICON as chunkIcon,
+    FINDINGS_ICON,
+    DOCUMENTS_ICON,
+  } from "$lib/icons.js";
 
   // One card for both search hits and scan matches — they share ~90% of their
   // shape. `variant` picks the two differences: a search hit shows a normalized
-  // score badge; a scan match shows a character count and a truncation ellipsis.
+  // score badge; a scan match shows a character count.
   //
   // `item` is enriched server-side with title (summary/finding title),
   // description, file_name, href (document detail page at the cited page, or
   // finding page), page_number, section_heading, content_type, chunk_id, text.
   // Search adds normalized_score + source_kind + source_id; scan adds text_length.
+  // `query` (the raw query string) is passed through so matched terms can be
+  // wrapped in <mark> on the client — no raw HTML injection, just Svelte {#each}.
   export let item;
   export let variant = "search"; // "search" | "scan"
+  export let query = "";
 
   $: title = item.title ?? stripExt(item.file_name) ?? item.source_name;
   $: scorePct = Math.round((item.normalized_score ?? 0) * 100);
-  $: truncated = variant === "scan" && item.text_length > item.text.length;
 
   // The "open chunk in context" link → /chunks/<id>. Built as a string (chunk_id
   // is an integer, so no escaping) and {@html}'d so the identical markup isn't
@@ -32,6 +38,17 @@
   // marked.parse is sanitized globally (the +layout.svelte marked.use hook wires
   // DOMPurify), so {@html} here is safe.
   $: isMarkdown = isMarkdownChunk(item);
+
+  // B3: split the plain-text snippet into {text, highlight} segments so the
+  // template can wrap matched terms in <mark> without any raw-HTML injection.
+  // Markdown snippets go through `marked` and keep their own emphasis; we leave
+  // them unmarked (injecting <mark> mid-parse would corrupt the AST).
+  $: snippetSegments = isMarkdown ? null : highlightTerms(item.text, query);
+
+  // Source-kind eyebrow glyph (search variant): a sparkle for agent findings,
+  // a file-text for everything document-derived — the same mint/paper signal the
+  // home cards teach.
+  $: kindIcon = item.source_kind === "finding" ? FINDINGS_ICON : DOCUMENTS_ICON;
 </script>
 
 <li class="result surface surface--interactive">
@@ -58,7 +75,7 @@
 
   <p class="meta">
     {#if variant === "search"}
-      <span class="kind">{item.source_kind}</span>
+      <span class="kind"><span class="kind-icon">{@html kindIcon}</span>{item.source_kind}</span>
       {#if item.section_heading} · {item.section_heading}{/if}
       {#if item.content_type} · {item.content_type}{/if}
       · chunk {item.chunk_id}{@html chunkLink}
@@ -76,7 +93,11 @@
   {#if isMarkdown}
     <div class="snippet markdown-body markdown-body--compact">{@html marked.parse(item.text)}</div>
   {:else}
-    <p class="snippet">{item.text}{#if truncated}<span class="trunc">…</span>{/if}</p>
+    <p class="snippet">
+      {#each snippetSegments as seg}
+        {#if seg.highlight}<mark>{seg.text}</mark>{:else}{seg.text}{/if}
+      {/each}
+    </p>
   {/if}
 </li>
 
@@ -133,6 +154,17 @@
     letter-spacing: 0.04em;
     font-weight: 600;
   }
+  /* R3 (#592): a Pixelarticon eyebrow before the source-kind label, inheriting
+     the meta-line ink. Small inline glyph riding the baseline. */
+  .kind-icon {
+    display: inline-flex;
+    vertical-align: -2px;
+    margin-right: var(--space-3xs);
+  }
+  .kind-icon :global(.pixel) {
+    width: 12px;
+    height: 12px;
+  }
   /* Tiny "open chunk" affordance riding the meta line, right after the chunk id.
      Sits on the baseline of the surrounding text; brightens to the link color on
      hover so it's discoverable without shouting. */
@@ -147,7 +179,7 @@
   }
   /* The glyph is injected via {@html}, so it sits outside Svelte's scoping —
      reach it with :global (the .chunk-link ancestor is still scoped). */
-  .chunk-link :global(.icon) {
+  .chunk-link :global(.pixel) {
     position: relative;
     top: 1px;
   }
@@ -155,8 +187,5 @@
     margin-top: var(--space-sm);
     font-family: var(--font-serif);
     line-height: 1.5;
-  }
-  .trunc {
-    color: var(--color-off);
   }
 </style>

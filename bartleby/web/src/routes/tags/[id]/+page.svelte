@@ -27,8 +27,11 @@
     color: var(--color-off);
     text-decoration: none;
   }
+  /* The tag blurb runs loose on the dark shell (not on a card), so it takes the
+     light shell-soft ink instead of the paper-tuned --color-text-soft. */
   .tag-desc {
     max-width: var(--width-content);
+    color: var(--color-shell-text-soft);
     font-style: italic;
     margin-bottom: var(--space-xl);
   }
