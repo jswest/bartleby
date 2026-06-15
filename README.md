@@ -237,6 +237,15 @@ bartleby serve
 
 Spins up a local SvelteKit UI for the active project — a corpus overview, document and finding browsers, and full-corpus search, with inline citations that link into the source PDFs at the cited page (full tour under [`bartleby serve`](#bartleby-serve)). It opens the database read-only, so it's safe to leave running alongside an ingest or a research session. Requires Node.js and npm on `PATH`.
 
+### 6. Share a single finding out of band
+
+```
+bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
+bartleby finding import path/to/finding.md      # into the active project (or --project)
+```
+
+`finding export` writes a self-describing Markdown artifact: a YAML front-matter block (title, description, and baked-in provenance — the source corpus, the original finding id, and the export date) followed by the body. The body's corpus citations are rewritten inline as inert `[corpus: <file> · p.<N>]` markers so the artifact stands alone on a machine that doesn't have the corpus. `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line to the body (there's no author/origin column, so origin lives in the text). Imported corpus citations stay inert markers — they are *not* re-resolved to local chunk ids — and the finding then renders like any other local finding. This is the lightweight, no-S3 alternative to `bartleby project publish` / `import` when you just want to hand one finding to someone.
+
 ---
 
 ## Architecture

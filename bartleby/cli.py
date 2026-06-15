@@ -103,6 +103,27 @@ def main():
              "prompting (drops its local findings)",
     )
 
+    finding_parser = subparsers.add_parser(
+        "finding", help="Export / import a single finding as a self-describing .md"
+    )
+    finding_sub = finding_parser.add_subparsers(dest="finding_command")
+    fex = finding_sub.add_parser(
+        "export",
+        help="Write a self-describing .md (front-matter + provenance) for a finding",
+    )
+    fex.add_argument("finding_id", type=int, metavar="finding-id")
+    fex.add_argument("--project", type=str, default=None)
+    fex.add_argument(
+        "--out", type=str, default=None, metavar="PATH",
+        help="Output path (default: <slugified-title>.md in the cwd).",
+    )
+    fim = finding_sub.add_parser(
+        "import",
+        help="Import a finding artifact .md into a project (provenance baked in)",
+    )
+    fim.add_argument("path", type=str)
+    fim.add_argument("--project", type=str, default=None)
+
     scribe_parser = subparsers.add_parser(
         "scribe",
         help="Ingest PDF, HTML, MD, TXT, and image files into a project",
@@ -334,6 +355,7 @@ def main():
         "config": lambda: _config(),
         "ready": lambda: _ready(args),
         "project": lambda: _project(args, project_parser),
+        "finding": lambda: _finding(args, finding_parser),
         "scribe": lambda: _scribe(args),
         "session": lambda: _session(args, session_parser),
         "embed": lambda: _embed(args),
@@ -459,6 +481,21 @@ def _project(args, parser):
             name=args.name, from_url=args.from_url,
             without_tags=args.without_tags, yes=args.yes,
         )
+
+
+def _finding(args, parser):
+    from bartleby.commands import finding as finding_cmd
+
+    if not args.finding_command:
+        parser.print_help()
+        sys.exit(1)
+
+    if args.finding_command == "export":
+        finding_cmd.export(
+            finding_id=args.finding_id, project=args.project, out=args.out,
+        )
+    elif args.finding_command == "import":
+        finding_cmd.import_(path=args.path, project=args.project)
 
 
 def _session(args, parser):
