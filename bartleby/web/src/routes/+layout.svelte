@@ -124,4 +124,43 @@
        slide under it; the horizontal value is the shared page gutter. */
     padding: 4rem var(--space-lg) var(--space-2xl);
   }
+
+  /* =========================================================================
+     B1 · Mobile nav — responsive wrap at ≤480px (#595)
+     Strategy: wrap .bar to two lines so every nav destination stays reachable
+     at 375px with no page-level horizontal scroll.
+       Row 1: wordmark (.brand) + project badge (.project, right-aligned)
+       Row 2: nav links (.links), spanning full width
+     No JS, no hamburger — all four links stay visible and tappable.
+     NOTE: R3 (#592) will add Pixelarticons; keep link markup clean.
+     ========================================================================= */
+  @media (max-width: 480px) {
+    .bar {
+      flex-wrap: wrap;
+      gap: var(--space-sm) var(--space-lg);
+      /* Reduce vertical padding so the two-line header doesn't consume too
+         much of the small viewport. */
+      padding: var(--space-sm) var(--space-md);
+    }
+    /* Row 1: brand fills available space; .project stays at the right end via
+       margin-left:auto inherited from the default rule above. */
+    .brand {
+      /* Let the wordmark shrink but keep it above the dot-matrix floor so
+         Doto characters stay legible (--text-display-floor = 1.25rem). */
+      font-size: var(--text-display-floor);
+    }
+    /* Row 2: links row takes the full bar width, baseline-aligns with smaller
+       gaps so all four items fit across 375px. */
+    .links {
+      width: 100%;
+      gap: var(--space-md);
+    }
+    .links a {
+      font-size: var(--text-sm);
+    }
+    main {
+      /* Taller offset: two-line header is ~3rem taller at mobile. */
+      padding-top: 6.5rem;
+    }
+  }
 </style>
