@@ -42,7 +42,7 @@ def _other_session(conn, name: str = "author") -> int:
 def test_read_chunks_happy_path(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "document"
@@ -57,7 +57,7 @@ def test_read_chunks_happy_path(seeded_project, capsys):
 def test_read_chunks_pagination(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--offset", "1", "--limit", "2",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -70,7 +70,7 @@ def test_read_chunks_unknown_document(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", "999",
+            "--document-id", "999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -116,7 +116,7 @@ def _document_id_only(project: str) -> int:
 
 
 def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys):
-    """--document with a live chunk_id errors with a 'did you mean --chunks' hint.
+    """--document-id with a live chunk_id errors with a 'did you mean --chunks' hint.
 
     Use the highest chunk_id, which lies above max(document_id) here, so it is a
     chunk_id but not a document_id.
@@ -126,7 +126,7 @@ def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys)
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", str(chunk_id),
+            "--document-id", str(chunk_id),
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -137,7 +137,7 @@ def test_read_chunks_unknown_document_that_is_a_chunk_id(seeded_project, capsys)
 
 
 def test_read_chunks_by_id_hints_when_missing_is_a_document_id(seeded_project, capsys):
-    """A --chunks miss that is a live document_id gets a 'did you mean --document' hint."""
+    """A --chunks miss that is a live document_id gets a 'did you mean --document-id' hint."""
     # A document-only id (no matching chunk_id) misses the chunk lookup, so the
     # cross-namespace hint fires.
     doc_id = _document_id_only(seeded_project["project"])
@@ -150,7 +150,7 @@ def test_read_chunks_by_id_hints_when_missing_is_a_document_id(seeded_project, c
     assert out["missing"] == [doc_id]
     assert out["chunks"] == []
     assert out["hints"] == {
-        str(doc_id): f"{doc_id} is a document_id — did you mean --document {doc_id}?"
+        str(doc_id): f"{doc_id} is a document_id — did you mean --document-id {doc_id}?"
     }
 
 
@@ -201,7 +201,7 @@ def test_read_chunks_document_mode_includes_page_number(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
     ])
     out = json.loads(capsys.readouterr().out)
     pages = [c["page_number"] for c in out["chunks"]]
@@ -254,7 +254,7 @@ def test_read_chunks_document_and_chunks_mutually_exclusive(seeded_project, caps
     with pytest.raises(SystemExit):
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
             "--chunks", "1,2,3",
         ])
 
@@ -282,7 +282,7 @@ def test_read_chunks_preview_truncates_text(seeded_project, capsys):
 
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--offset", "4", "--limit", "2",
         "--preview", "50",
     ])
@@ -299,7 +299,7 @@ def test_read_chunks_emits_text_length_without_preview(seeded_project, capsys):
     """text_length is always present and reflects the actual stored text length."""
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["preview"] is None
@@ -343,7 +343,7 @@ def test_read_chunks_preview_rejects_invalid(seeded_project, bad):
     with pytest.raises(SystemExit):
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
             "--preview", bad,
         ])
 
@@ -623,7 +623,7 @@ def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, ba
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]), *bad,
+            "--document-id", str(seeded_project["doc_a"]), *bad,
         ])
     assert exc.value.code == 1
     assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
@@ -635,7 +635,7 @@ def test_read_chunks_out_of_range_pagination_rejected(seeded_project, capsys, ba
 def test_read_chunks_document_mode_returning(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--returning", "chunk_id,document_id,source_name",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -650,7 +650,7 @@ def test_read_chunks_document_mode_returning(seeded_project, capsys):
 def test_read_chunks_document_default_projection_unchanged(seeded_project, capsys):
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
     ])
     out = json.loads(capsys.readouterr().out)
     # Locator-light default row (no source_*/file_name/document_id leak).
@@ -709,7 +709,7 @@ def test_read_chunks_returning_unknown_field_errors(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_a"]),
+            "--document-id", str(seeded_project["doc_a"]),
             "--returning", "chunk_id,bogus",
         ])
     assert exc.value.code == 1
@@ -727,7 +727,7 @@ def test_read_chunks_returning_unknown_field_errors_on_zero_rows(
     with pytest.raises(SystemExit) as exc:
         read_chunks.main([
             "--project", seeded_project["project"],
-            "--document", "999999",
+            "--document-id", "999999",
             "--returning", "chunk_id,bogus",
         ])
     assert exc.value.code == 1

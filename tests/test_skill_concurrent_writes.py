@@ -211,7 +211,7 @@ def test_concurrent_edit_findings_serialize(seeded_project, tmp_path):
         bf.write_text(f"Edited body {i}[^{cited}].", encoding="utf-8")
         argvs.append([
             "--project", project,
-            "--finding", str(finding_ids[i]),
+            "--finding-id", str(finding_ids[i]),
             "--body-file", str(bf),
         ])
 

@@ -186,7 +186,7 @@ def test_read_document_suppresses_stub_summary_but_keeps_date(dated_corpus, caps
     capsys.readouterr()
     read_document.main([
         "--project", dated_corpus["project"],
-        "--document", str(dated_corpus["stub_doc"]),
+        "--document-id", str(dated_corpus["stub_doc"]),
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -199,7 +199,7 @@ def test_read_document_exposes_authored_date_for_real_summary(dated_corpus, caps
     capsys.readouterr()
     read_document.main([
         "--project", dated_corpus["project"],
-        "--document", str(dated_corpus["summary_doc"]),
+        "--document-id", str(dated_corpus["summary_doc"]),
         "--summary",
     ])
     out = json.loads(capsys.readouterr().out)

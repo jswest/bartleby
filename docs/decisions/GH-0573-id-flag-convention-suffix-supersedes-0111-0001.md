@@ -1,0 +1,18 @@
+# Id-valued flags take a `-id` suffix everywhere — *name the value you accept* (issue #573, supersedes #111)
+
+> Source: [#573](https://github.com/jswest/bartleby/issues/573)
+
+This **overturns the #111 convention** (id-taking flags name the bare noun, the `_id` lives only on `dest`). The new rule is *name the value you accept*: a flag that takes a single **id** ends in **`-id`** (`--finding-id`, `--document-id`, `--chunk-id`), while a flag that takes a name/key/path/predicate stays **bare** (`--project`, `--run`, `--tag`, `--file-like`, `--heading-like`, `--from`, `--out`). Mechanically this is an enforceable biconditional: **a skill/CLI flag's option string ends in `-id` IFF its argparse `dest` ends in `_id`** — `dest` already tracks the value's nature, so it is the source of truth.
+
+**Why the reversal.** The motivating force is agent parity. Every skill script prints JSON whose id fields are named `finding_id` / `document_id` / `chunk_id`; the agent reads an id out of one command's output and passes it straight into the next. Under #111 that loop was asymmetric — output `finding_id`, input `--finding` — a small but real translation step the agent (and the human reading a transcript) had to perform on every hop. Under #573 the loop reads symmetrically: a `finding_id` read from `list_findings` is passed verbatim as `read_finding --finding-id <that value>`. The flag name now mirrors the JSON key it consumes.
+
+**Renamed flags (no back-compat alias — `--finding` etc. are gone).** Across both surfaces, the singular id-valued flags (those whose `dest` ends exactly in `_id`):
+- `--finding` → `--finding-id` — `delete_finding`, `edit_finding`, `read_finding`
+- `--document` → `--document-id` — `save_date`, `save_summary`, `read_document`, `read_chunks`, `tag`
+- `--chunk` → `--chunk-id` — `assign_tag`
+
+**What deliberately stays bare** (the same biconditional, read the other way — `dest` does not end in `_id`): plural/relational id flags carry an `_ids` (or other-stem) dest — `--documents` (`document_ids`), `--chunks` (`chunk_ids`), `--from` (`from_ids`), `--into` (`into`), `--around-chunk` (`around_chunk`) — and name/key/path flags carry a non-id dest (`--project`, `--tag`, `--run`, `--out`, …). The `bartleby finding export` group already took the finding id as a **positional** (`finding_id`, metavar `finding-id`), which is compliant; the #518/#521 siblings (`finding export/import`, the `--from` source-URL flag) introduced no `--finding` flag and needed no fix.
+
+**Enforcement.** `tests/test_skill_flag_conventions.py` flips the old #111 guard into the new biconditional (`test_id_flag_suffix_matches_dest`) over the skill-script roster, so it can neither drift back to the bare-noun form nor accept a new bare id flag. A second guard (`test_no_stale_bare_id_flag_anywhere`) greps every version-controlled file for a stale `--finding`/`--document`/`--chunk` *invocation* (the token bounded by non-word, non-hyphen — so `--finding-id`, `--documents`, `--around-chunk`, and the `surface--finding` CSS class never trip it), allow-listing `docs/decisions/` (this record names old→new; prior records quote the historical convention) and the guard test itself (its docstrings spell out both forms). There is no in-repo CHANGELOG to allow-list; release notes live in GitHub Releases.
+
+**Release note.** Agent-facing **breaking change, no alias**: the old `--finding` / `--document` / `--chunk` skill-script flags are renamed to `--finding-id` / `--document-id` / `--chunk-id`. Agents/scripts invoking the old spellings must update. No schema change, no `SCHEMA_VERSION` bump, no re-ingest — this is interface + docs only.

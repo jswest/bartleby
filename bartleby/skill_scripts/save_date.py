@@ -27,7 +27,7 @@ from bartleby.skill_scripts._common import positive_int
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("save_date", __doc__)
-    p.add_argument("--document", type=positive_int, required=True, dest="document_id")
+    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--date", type=str, default=None, dest="authored_date",
