@@ -894,3 +894,32 @@ input[type="number"] {
   color: var(--color-token-dark);
   font-weight: 500;
 }
+
+/* =========================================================================
+   B2 · Use the width — card grids for "cardable" list pages.
+
+   .card-grid    Responsive CSS grid for documents and tags. `auto-fill` with
+                 an 18rem floor means one column on mobile, two at ~36rem,
+                 three at ~54rem+, etc. Cards inside carry
+                 `.surface .surface--interactive`.
+   ========================================================================= */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--space-xl);
+  list-style: none;
+  padding: 0;
+}
+.card-grid h2 {
+  font-size: var(--text-lg);
+}
+.card-grid a {
+  color: inherit;
+  text-decoration: none;
+}
+.card-grid a:hover {
+  color: var(--color-off);
+}
+.card-grid .desc {
+  margin: var(--space-2xs) 0 0;
+}

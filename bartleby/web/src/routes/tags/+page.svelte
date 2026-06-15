@@ -9,7 +9,7 @@
 {#if data.tags.length === 0}
   <p class="empty">No tags created yet.</p>
 {:else}
-  <ul class="entity-list">
+  <ul class="card-grid">
     {#each data.tags as t}
       <li class="entity surface surface--interactive">
         <h2><a href="/tags/{t.tag_id}">{t.name}</a></h2>
