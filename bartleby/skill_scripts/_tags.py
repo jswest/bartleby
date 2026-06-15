@@ -274,6 +274,18 @@ class Scope:
         return f"{col} IN ({ph})", list(self.document_ids)
 
 
+def _date_bounds(after: str | None, before: str | None) -> tuple[str, list]:
+    """``("s.authored_date >= ? AND …", [params])`` for an active date bound."""
+    clauses, params = [], []
+    if after is not None:
+        clauses.append("s.authored_date >= ?")
+        params.append(after)
+    if before is not None:
+        clauses.append("s.authored_date <= ?")
+        params.append(before)
+    return " AND ".join(clauses), params
+
+
 def _apply_date_bound(
     conn, base_ids: list[int] | None, *,
     after: str | None, before: str | None, include_nulls: bool,
@@ -287,14 +299,7 @@ def _apply_date_bound(
     excluded by default and counted in ``excluded_null_dated``; ``include_nulls``
     keeps them and zeros the count.
     """
-    bounds, bound_params = [], []
-    if after is not None:
-        bounds.append("s.authored_date >= ?")
-        bound_params.append(after)
-    if before is not None:
-        bounds.append("s.authored_date <= ?")
-        bound_params.append(before)
-    bounds_sql = " AND ".join(bounds)
+    bounds_sql, bound_params = _date_bounds(after, before)
 
     base_sql, base_params = "", []
     if base_ids is not None:
@@ -338,14 +343,7 @@ def _apply_date_bound_to_temp(
     Removes rows that don't satisfy the date bound, returning ``excluded_null_dated``.
     The temp table is modified in place so callers retain the same table name.
     """
-    bounds, bound_params = [], []
-    if after is not None:
-        bounds.append("s.authored_date >= ?")
-        bound_params.append(after)
-    if before is not None:
-        bounds.append("s.authored_date <= ?")
-        bound_params.append(before)
-    bounds_sql = " AND ".join(bounds)
+    bounds_sql, bound_params = _date_bounds(after, before)
 
     cur = conn.cursor()
     excluded = 0
