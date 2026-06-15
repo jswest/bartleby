@@ -92,7 +92,7 @@ def seed_finding_via_main(seeded_project, tmp_path, capsys, *, title,
 
     body_file = tmp_path / "seed.md"
     body_file.write_text(
-        f"# Seed\n\nClaim one[^{a}]. Claim two[^{b}].{body_suffix}",
+        f"# Seed\n\nClaim one[^chunk:{a}]. Claim two[^chunk:{b}].{body_suffix}",
         encoding="utf-8",
     )
     save_finding.main([

@@ -36,7 +36,8 @@ def test_delete_finding_removes_row_chunks_and_citations(
         seeded_project, tmp_path, capsys,
         title="Stale draft", description="A draft to retract.",
     )
-    finding_id = saved["finding_id"]
+    finding_id = saved["finding_id"]  # type-tagged, e.g. "finding:1"
+    fid = int(finding_id.split(":")[1])
     a, b = saved["_chunks"]
 
     # Capture the finding's own body chunk ids before deletion.
@@ -46,7 +47,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
             r[0] for r in conn.cursor().execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ?",
-                (finding_id,),
+                (fid,),
             )
         ]
     finally:
@@ -55,7 +56,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
 
     delete_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(finding_id),
+        "--finding-id", finding_id,
     ])
     out = json.loads(capsys.readouterr().out)
 
@@ -70,12 +71,12 @@ def test_delete_finding_removes_row_chunks_and_citations(
         cur = conn.cursor()
         # The findings row is gone.
         assert cur.execute(
-            "SELECT COUNT(*) FROM findings WHERE finding_id = ?", (finding_id,),
+            "SELECT COUNT(*) FROM findings WHERE finding_id = ?", (fid,),
         ).fetchone()[0] == 0
         # finding_citations cascaded.
         assert cur.execute(
             "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()[0] == 0
         # The finding's body chunks are gone from chunks + the vec mirror.
         # (chunks_fts is external-content, so a per-rowid COUNT reads THROUGH
@@ -84,7 +85,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
         assert cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind='finding' "
             "AND source_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()[0] == 0
         for cid in body_chunk_ids:
             assert cur.execute(
@@ -105,7 +106,7 @@ def test_delete_finding_unknown_id(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         delete_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", "99999",
+            "--finding-id", "finding:99999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -132,7 +133,7 @@ def test_delete_finding_memory_off_other_session(seeded_project, capsys):
 
     with pytest.raises(SystemExit) as exc:
         delete_finding.main([
-            "--project", project, "--finding-id", str(finding_id),
+            "--project", project, "--finding-id", f"finding:{finding_id}",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -152,8 +153,8 @@ def test_delete_finding_memory_off_own_session(seeded_project, capsys):
     finally:
         conn.close()
 
-    delete_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    delete_finding.main(["--project", project, "--finding-id", f"finding:{finding_id}"])
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "deleted"
-    assert out["finding_id"] == finding_id
+    assert out["finding_id"] == f"finding:{finding_id}"
     assert not _finding_exists(project, finding_id)

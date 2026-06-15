@@ -37,7 +37,8 @@ Output:
       "memory_excluded": bool,
       "context": int,
       "results": [{
-        "chunk_id": int, "source_kind": str, "source_id": int,
+        "chunk_id": "chunk:<id>", "source_kind": str,
+        "source_id": "<source_kind>:<id>",   # prefixed by source_kind
         "source_name": str,
         "file_name": str|null,        # the originating doc (None for findings)
         "page_number": int|null,      # first-class column; populated for pdfplumber + image chunks
@@ -47,13 +48,13 @@ Output:
         "text": str,
         # context_before/context_after are present only with --add-context > 0;
         # omitted entirely at the default --add-context 0.
-        "context_before": [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
-        "context_after":  [{"chunk_id": int, "chunk_index": int, "text": str}, ...],
+        "context_before": [{"chunk_id": "chunk:<id>", "chunk_index": int, "text": str}, ...],
+        "context_after":  [{"chunk_id": "chunk:<id>", "chunk_index": int, "text": str}, ...],
         "rank": int,                  # 1-indexed within this query's results
         "score": float,               # raw RRF score (small, don't compare across queries)
         "normalized_score": float,    # top hit = 1.0, others scaled to that
         # image hits only:
-        "image_id": int, "image_file_path": str,
+        "image_id": "image:<id>", "image_file_path": str,
       }, ...]
     }
 
@@ -93,8 +94,11 @@ from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_date_filter_args, add_file_like_arg, add_returning_arg, apply_preview,
-    chunk_locations, comma_int_list, memory_enabled, positive_int, project_row,
+    chunk_locations, memory_enabled, positive_int, project_row,
     source_names, text_qualified_fts, validate_returning,
+)
+from bartleby.skill_scripts._ids import (
+    format_output_ids, format_source_id, prefixed_int_list,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -143,13 +147,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--full-text", action="store_true", dest="full_text")
     p.add_argument(
         "--in-documents",
-        type=comma_int_list("document_id"),
+        type=prefixed_int_list("document"),
         default=None,
         dest="in_documents",
         help=(
-            "Comma-separated document_ids. Scopes the search to those "
-            "documents' chunks and their summaries' chunks. Findings are "
-            "dropped (they are not tied to documents)."
+            "Comma-separated type-tagged document ids (e.g. "
+            "document:12,document:34). Scopes the search to those documents' "
+            "chunks and their summaries' chunks. Findings are dropped (they are "
+            "not tied to documents)."
         ),
     )
     p.add_argument(
@@ -436,14 +441,17 @@ def work(*, conn, args, session_id) -> dict:
         source_kinds = [k for k in source_kinds if k != "finding"]
 
     def _response(results: list) -> dict:
-        return scope.echo_into({
+        # Type-tag every id field across the envelope (chunk_id, document_id,
+        # image_id in hit rows + context arrays); source_id is already prefixed
+        # by kind at row-build time and passes through untouched.
+        return format_output_ids(scope.echo_into({
             "query": args.query,
             "modes": modes,
             "source_kinds": source_kinds,
             "memory_excluded": memory_excluded,
             "context": args.context,
             "results": results,
-        })
+        }))
 
     # No source kinds left, or a scope filter that matched nothing: zero hits.
     if not source_kinds or (restrict is not None and not restrict):
@@ -504,7 +512,8 @@ def work(*, conn, args, session_id) -> dict:
                 "chunk_id": chunk_id,
                 "document_id": source_id if source_kind == "document" else None,
                 "source_kind": source_kind,
-                "source_id": source_id,
+                # source_id is polymorphic: prefix by source_kind, not the map.
+                "source_id": format_source_id(source_kind, source_id),
                 "source_name": source_name,
                 "file_name": loc["file_name"],
                 "page_number": loc["page_number"],
@@ -535,7 +544,8 @@ def work(*, conn, args, session_id) -> dict:
         hit = {
             "chunk_id": chunk_id,
             "source_kind": source_kind,
-            "source_id": source_id,
+            # source_id is polymorphic: prefix by source_kind, not the map.
+            "source_id": format_source_id(source_kind, source_id),
             "source_name": source_name,
             "file_name": loc["file_name"],
             "page_number": loc["page_number"],
@@ -549,7 +559,8 @@ def work(*, conn, args, session_id) -> dict:
             "normalized_score": score / top_score,
         }
         # Neighbor context is opt-in; at --add-context 0 (the triage default) the
-        # keys are omitted entirely rather than shipped as empty arrays.
+        # keys are omitted entirely rather than shipped as empty arrays. The
+        # context dicts carry chunk_id (prefixed by format_output_ids below).
         if args.context > 0:
             before, after = _fetch_context(
                 conn, source_kind, source_id, chunk_index, args.context

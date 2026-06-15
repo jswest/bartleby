@@ -21,12 +21,12 @@ then written to every named document (one value per (tag, document)). Optionally
 anchor it to a chunk with ``--chunk-id <id>`` (the citation source). ``--value`` is
 rejected on a plain boolean tag; ``--chunk-id`` requires ``--value``.
 
-Output:
-    {"tag_id": int, "tag": str,
+Output (ids are type-tagged, e.g. ``"tag:7"``, ``"document:1"``, ``"chunk:4192"``):
+    {"tag_id": "tag:<id>", "tag": str,
      "value": str|null,            # the cast value, when --value was given
-     "chunk_id": int|null,
-     "assigned": [{"document_id": int, "file_name": str}, ...],
-     "not_found": [int, ...]}
+     "chunk_id": "chunk:<id>"|null,
+     "assigned": [{"document_id": "document:<id>", "file_name": str}, ...],
+     "not_found": ["document:<id>", ...]}
 """
 
 from __future__ import annotations
@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import comma_int_list, positive_int
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, prefixed_int, prefixed_int_list,
+)
 from bartleby.skill_scripts._tags import (
     assign,
     cast_value,
@@ -48,8 +50,9 @@ from bartleby.skill_scripts._tags import (
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("assign_tag", __doc__)
     p.add_argument(
-        "--documents", type=comma_int_list("document_id"), required=True,
-        dest="document_ids", help="Comma-separated document ids, e.g. 1,2,3.",
+        "--documents", type=prefixed_int_list("document"), required=True,
+        dest="document_ids",
+        help="Comma-separated type-tagged document ids, e.g. document:1,document:2.",
     )
     p.add_argument("--tag", type=str, required=True)
     p.add_argument(
@@ -58,8 +61,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
              "value_type). Only valid on a value-tag.",
     )
     p.add_argument(
-        "--chunk-id", type=positive_int, default=None, dest="chunk_id",
-        help="Chunk to anchor a manual --value to (its citation source).",
+        "--chunk-id", type=prefixed_int("chunk"), default=None, dest="chunk_id",
+        help="Type-tagged chunk id (e.g. chunk:4192) to anchor a manual --value "
+             "to (its citation source).",
     )
     return p.parse_args(argv)
 
@@ -75,7 +79,7 @@ def work(*, conn, args, session_id) -> dict:
             "SELECT 1 FROM chunks WHERE chunk_id = ?", (args.chunk_id,),
         ).fetchone():
             raise SkillError(
-                "UNKNOWN_CHUNK", f"No chunk with chunk_id {args.chunk_id}.",
+                "UNKNOWN_CHUNK", f"No chunk with id chunk:{args.chunk_id}.",
             )
     elif args.chunk_id is not None:
         raise SkillError(
@@ -89,14 +93,15 @@ def work(*, conn, args, session_id) -> dict:
         else:
             assign(conn, document_id, [tag.tag_id])
 
-    return {
+    return format_output_ids({
         "tag_id": tag.tag_id,
         "tag": tag.name,
         "value": cast,
         "chunk_id": args.chunk_id if cast is not None else None,
         "assigned": [{"document_id": d, "file_name": f} for d, f in found],
-        "not_found": not_found,
-    }
+        # not_found is a document-id list (not in the field map): tag each.
+        "not_found": [format_id("document", d) for d in not_found],
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

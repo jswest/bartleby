@@ -10,12 +10,12 @@ Per finding: ``finding_id``, ``title``, ``description``, ``session_name``
 (the session that authored it), ``model`` / ``harness`` (the backend behind
 it, null when unrecorded), ``created_at``, and ``citation_count`` (how many
 chunks it cites). To read a whole finding, call
-``read_finding --finding-id <N>``.
+``read_finding --finding-id finding:<N>``.
 
-Output:
+Output (``finding_id`` is type-tagged, e.g. ``"finding:204"``):
     {
       "findings": [{
-        "finding_id": int,
+        "finding_id": "finding:<id>",
         "title": str, "description": str,
         "session_name": str,
         "model": str|null, "harness": str|null,
@@ -45,6 +45,7 @@ from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
     memory_enabled, nonneg_int, pagination_hint, positive_int,
 )
+from bartleby.skill_scripts._ids import format_output_ids
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -111,13 +112,13 @@ def work(*, conn, args, session_id) -> dict:
 
     hint = pagination_hint(args.offset, len(findings), total)
 
-    return {
+    return format_output_ids({
         "findings": findings,
         "total": total,
         "offset": args.offset,
         "limit": args.limit,
         "hint": hint,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

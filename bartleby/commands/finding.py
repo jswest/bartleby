@@ -5,7 +5,7 @@ Two halves of one artifact format:
 - ``export <finding-id>`` reads a finding from a corpus and writes a
   self-describing ``.md``: a YAML front-matter block (title, description, and
   baked-in provenance — the source corpus, the original finding id, and the
-  export date) followed by the finding body. The body's corpus ``[^N]`` chunk
+  export date) followed by the finding body. The body's corpus ``[^chunk:N]``
   citations are rewritten *inline* as inert ``[corpus: <file> · p.<N>]`` markers
   so the artifact stands alone on another machine where the raw chunk_ids are
   meaningless. Finding-to-finding citations are inlined the same way (carrying
@@ -42,9 +42,10 @@ from bartleby.project import get_active_project
 
 _console = Console()
 
-# Local chunk citation: ``[^N]`` (standard footnote with a chunk_id). Same shape
-# the finding write path recognises (``_common._CITATION_MARKER``).
-_CHUNK_MARKER = re.compile(r"\[\^(\d+)\]")
+# Local chunk citation: ``[^chunk:N]`` (type-tagged footnote, issue #624). Same
+# shape the finding write path recognises (``_common._CITATION_MARKER``). The
+# group captures the bare chunk_id so ``int(...)`` resolution is unchanged.
+_CHUNK_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
 # An inert corpus citation an export emits / an import preserves verbatim. It is
 # deliberately NOT a ``[^…]`` footnote (so the finding write path's malformed-
 # and external-citation guards never trip on it) and carries no digits in the
@@ -84,7 +85,7 @@ def _inert_marker(citation: dict) -> str:
 
 
 def _rewrite_citations(body: str, citations: list[dict]) -> str:
-    """Replace each ``[^N]`` marker with its inert ``[corpus: …]`` equivalent.
+    """Replace each ``[^chunk:N]`` marker with its inert ``[corpus: …]`` equivalent.
 
     ``citations`` is the resolved-citation list (chunk_id → file/page/title) the
     read path returns. A marker whose chunk_id isn't in the resolved set (a

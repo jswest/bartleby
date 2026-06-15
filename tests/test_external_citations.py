@@ -37,7 +37,7 @@ from tests._skill_fixtures import (  # noqa: F401
 
 def test_extract_external_citations_url_and_doc():
     body = (
-        "Corpus claim[^42]. Web claim[^url:https://example.gov/report]. "
+        "Corpus claim[^chunk:42]. Web claim[^url:https://example.gov/report]. "
         "Dataset claim[^doc:H-2024-0148]."
     )
     assert extract_external_citations(body) == [
@@ -69,7 +69,7 @@ def test_external_markers_do_not_count_as_chunk_citations():
     body = "Only external[^url:https://a.test] and[^doc:Y]."
     assert extract_citations(body) == []
     # A real chunk marker alongside is still counted, externals still ignored.
-    assert extract_citations("Claim[^7] web[^url:https://a.test].") == [7]
+    assert extract_citations("Claim[^chunk:7] web[^url:https://a.test].") == [7]
 
 
 def test_extract_external_citations_ignores_malformed_markers():
@@ -82,7 +82,7 @@ def test_malformed_check_ignores_bracketed_digits_inside_external_ref():
     """A ``[N]``-shaped substring inside an external ref (e.g. a URL ending
     ``…/doc[3]``) must not false-trip the caret-less-marker guard when a valid
     chunk citation is present. Regression for the #563×malformed-check seam."""
-    body = "Corpus[^42]. Web[^url:https://example.com/doc[3]]."
+    body = "Corpus[^chunk:42]. Web[^url:https://example.com/doc[3]]."
     reject_malformed_citations(body)  # must not raise
     # A genuine caret-less [N] outside any external marker is still rejected.
     with pytest.raises(SkillError) as exc:
@@ -108,7 +108,7 @@ def test_save_finding_surfaces_external_citations(seeded_project, tmp_path, caps
     cid = _first_chunk_id(seeded_project)
     body_file = tmp_path / "f.md"
     body_file.write_text(
-        f"Corpus[^{cid}]. Web[^url:https://example.gov/x]. "
+        f"Corpus[^chunk:{cid}]. Web[^url:https://example.gov/x]. "
         f"Filing[^doc:H-001].",
         encoding="utf-8",
     )
@@ -120,7 +120,7 @@ def test_save_finding_surfaces_external_citations(seeded_project, tmp_path, caps
     ])
     out = json.loads(capsys.readouterr().out)
     # The mandatory chunk citation still lands ...
-    assert [c["chunk_id"] for c in out["citations"]] == [cid]
+    assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{cid}"]
     # ... and the external citations surface as a distinct kind.
     assert out["external_citations"] == [
         {"scheme": "url", "ref": "https://example.gov/x"},
@@ -154,7 +154,7 @@ def test_save_finding_rejects_unknown_external_scheme(
     cid = _first_chunk_id(seeded_project)
     body_file = tmp_path / "f.md"
     body_file.write_text(
-        f"Corpus[^{cid}] but bad scheme[^ftp:host/file].",
+        f"Corpus[^chunk:{cid}] but bad scheme[^ftp:host/file].",
         encoding="utf-8",
     )
     with pytest.raises(SystemExit) as exc:
@@ -173,7 +173,7 @@ def test_save_finding_rejects_unknown_external_scheme(
 def test_save_finding_rejects_blank_external_ref(seeded_project, tmp_path, capsys):
     cid = _first_chunk_id(seeded_project)
     body_file = tmp_path / "f.md"
-    body_file.write_text(f"Corpus[^{cid}] empty[^url:   ].", encoding="utf-8")
+    body_file.write_text(f"Corpus[^chunk:{cid}] empty[^url:   ].", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         save_finding.main([
             "--project", seeded_project["project"],
@@ -189,7 +189,7 @@ def test_save_finding_rejects_blank_external_ref(seeded_project, tmp_path, capsy
 def test_read_finding_surfaces_external_citations(seeded_project, tmp_path, capsys):
     cid = _first_chunk_id(seeded_project)
     body_file = tmp_path / "f.md"
-    body_text = f"Corpus[^{cid}]. Web[^url:https://example.gov/y]."
+    body_text = f"Corpus[^chunk:{cid}]. Web[^url:https://example.gov/y]."
     body_file.write_text(body_text, encoding="utf-8")
     save_finding.main([
         "--project", seeded_project["project"],
@@ -201,7 +201,7 @@ def test_read_finding_surfaces_external_citations(seeded_project, tmp_path, caps
 
     read_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(saved["finding_id"]),
+        "--finding-id", saved["finding_id"],
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["body"] == body_text
@@ -210,5 +210,5 @@ def test_read_finding_surfaces_external_citations(seeded_project, tmp_path, caps
     ]
     # The chunk citation is unaffected and external markers don't dangle (the
     # digit-only dangling check never sees them).
-    assert [c["chunk_id"] for c in out["citations"]] == [cid]
+    assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{cid}"]
     assert out["dangling_citations"] == []

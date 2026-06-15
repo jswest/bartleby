@@ -48,7 +48,7 @@ def _finding_chunk_ids(project, finding_id) -> list[int]:
 
 def _save(project, tmp_path, capsys, *, name, title, cite) -> int:
     body_file = tmp_path / f"{name}.md"
-    body_file.write_text(f"# {title}\n\nClaim[^{cite}].", encoding="utf-8")
+    body_file.write_text(f"# {title}\n\nClaim[^chunk:{cite}].", encoding="utf-8")
     save_finding.main([
         "--project", project,
         "--title", title,
@@ -56,7 +56,9 @@ def _save(project, tmp_path, capsys, *, name, title, cite) -> int:
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    return out["finding_id"]
+    # save_finding emits a type-tagged id ("finding:N"); return the bare int so
+    # callers can build SQL params and the prefixed flag/output forms freely.
+    return int(out["finding_id"].split(":")[1])
 
 
 def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
@@ -73,23 +75,25 @@ def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):
     src_chunk_ids = _finding_chunk_ids(project, src1) + _finding_chunk_ids(project, src2)
     assert src_chunk_ids  # sanity: the sources had body chunks
 
-    merged_body = f"# Consolidated\n\nAll together[^{c0}][^{c1}][^{c2}]."
+    merged_body = f"# Consolidated\n\nAll together[^chunk:{c0}][^chunk:{c1}][^chunk:{c2}]."
     merged_file = tmp_path / "merged.md"
     merged_file.write_text(merged_body, encoding="utf-8")
 
     merge_findings.main([
         "--project", project,
-        "--from", f"{src1},{src2}",
-        "--into", str(target),
+        "--from", f"finding:{src1},finding:{src2}",
+        "--into", f"finding:{target}",
         "--body-file", str(merged_file),
         "--title", "SAP billing/arrears",
     ])
     out = json.loads(capsys.readouterr().out)
 
-    assert out["finding_id"] == target
+    assert out["finding_id"] == f"finding:{target}"
     assert out["body"] == merged_body
-    assert out["merged_from"] == [src1, src2]
-    assert [c["chunk_id"] for c in out["citations"]] == [c0, c1, c2]
+    assert out["merged_from"] == [f"finding:{src1}", f"finding:{src2}"]
+    assert [c["chunk_id"] for c in out["citations"]] == [
+        f"chunk:{c0}", f"chunk:{c1}", f"chunk:{c2}"
+    ]
     # Output mirrors save/edit/read: full session provenance, not just the name.
     assert out["session_name"]
     assert "model" in out and "harness" in out
@@ -171,12 +175,12 @@ def test_merge_surfaces_session_provenance(seeded_project, tmp_path, capsys):
     set_session_provenance(project, model="qwen3.6:35b-mlx", harness="ollama-cli")
 
     merged_file = tmp_path / "merged.md"
-    merged_file.write_text(f"# Consolidated\n\nTogether[^{c0}][^{c1}].",
+    merged_file.write_text(f"# Consolidated\n\nTogether[^chunk:{c0}][^chunk:{c1}].",
                            encoding="utf-8")
     merge_findings.main([
         "--project", project,
-        "--from", str(src),
-        "--into", str(target),
+        "--from", f"finding:{src}",
+        "--into", f"finding:{target}",
         "--body-file", str(merged_file),
     ])
     out = json.loads(capsys.readouterr().out)
@@ -191,13 +195,13 @@ def test_merge_missing_source_reports_ids(seeded_project, tmp_path, capsys):
     target = _save(project, tmp_path, capsys, name="t", title="Target", cite=c0)
 
     merged_file = tmp_path / "m.md"
-    merged_file.write_text(f"Body[^{c0}].", encoding="utf-8")
+    merged_file.write_text(f"Body[^chunk:{c0}].", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", "98765,98766",
-            "--into", str(target),
+            "--from", "finding:98765,finding:98766",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -212,13 +216,13 @@ def test_merge_target_in_sources_rejected(seeded_project, tmp_path, capsys):
     target = _save(project, tmp_path, capsys, name="t", title="Target", cite=c0)
 
     merged_file = tmp_path / "m.md"
-    merged_file.write_text(f"Body[^{c0}].", encoding="utf-8")
+    merged_file.write_text(f"Body[^chunk:{c0}].", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(target),
-            "--into", str(target),
+            "--from", f"finding:{target}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -238,8 +242,8 @@ def test_merge_rejects_body_without_citations(seeded_project, tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(src),
-            "--into", str(target),
+            "--from", f"finding:{src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -278,15 +282,15 @@ def test_merge_rejects_citation_to_involved_finding_chunk(
 
     merged_file = tmp_path / "merged.md"
     merged_file.write_text(
-        f"# C\n\nDoc cite[^{c0}] plus a finding chunk[^{bad_chunk}].",
+        f"# C\n\nDoc cite[^chunk:{c0}] plus a finding chunk[^chunk:{bad_chunk}].",
         encoding="utf-8",
     )
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(src),
-            "--into", str(target),
+            "--from", f"finding:{src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -315,14 +319,14 @@ def test_merge_rejects_malformed_citation(seeded_project, tmp_path, capsys):
 
     merged_file = tmp_path / "m.md"
     merged_file.write_text(
-        f"Real[^{chunks[0]}] but typoed[3] and again[42].", encoding="utf-8",
+        f"Real[^chunk:{chunks[0]}] but typoed[3] and again[42].", encoding="utf-8",
     )
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(src),
-            "--into", str(target),
+            "--from", f"finding:{src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -350,14 +354,14 @@ def test_merge_rejects_unknown_citation(seeded_project, tmp_path, capsys):
     src = _save(project, tmp_path, capsys, name="s", title="Source", cite=chunks[1])
 
     merged_file = tmp_path / "m.md"
-    merged_file.write_text(f"Real[^{chunks[0]}] plus garbage[^999999].",
+    merged_file.write_text(f"Real[^chunk:{chunks[0]}] plus garbage[^chunk:999999].",
                            encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(src),
-            "--into", str(target),
+            "--from", f"finding:{src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -380,8 +384,8 @@ def test_merge_rejects_empty_body(seeded_project, tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(src),
-            "--into", str(target),
+            "--from", f"finding:{src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -409,16 +413,16 @@ def test_merge_dedups_repeated_from_ids(seeded_project, tmp_path, capsys):
     src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
 
     merged_file = tmp_path / "merged.md"
-    merged_file.write_text(f"# C\n\nTogether[^{c0}][^{c1}].", encoding="utf-8")
+    merged_file.write_text(f"# C\n\nTogether[^chunk:{c0}][^chunk:{c1}].", encoding="utf-8")
 
     merge_findings.main([
         "--project", project,
-        "--from", f"{src},{src}",
-        "--into", str(target),
+        "--from", f"finding:{src},finding:{src}",
+        "--into", f"finding:{target}",
         "--body-file", str(merged_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["merged_from"] == [src]  # deduped, not [src, src]
+    assert out["merged_from"] == [f"finding:{src}"]  # deduped, not [src, src]
 
     # The source is folded in exactly once and gone.
     conn = open_db(project)
@@ -454,13 +458,13 @@ def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, caps
     target = _save(project, tmp_path, capsys, name="t", title="Mine", cite=c0)
 
     merged_file = tmp_path / "m.md"
-    merged_file.write_text(f"Body[^{c0}].", encoding="utf-8")
+    merged_file.write_text(f"Body[^chunk:{c0}].", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         merge_findings.main([
             "--project", project,
-            "--from", str(foreign_src),
-            "--into", str(target),
+            "--from", f"finding:{foreign_src}",
+            "--into", f"finding:{target}",
             "--body-file", str(merged_file),
         ])
     assert exc.value.code == 1
@@ -489,16 +493,16 @@ def test_merge_memory_off_all_own(seeded_project, tmp_path, capsys):
     src = _save(project, tmp_path, capsys, name="s", title="Dup", cite=c1)
 
     merged_file = tmp_path / "merged.md"
-    merged_file.write_text(f"# C\n\nTogether[^{c0}][^{c1}].", encoding="utf-8")
+    merged_file.write_text(f"# C\n\nTogether[^chunk:{c0}][^chunk:{c1}].", encoding="utf-8")
     merge_findings.main([
         "--project", project,
-        "--from", str(src),
-        "--into", str(target),
+        "--from", f"finding:{src}",
+        "--into", f"finding:{target}",
         "--body-file", str(merged_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["finding_id"] == target
-    assert out["merged_from"] == [src]
+    assert out["finding_id"] == f"finding:{target}"
+    assert out["merged_from"] == [f"finding:{src}"]
 
     conn = open_db(project)
     try:

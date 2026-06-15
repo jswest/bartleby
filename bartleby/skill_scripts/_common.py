@@ -15,20 +15,33 @@ from bartleby.db.chunks import (
 from bartleby.skill_runner import SkillError
 
 
-# Inline citation marker: standard markdown footnote syntax with a chunk_id.
-_CITATION_MARKER = re.compile(r"\[\^(\d+)\]")
-# Bare ``[N]`` — looks like a citation, isn't one. Doesn't match ``[^N]`` because
-# the ``^`` sits between the bracket and the digits.
-_MALFORMED_MARKER = re.compile(r"\[(\d+)\]")
-# External citation marker: ``[^url:<url>]`` / ``[^doc:<ref>]``. The scheme is an
-# alpha word, so the digit-only ``_CITATION_MARKER`` never matches it — external
-# markers don't count toward the ≥1 corpus-chunk requirement (a finding with only
-# external markers is still rejected). The ref is captured opaque (no parsing, no
-# fetch) up to the closing bracket.
+# Inline corpus-chunk citation marker: ``[^chunk:<chunk_id>]`` (issue #624).
+# Type-tagged so the cited id can only ever be a chunk_id — never a document_id or
+# finding_id silently mis-stored (#623). ``chunk`` is the canonical *internal*
+# scheme of the shared ``[^<scheme>:<ref>]`` grammar (``_EXTERNAL_MARKER`` below):
+# it is routed to chunk-citation handling, while ``url`` / ``doc`` stay external.
+_CITATION_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
+# Citation-shaped but untyped: caret-less ``[N]`` and the now-obsolete bare
+# ``[^N]`` chunk form. Both render as bracketed prose but are silently dropped by
+# the typed extractor, so both are rejected loudly — see
+# :func:`reject_malformed_citations`.
+_MALFORMED_MARKER = re.compile(r"\[\^?(\d+)\]")
+# Typed citation marker: ``[^<scheme>:<ref>]``. The scheme is an alpha word.
+# ``chunk`` is the internal corpus-chunk scheme (matched by ``_CITATION_MARKER``
+# above); ``url`` / ``doc`` are external (stored opaque, never fetched);
+# ``document`` / ``finding`` are *rejected* — they are not valid citation targets.
 _EXTERNAL_MARKER = re.compile(r"\[\^([A-Za-z]+):([^\]]+)\]")
 # Schemes an external marker may carry. ``url`` is a web link; ``doc`` is an
 # external-dataset document ref (e.g. a filing id). Both are stored opaque.
 _EXTERNAL_SCHEMES = ("url", "doc")
+# ``chunk`` is internal (handled by ``_CITATION_MARKER``), so the external-marker
+# machinery must skip it as it does the rejected schemes — it is neither external
+# nor malformed.
+_INTERNAL_SCHEME = "chunk"
+# Typed schemes that parse as ``[^<scheme>:<ref>]`` but are *not* valid citation
+# targets: a document/finding id is never a citation — cite the chunk you were
+# handed instead (the #623 confusion, now structurally rejected).
+_REJECTED_CITATION_SCHEMES = ("document", "finding")
 
 
 def text_qualified_fts(fts_expr: str) -> str:
@@ -48,7 +61,7 @@ def text_qualified_fts(fts_expr: str) -> str:
 
 
 def extract_citations(body: str) -> list[int]:
-    """Return chunk_ids from ``[^N]`` markers in first-appearance order, deduped."""
+    """Return chunk_ids from ``[^chunk:N]`` markers, first-appearance order, deduped."""
     seen: dict[int, None] = {}
     for m in _CITATION_MARKER.finditer(body):
         seen[int(m.group(1))] = None
@@ -56,12 +69,15 @@ def extract_citations(body: str) -> list[int]:
 
 
 def _well_formed_external(m: re.Match) -> tuple[str, str] | None:
-    """``(scheme, ref)`` for a well-formed external marker, else ``None``.
+    """``(scheme, ref)`` for a well-formed *external* marker, else ``None``.
 
-    The single well-formedness predicate — a known scheme (``url`` / ``doc``)
-    and a non-blank ref — shared by the skip-on-bad extractor and the raise-on-bad
-    save-time check so the rule can't drift between them. Normalizes scheme to
-    lowercase and strips the ref.
+    The single well-formedness predicate — a known external scheme (``url`` /
+    ``doc``) and a non-blank ref — shared by the skip-on-bad extractor and the
+    raise-on-bad save-time check so the rule can't drift between them. Normalizes
+    scheme to lowercase and strips the ref. ``chunk`` (internal) and the rejected
+    ``document`` / ``finding`` schemes return ``None`` here; they are classified
+    separately (the malformed check excludes ``chunk`` and names the rejected
+    schemes specifically).
     """
     scheme, ref = m.group(1).lower(), m.group(2).strip()
     if scheme not in _EXTERNAL_SCHEMES or not ref:
@@ -94,6 +110,32 @@ def extract_external_citations(body: str) -> list[dict]:
     return out
 
 
+def reject_wrong_typed_citations(body: str) -> None:
+    """Raise ``WRONG_CITATION_TYPE`` for ``[^document:N]`` / ``[^finding:N]``.
+
+    A type-tagged marker whose scheme is ``document`` or ``finding`` parses as a
+    typed citation but points at the wrong kind of id — the #623 confusion made
+    structural: a citation target is *always* a chunk_id you were handed this
+    session, never a document_id or finding_id. Refuse loudly so the agent
+    repoints the marker to the chunk it actually means (``[^chunk:<id>]``).
+    """
+    bad = [
+        m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
+        if m.group(1).lower() in _REJECTED_CITATION_SCHEMES
+    ]
+    if not bad:
+        return
+    bad = list(dict.fromkeys(bad))
+    raise SkillError(
+        "WRONG_CITATION_TYPE",
+        f"Found {len(bad)} citation marker(s) targeting a document/finding id: "
+        f"{', '.join(bad)}. A citation target is always a chunk_id you were "
+        "handed this session — write [^chunk:<chunk_id>], never "
+        "[^document:<id>] or [^finding:<id>].",
+        wrong_type_markers=bad,
+    )
+
+
 def reject_malformed_external_citations(body: str) -> None:
     """Raise ``MALFORMED_EXTERNAL_CITATION`` for an ill-formed external marker.
 
@@ -102,12 +144,16 @@ def reject_malformed_external_citations(body: str) -> None:
     (e.g. ``[^ftp:…]``) or an empty ref (``[^url:]``) renders as bracketed prose
     but is silently dropped by :func:`extract_external_citations`, so the
     external attribution is effectively lost. Refuse loudly so the agent fixes
-    it before persisting. The ref itself is never fetched or otherwise validated
-    beyond non-blankness — it is stored opaque.
+    it before persisting. The internal ``chunk`` scheme (handled as a corpus
+    citation) and the rejected ``document`` / ``finding`` schemes (handled by
+    :func:`reject_wrong_typed_citations`) are excluded here so they aren't
+    double-flagged. The ref itself is never fetched or otherwise validated beyond
+    non-blankness — it is stored opaque.
     """
     bad = [
         m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
-        if _well_formed_external(m) is None
+        if m.group(1).lower() not in (_INTERNAL_SCHEME, *_REJECTED_CITATION_SCHEMES)
+        and _well_formed_external(m) is None
     ]
     if not bad:
         return
@@ -123,17 +169,18 @@ def reject_malformed_external_citations(body: str) -> None:
 
 
 def reject_malformed_citations(body: str) -> None:
-    """Raise ``MALFORMED_CITATION`` if the body contains ``[N]`` (missing ``^``).
+    """Raise ``MALFORMED_CITATION`` for an untyped citation-shaped marker.
 
-    These markers render as bracketed prose but are silently ignored by the
-    citation extractor, so the claim ends up effectively uncited. Refuse
-    loudly so the agent fixes the typo before persisting.
+    Both the caret-less ``[N]`` and the now-obsolete bare ``[^N]`` chunk form
+    (issue #624) render as bracketed prose but are silently ignored by the typed
+    ``[^chunk:N]`` extractor, so the claim ends up effectively uncited. Refuse
+    loudly so the agent rewrites them as ``[^chunk:<chunk_id>]`` before persisting.
 
-    External markers (``[^<scheme>:<ref>]``) may legitimately carry a ``[N]``-shaped
+    Typed markers (``[^<scheme>:<ref>]``) may legitimately carry a ``[N]``-shaped
     substring inside the ref (e.g. a URL ending ``…/doc[3]``), whose closing bracket
-    is also the marker's — so scan a copy with external markers masked out, else a
-    valid external citation false-trips this guard. (Refs may not themselves contain
-    ``]``; that terminates the marker — percent-encode it.)
+    is also the marker's — so scan a copy with typed markers masked out, else a
+    valid ``[^chunk:N]`` / ``[^url:…]`` marker false-trips this guard. (Refs may not
+    themselves contain ``]``; that terminates the marker — percent-encode it.)
     """
     scrubbed = _EXTERNAL_MARKER.sub(" ", body)
     bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(scrubbed)]
@@ -142,8 +189,9 @@ def reject_malformed_citations(body: str) -> None:
     deduped = list(dict.fromkeys(bad))
     raise SkillError(
         "MALFORMED_CITATION",
-        f"Found {len(bad)} citation-shaped markers missing the caret: "
-        f"{', '.join(deduped)}. Write citations as [^N], not [N].",
+        f"Found {len(bad)} untyped citation-shaped marker(s): "
+        f"{', '.join(deduped)}. Write citations as [^chunk:<chunk_id>], "
+        "not [N] or [^N].",
         malformed_markers=deduped,
     )
 
@@ -250,7 +298,7 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
         raise SkillError(
             "UNKNOWN_CITATIONS",
             f"Inline citations reference unknown chunk_ids: {missing}. "
-            "Each [^N] marker must be a real chunk_id in this project.",
+            "Each [^chunk:<id>] marker must be a real chunk_id in this project.",
             unknown_chunk_ids=missing,
         )
 
@@ -258,14 +306,14 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
 def reject_citations_to_involved_findings(
     conn, citations: list[int], finding_ids, *, code: str, action: str,
 ) -> None:
-    """Reject ``[^N]`` markers citing finding-kind chunks the op will destroy.
+    """Reject ``[^chunk:N]`` markers citing finding-kind chunks the op will destroy.
 
     Findings may legitimately cite *finding-kind* chunks, but the merge/edit
     write paths delete-and-rebuild the body chunks of every finding *involved*
     in the operation. If the new body cites one of those soon-to-die chunk ids,
     two silent failures follow (both via ``finding_citations`` →
     ``chunks(chunk_id) ON DELETE CASCADE``): a citation row inserted while the
-    chunk still exists gets cascade-deleted, leaving a dangling ``[^N]``; or the
+    chunk still exists gets cascade-deleted, leaving a dangling ``[^chunk:N]``; or the
     chunk is deleted *before* the citation is replaced, surfacing as an opaque
     ``INTERNAL_ERROR`` from the FK violation. One upfront ownership check on the
     cited *chunk rows* (their ``source_kind='finding'`` + owning ``source_id``)
@@ -292,7 +340,7 @@ def reject_citations_to_involved_findings(
         code,
         f"Inline citations reference chunk_ids {offending}, which belong to "
         f"finding(s) {sorted(ids)} this {action} is about to rewrite — those "
-        "chunks will not survive. Remove or repoint those [^N] markers.",
+        "chunks will not survive. Remove or repoint those [^chunk:N] markers.",
         offending_chunk_ids=offending,
     )
 
@@ -302,11 +350,12 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
 
     The single read+validate path shared by ``save_finding``, ``edit_finding``,
     and ``merge_findings``: existence (``BODY_FILE_NOT_FOUND``), non-empty
-    (``EMPTY_BODY``), no caret-less ``[N]`` markers (``MALFORMED_CITATION``),
-    every external ``[^url:…]``/``[^doc:…]`` marker well-formed
-    (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^N]`` chunk marker
-    (``NO_INLINE_CITATIONS`` — external markers never satisfy this), and every
-    cited chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
+    (``EMPTY_BODY``), no untyped ``[N]`` / ``[^N]`` markers (``MALFORMED_CITATION``),
+    no ``[^document:N]`` / ``[^finding:N]`` wrong-type markers
+    (``WRONG_CITATION_TYPE``), every external ``[^url:…]``/``[^doc:…]`` marker
+    well-formed (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^chunk:N]`` chunk
+    marker (``NO_INLINE_CITATIONS`` — external markers never satisfy this), and
+    every cited chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
     first-appearance order, deduped.
     """
     body_path = Path(body_file)
@@ -320,13 +369,14 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
         raise SkillError("EMPTY_BODY", "Finding body is empty.")
 
     reject_malformed_citations(body)
+    reject_wrong_typed_citations(body)
     reject_malformed_external_citations(body)
     citations = extract_citations(body)
     if not citations:
         raise SkillError(
             "NO_INLINE_CITATIONS",
             "Finding body must include at least one inline citation marker "
-            "of the form [^<chunk_id>] (e.g. [^4192]). See SKILL.md.",
+            "of the form [^chunk:<chunk_id>] (e.g. [^chunk:4192]). See SKILL.md.",
         )
     validate_chunk_ids_exist(conn, citations)
     return body, citations

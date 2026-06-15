@@ -113,7 +113,10 @@ def test_scan_phrase_enumerates_in_doc_order(scan_corpus, capsys):
     assert out["match_mode"] == "phrase"
     assert out["total"] == 3
     got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
-    assert got == [(scan_corpus["d1"], 1), (scan_corpus["d1"], 3), (scan_corpus["d2"], 0)]
+    assert got == [
+        (f"document:{scan_corpus['d1']}", 1), (f"document:{scan_corpus['d1']}", 3),
+        (f"document:{scan_corpus['d2']}", 0),
+    ]
     assert got == sorted(got)
 
 
@@ -122,14 +125,14 @@ def test_scan_pagination_stable_total(scan_corpus, capsys):
     p1 = json.loads(capsys.readouterr().out)
     assert p1["total"] == 3
     assert [(m["document_id"], m["chunk_index"]) for m in p1["matches"]] == [
-        (scan_corpus["d1"], 1), (scan_corpus["d1"], 3),
+        (f"document:{scan_corpus['d1']}", 1), (f"document:{scan_corpus['d1']}", 3),
     ]
 
     _run(scan_corpus, [MARKER, "--limit", "2", "--offset", "2"])
     p2 = json.loads(capsys.readouterr().out)
     assert p2["total"] == 3
     assert [(m["document_id"], m["chunk_index"]) for m in p2["matches"]] == [
-        (scan_corpus["d2"], 0),
+        (f"document:{scan_corpus['d2']}", 0),
     ]
 
 
@@ -137,7 +140,7 @@ def test_scan_preview_truncates_by_default(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)
     assert out["preview"] == 240
-    long_match = next(m for m in out["matches"] if m["chunk_id"] == scan_corpus["long_chunk_id"])
+    long_match = next(m for m in out["matches"] if m["chunk_id"] == f"chunk:{scan_corpus['long_chunk_id']}")
     assert long_match["text_length"] > 240
     assert long_match["text"].endswith("…")
     assert len(long_match["text"]) == 241  # 240 chars + the ellipsis
@@ -146,7 +149,7 @@ def test_scan_preview_truncates_by_default(scan_corpus, capsys):
 def test_scan_preview_override_returns_full_text(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--preview", "600"])
     out = json.loads(capsys.readouterr().out)
-    long_match = next(m for m in out["matches"] if m["chunk_id"] == scan_corpus["long_chunk_id"])
+    long_match = next(m for m in out["matches"] if m["chunk_id"] == f"chunk:{scan_corpus['long_chunk_id']}")
     assert not long_match["text"].endswith("…")
     assert len(long_match["text"]) == long_match["text_length"]
 
@@ -183,16 +186,16 @@ def test_scan_match_terms_is_superset_of_phrase(scan_corpus, capsys):
     assert terms_out["match_mode"] == "terms"
     assert phrase_ids < terms_ids  # strict superset
     # The non-contiguous distractor matches terms-AND but not the phrase.
-    assert scan_corpus["distractor_chunk_id"] in terms_ids
-    assert scan_corpus["distractor_chunk_id"] not in phrase_ids
+    assert f"chunk:{scan_corpus['distractor_chunk_id']}" in terms_ids
+    assert f"chunk:{scan_corpus['distractor_chunk_id']}" not in phrase_ids
 
 
 def test_scan_in_documents_scope(scan_corpus, capsys):
-    _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d2"])])
+    _run(scan_corpus, [MARKER, "--in-documents", f"document:{scan_corpus['d2']}"])
     out = json.loads(capsys.readouterr().out)
-    assert out["filters"]["in_documents"] == [scan_corpus["d2"]]
+    assert out["filters"]["in_documents"] == [f"document:{scan_corpus['d2']}"]
     assert out["total"] == 1
-    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+    assert all(m["document_id"] == f"document:{scan_corpus['d2']}" for m in out["matches"])
 
 
 def test_scan_tag_scope(scan_corpus, capsys):
@@ -201,7 +204,7 @@ def test_scan_tag_scope(scan_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["tags"] == ["senate"]
     assert out["total"] == 1
-    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+    assert all(m["document_id"] == f"document:{scan_corpus['d2']}" for m in out["matches"])
 
 
 def test_scan_file_like_single_pattern(scan_corpus, capsys):
@@ -209,7 +212,7 @@ def test_scan_file_like_single_pattern(scan_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["file_like"] == ["filing_a%"]
     assert out["total"] == 2  # the two marker chunks in filing_a.txt
-    assert all(m["document_id"] == scan_corpus["d1"] for m in out["matches"])
+    assert all(m["document_id"] == f"document:{scan_corpus['d1']}" for m in out["matches"])
 
 
 def test_scan_file_like_repeated_ors(scan_corpus, capsys):
@@ -219,7 +222,7 @@ def test_scan_file_like_repeated_ors(scan_corpus, capsys):
     # filing_a (2 markers) OR filing_b (1 marker); filing_c has none.
     assert out["total"] == 3
     assert {m["document_id"] for m in out["matches"]} == {
-        scan_corpus["d1"], scan_corpus["d2"],
+        f"document:{scan_corpus['d1']}", f"document:{scan_corpus['d2']}",
     }
 
 
@@ -227,13 +230,13 @@ def test_scan_file_like_ands_with_in_documents(scan_corpus, capsys):
     # in-documents={d1,d2} AND file_like=filing_b% → only d2 survives.
     _run(scan_corpus, [
         MARKER,
-        "--in-documents", f"{scan_corpus['d1']},{scan_corpus['d2']}",
+        "--in-documents", f"document:{scan_corpus['d1']},document:{scan_corpus['d2']}",
         "--file-like", "filing_b%",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["file_like"] == ["filing_b%"]
     assert out["total"] == 1
-    assert all(m["document_id"] == scan_corpus["d2"] for m in out["matches"])
+    assert all(m["document_id"] == f"document:{scan_corpus['d2']}" for m in out["matches"])
 
 
 def test_scan_file_like_no_match_empties(scan_corpus, capsys):
@@ -279,8 +282,8 @@ def test_scan_default_match_carries_section_heading(heading_corpus, capsys):
     _run(heading_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)
     headings = {m["chunk_id"]: m["section_heading"] for m in out["matches"]}
-    assert headings[heading_corpus["q1_id"]] == "2023 Q1"
-    assert headings[heading_corpus["no_heading_id"]] is None
+    assert headings[f"chunk:{heading_corpus['q1_id']}"] == "2023 Q1"
+    assert headings[f"chunk:{heading_corpus['no_heading_id']}"] is None
 
 
 def test_scan_brief_drops_section_heading(heading_corpus, capsys):
@@ -296,9 +299,9 @@ def test_scan_heading_like_single_pattern(heading_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["heading_like"] == ["2023 Q1"]
     assert out["total"] == 1
-    assert [m["chunk_id"] for m in out["matches"]] == [heading_corpus["q1_id"]]
+    assert [m["chunk_id"] for m in out["matches"]] == [f"chunk:{heading_corpus['q1_id']}"]
     # The NULL-heading marker chunk never rides along.
-    assert heading_corpus["no_heading_id"] not in {m["chunk_id"] for m in out["matches"]}
+    assert f"chunk:{heading_corpus['no_heading_id']}" not in {m["chunk_id"] for m in out["matches"]}
 
 
 def test_scan_heading_like_repeated_ors(heading_corpus, capsys):
@@ -307,7 +310,7 @@ def test_scan_heading_like_repeated_ors(heading_corpus, capsys):
     assert out["filters"]["heading_like"] == ["2023 Q1", "2023 Q2"]
     assert out["total"] == 2
     assert {m["chunk_id"] for m in out["matches"]} == {
-        heading_corpus["q1_id"], heading_corpus["q2_id"],
+        f"chunk:{heading_corpus['q1_id']}", f"chunk:{heading_corpus['q2_id']}",
     }
 
 
@@ -320,7 +323,7 @@ def test_scan_heading_like_wildcard_ands_with_file_like(heading_corpus, capsys):
     assert out["filters"]["heading_like"] == ["2023 Q%"]
     assert out["total"] == 2
     assert {m["chunk_id"] for m in out["matches"]} == {
-        heading_corpus["q1_id"], heading_corpus["q2_id"],
+        f"chunk:{heading_corpus['q1_id']}", f"chunk:{heading_corpus['q2_id']}",
     }
 
 
@@ -391,7 +394,7 @@ def test_scan_body_term_still_matches(heading_only_corpus, capsys):
     _run(heading_only_corpus, ["quarterly", "--match-terms"])
     out = json.loads(capsys.readouterr().out)
     assert out["total"] == 1
-    assert [m["chunk_id"] for m in out["matches"]] == [heading_only_corpus["chunk_id"]]
+    assert [m["chunk_id"] for m in out["matches"]] == [f"chunk:{heading_only_corpus['chunk_id']}"]
 
 
 def test_scan_heading_like_reaches_heading_only_term(heading_only_corpus, capsys):
@@ -401,7 +404,7 @@ def test_scan_heading_like_reaches_heading_only_term(heading_only_corpus, capsys
                                "--heading-like", "Appendix%"])
     out = json.loads(capsys.readouterr().out)
     assert out["total"] == 1
-    assert [m["chunk_id"] for m in out["matches"]] == [heading_only_corpus["chunk_id"]]
+    assert [m["chunk_id"] for m in out["matches"]] == [f"chunk:{heading_only_corpus['chunk_id']}"]
 
 
 def test_scan_unfiltered_omits_filters_object(scan_corpus, capsys):
@@ -414,7 +417,7 @@ def test_scan_excludes_summary_chunks(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)
     ids = {m["chunk_id"] for m in out["matches"]}
-    assert scan_corpus["summary_chunk_id"] not in ids
+    assert f"chunk:{scan_corpus['summary_chunk_id']}" not in ids
     assert out["total"] == 3
 
 
@@ -424,7 +427,7 @@ def test_scan_excludes_finding_chunks(scan_corpus, capsys):
     _run(scan_corpus, [MARKER])
     out = json.loads(capsys.readouterr().out)
     ids = {m["chunk_id"] for m in out["matches"]}
-    assert scan_corpus["finding_chunk_id"] not in ids
+    assert f"chunk:{scan_corpus['finding_chunk_id']}" not in ids
     assert out["total"] == 3
 
 
@@ -444,7 +447,7 @@ def test_scan_tokenless_query_returns_no_matches(scan_corpus, capsys):
 
 
 def test_scan_output_shape(scan_corpus, capsys):
-    _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d1"])])
+    _run(scan_corpus, [MARKER, "--in-documents", f"document:{scan_corpus['d1']}"])
     out = json.loads(capsys.readouterr().out)
     m = out["matches"][0]
     assert set(m.keys()) == {
@@ -453,7 +456,7 @@ def test_scan_output_shape(scan_corpus, capsys):
         "text", "text_length",
     }
     assert m["file_name"] == "filing_a.txt"
-    assert m["document_id"] == scan_corpus["d1"]
+    assert m["document_id"] == f"document:{scan_corpus['d1']}"
 
 
 # ---------- --count-by document (aggregate mode) ----------
@@ -467,9 +470,9 @@ def test_scan_count_by_document_histogram(scan_corpus, capsys):
     assert out["distinct_document_count"] == 2   # the headline
     assert out["total_chunk_count"] == 3         # the old `total`
     assert out["documents"] == [
-        {"document_id": scan_corpus["d1"], "file_name": "filing_a.txt",
+        {"document_id": f"document:{scan_corpus['d1']}", "file_name": "filing_a.txt",
          "chunk_count": 2},
-        {"document_id": scan_corpus["d2"], "file_name": "filing_b.txt",
+        {"document_id": f"document:{scan_corpus['d2']}", "file_name": "filing_b.txt",
          "chunk_count": 1},
     ]
     # The per-chunk projection's keys are gone in aggregate mode.
@@ -480,7 +483,7 @@ def test_scan_count_by_document_histogram(scan_corpus, capsys):
 def test_scan_count_by_paginates_documents_with_stable_totals(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--count-by", "document", "--limit", "1"])
     p1 = json.loads(capsys.readouterr().out)
-    assert [d["document_id"] for d in p1["documents"]] == [scan_corpus["d1"]]
+    assert [d["document_id"] for d in p1["documents"]] == [f"document:{scan_corpus['d1']}"]
     # Rollups are always the full, unpaginated totals.
     assert p1["distinct_document_count"] == 2
     assert p1["total_chunk_count"] == 3
@@ -488,7 +491,7 @@ def test_scan_count_by_paginates_documents_with_stable_totals(scan_corpus, capsy
     _run(scan_corpus, [MARKER, "--count-by", "document", "--limit", "1",
                        "--offset", "1"])
     p2 = json.loads(capsys.readouterr().out)
-    assert [d["document_id"] for d in p2["documents"]] == [scan_corpus["d2"]]
+    assert [d["document_id"] for d in p2["documents"]] == [f"document:{scan_corpus['d2']}"]
     assert p2["distinct_document_count"] == 2
 
 
@@ -601,11 +604,11 @@ def test_scan_count_by_regex_paginates_with_full_rollups(templated_corpus, capsy
 
 def test_scan_count_by_regex_respects_scope(templated_corpus, capsys):
     _run(templated_corpus, [BILL_MARKER, "--count-by", BILL_RE,
-                            "--in-documents", str(templated_corpus["d3"])])
+                            "--in-documents", f"document:{templated_corpus['d3']}"])
     out = json.loads(capsys.readouterr().out)
     assert out["groups"] == [{"value": "4346", "count": 1}]
     assert out["total_match_count"] == 1
-    assert out["filters"]["in_documents"] == [templated_corpus["d3"]]
+    assert out["filters"]["in_documents"] == [f"document:{templated_corpus['d3']}"]
 
 
 def test_scan_count_by_regex_no_match_is_zeros(templated_corpus, capsys):
@@ -716,8 +719,8 @@ def test_scan_extract_named_group_becomes_column(extract_corpus, capsys):
     assert out["columns"] == ["amount"]
     assert out["total"] == 3
     by_doc = {r["document_id"]: r for r in out["rows"]}
-    assert by_doc[extract_corpus["d1"]]["amount"] == "120,000"
-    assert by_doc[extract_corpus["d2"]]["amount"] == "85,500"
+    assert by_doc[f"document:{extract_corpus['d1']}"]["amount"] == "120,000"
+    assert by_doc[f"document:{extract_corpus['d2']}"]["amount"] == "85,500"
     # Every row carries the locator trio plus the capture column.
     for r in out["rows"]:
         assert set(r) == {"chunk_id", "document_id", "file_name", "amount"}
@@ -728,8 +731,8 @@ def test_scan_extract_bare_group_gets_positional_name(extract_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["columns"] == ["g1"]
     by_doc = {r["document_id"]: r for r in out["rows"]}
-    assert by_doc[extract_corpus["d1"]]["g1"] == "4346"
-    assert by_doc[extract_corpus["d3"]]["g1"] == "815"
+    assert by_doc[f"document:{extract_corpus['d1']}"]["g1"] == "4346"
+    assert by_doc[f"document:{extract_corpus['d3']}"]["g1"] == "815"
 
 
 def test_scan_extract_nonmatching_pattern_yields_null_keeps_row(extract_corpus, capsys):
@@ -740,9 +743,9 @@ def test_scan_extract_nonmatching_pattern_yields_null_keeps_row(extract_corpus, 
     assert out["columns"] == ["amount", "bill"]
     assert out["total"] == 3
     by_doc = {r["document_id"]: r for r in out["rows"]}
-    assert by_doc[extract_corpus["d2"]]["amount"] == "85,500"
-    assert by_doc[extract_corpus["d2"]]["bill"] is None  # null, not dropped
-    assert by_doc[extract_corpus["d1"]]["bill"] == "4346"
+    assert by_doc[f"document:{extract_corpus['d2']}"]["amount"] == "85,500"
+    assert by_doc[f"document:{extract_corpus['d2']}"]["bill"] is None  # null, not dropped
+    assert by_doc[f"document:{extract_corpus['d1']}"]["bill"] == "4346"
 
 
 def test_scan_extract_column_collision_errors(extract_corpus, capsys):
@@ -762,7 +765,7 @@ def test_scan_extract_composes_with_tag(extract_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     # Only d3 carries the tag.
     assert out["total"] == 1
-    assert [r["document_id"] for r in out["rows"]] == [extract_corpus["d3"]]
+    assert [r["document_id"] for r in out["rows"]] == [f"document:{extract_corpus['d3']}"]
     assert out["rows"][0]["amount"] == "42,000"
     assert out["filters"]["tags"] == ["senate"]
 
@@ -771,16 +774,17 @@ def test_scan_extract_composes_with_file_like(extract_corpus, capsys):
     _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
                           "--file-like", "extract_a%"])
     out = json.loads(capsys.readouterr().out)
-    assert [r["document_id"] for r in out["rows"]] == [extract_corpus["d1"]]
+    assert [r["document_id"] for r in out["rows"]] == [f"document:{extract_corpus['d1']}"]
     assert out["rows"][0]["amount"] == "120,000"
 
 
 def test_scan_extract_composes_with_in_documents(extract_corpus, capsys):
     _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
-                          "--in-documents", f"{extract_corpus['d2']},{extract_corpus['d3']}"])
+                          "--in-documents",
+                          f"document:{extract_corpus['d2']},document:{extract_corpus['d3']}"])
     out = json.loads(capsys.readouterr().out)
     got = sorted(r["document_id"] for r in out["rows"])
-    assert got == sorted([extract_corpus["d2"], extract_corpus["d3"]])
+    assert got == sorted([f"document:{extract_corpus['d2']}", f"document:{extract_corpus['d3']}"])
 
 
 def test_scan_extract_paginates_with_full_total(extract_corpus, capsys):
@@ -788,13 +792,13 @@ def test_scan_extract_paginates_with_full_total(extract_corpus, capsys):
     p1 = json.loads(capsys.readouterr().out)
     assert p1["total"] == 3          # honest total under pagination
     assert len(p1["rows"]) == 1
-    assert p1["rows"][0]["document_id"] == extract_corpus["d1"]
+    assert p1["rows"][0]["document_id"] == f"document:{extract_corpus['d1']}"
 
     _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE,
                           "--limit", "1", "--offset", "2"])
     p3 = json.loads(capsys.readouterr().out)
     assert p3["total"] == 3
-    assert [r["document_id"] for r in p3["rows"]] == [extract_corpus["d3"]]
+    assert [r["document_id"] for r in p3["rows"]] == [f"document:{extract_corpus['d3']}"]
 
 
 def test_scan_extract_no_match_is_empty_with_columns(extract_corpus, capsys):
@@ -809,9 +813,10 @@ def test_scan_extract_excludes_summary_chunks(extract_corpus, capsys):
     # scan is docs-only; an extract row is still a document chunk.
     _run(extract_corpus, [EXTRACT_MARKER, "--extract", AMOUNT_RE])
     out = json.loads(capsys.readouterr().out)
-    assert all(isinstance(r["document_id"], int) for r in out["rows"])
+    assert all(r["document_id"].startswith("document:") for r in out["rows"])
     assert {r["document_id"] for r in out["rows"]} <= {
-        extract_corpus["d1"], extract_corpus["d2"], extract_corpus["d3"],
+        f"document:{extract_corpus['d1']}", f"document:{extract_corpus['d2']}",
+        f"document:{extract_corpus['d3']}",
     }
 
 
@@ -882,7 +887,7 @@ def test_scan_date_bound_filters_and_echoes(scan_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     # Only d1 is dated and in-bounds, so only its marker chunks survive.
     assert out["total"] == 2
-    assert all(m["document_id"] == scan_corpus["d1"] for m in out["matches"])
+    assert all(m["document_id"] == f"document:{scan_corpus['d1']}" for m in out["matches"])
     f = out["filters"]
     assert f["authored_after"] == "2024-01-01"
     assert f["authored_before"] is None
@@ -911,8 +916,8 @@ def test_scan_match_carries_authored_date(scan_corpus, capsys):
         for m in out["matches"]:
             assert "authored_date" in m  # present in every mode
             by_doc[m["document_id"]] = m["authored_date"]
-        assert by_doc[scan_corpus["d1"]] == "2024-03-01"
-        assert by_doc[scan_corpus["d2"]] is None  # undated → null
+        assert by_doc[f"document:{scan_corpus['d1']}"] == "2024-03-01"
+        assert by_doc[f"document:{scan_corpus['d2']}"] is None  # undated → null
 
 
 def test_scan_count_by_carries_date_filter(scan_corpus, capsys):
@@ -923,7 +928,7 @@ def test_scan_count_by_carries_date_filter(scan_corpus, capsys):
     assert out["distinct_document_count"] == 1
     assert out["total_chunk_count"] == 2
     assert out["documents"] == [
-        {"document_id": scan_corpus["d1"], "file_name": "filing_a.txt",
+        {"document_id": f"document:{scan_corpus['d1']}", "file_name": "filing_a.txt",
          "chunk_count": 2},
     ]
     assert out["filters"]["excluded_null_dated"] == 2
@@ -960,7 +965,10 @@ def test_scan_sort_document_matches_default(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--sort", "document"])
     out = json.loads(capsys.readouterr().out)
     got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
-    assert got == [(scan_corpus["d1"], 1), (scan_corpus["d1"], 3), (scan_corpus["d2"], 0)]
+    assert got == [
+        (f"document:{scan_corpus['d1']}", 1), (f"document:{scan_corpus['d1']}", 3),
+        (f"document:{scan_corpus['d2']}", 0),
+    ]
 
 
 def test_scan_sort_date_reorders_doc_groups_oldest_first(scan_corpus, capsys):
@@ -971,7 +979,10 @@ def test_scan_sort_date_reorders_doc_groups_oldest_first(scan_corpus, capsys):
     out = json.loads(capsys.readouterr().out)
     got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
     # d2's group first (oldest), then d1's chunks in positional order.
-    assert got == [(scan_corpus["d2"], 0), (scan_corpus["d1"], 1), (scan_corpus["d1"], 3)]
+    assert got == [
+        (f"document:{scan_corpus['d2']}", 0), (f"document:{scan_corpus['d1']}", 1),
+        (f"document:{scan_corpus['d1']}", 3),
+    ]
 
 
 def test_scan_sort_date_puts_undated_last(scan_corpus, capsys):
@@ -980,7 +991,10 @@ def test_scan_sort_date_puts_undated_last(scan_corpus, capsys):
     _run(scan_corpus, [MARKER, "--sort", "date"])
     out = json.loads(capsys.readouterr().out)
     got = [(m["document_id"], m["chunk_index"]) for m in out["matches"]]
-    assert got == [(scan_corpus["d2"], 0), (scan_corpus["d1"], 1), (scan_corpus["d1"], 3)]
+    assert got == [
+        (f"document:{scan_corpus['d2']}", 0), (f"document:{scan_corpus['d1']}", 1),
+        (f"document:{scan_corpus['d1']}", 3),
+    ]
 
 
 def test_scan_sort_date_paginates_stably(scan_corpus, capsys):
@@ -991,7 +1005,7 @@ def test_scan_sort_date_paginates_stably(scan_corpus, capsys):
     assert out["total"] == 3
     # Page 2 of the chronological order: d1's first marker chunk.
     assert [(m["document_id"], m["chunk_index"]) for m in out["matches"]] == [
-        (scan_corpus["d1"], 1),
+        (f"document:{scan_corpus['d1']}", 1),
     ]
 
 
@@ -1002,7 +1016,7 @@ def test_scan_count_by_sort_date_orders_histogram_chronologically(scan_corpus, c
     out = json.loads(capsys.readouterr().out)
     # Default would be hit-count order (d1=2, d2=1); --sort date flips to oldest-first.
     assert [d["document_id"] for d in out["documents"]] == [
-        scan_corpus["d2"], scan_corpus["d1"],
+        f"document:{scan_corpus['d2']}", f"document:{scan_corpus['d1']}",
     ]
 
 
@@ -1083,7 +1097,7 @@ def test_scan_count_by_document_chunk_id_selectable(scan_corpus, capsys):
     for d in out["documents"]:
         assert set(d) == {"document_id", "chunk_id"}
         # chunk_id is a real matching chunk in that document.
-        assert isinstance(d["chunk_id"], int)
+        assert d["chunk_id"].startswith("chunk:")
 
 
 def test_scan_count_by_document_default_unchanged(scan_corpus, capsys):
@@ -1133,7 +1147,7 @@ def test_scan_zero_absent_term_diagnosis(scan_corpus, capsys):
 def test_scan_zero_out_of_scope_diagnosis(scan_corpus, capsys):
     """MARKER scoped to d3 (which lacks it) → 'out_of_scope': body hits exist
     corpus-wide but none in this scope."""
-    _run(scan_corpus, [MARKER, "--in-documents", str(scan_corpus["d3"])])
+    _run(scan_corpus, [MARKER, "--in-documents", f"document:{scan_corpus['d3']}"])
     out = json.loads(capsys.readouterr().out)
     assert out["total"] == 0
     diag = out["diagnosis"]
@@ -1186,7 +1200,7 @@ def test_scan_empty_query_token_set_no_diagnosis(scan_corpus, capsys):
 def test_scan_zero_diagnosis_on_count_by_document(scan_corpus, capsys):
     """The empty-histogram path attaches the diagnosis too."""
     _run(scan_corpus, [MARKER, "--count-by", "document",
-                       "--in-documents", str(scan_corpus["d3"])])
+                       "--in-documents", f"document:{scan_corpus['d3']}"])
     out = json.loads(capsys.readouterr().out)
     assert out["distinct_document_count"] == 0
     assert out["diagnosis"]["verdict"] == "out_of_scope"

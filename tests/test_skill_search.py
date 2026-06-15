@@ -62,11 +62,11 @@ def test_search_returns_context_before_and_after(seeded_project, capsys):
     assert len(hit["context_before"]) == 1
     assert hit["context_before"][0]["text"] == "alpha chunk zero about pm25"
     assert hit["context_before"][0]["chunk_index"] == 0
-    assert isinstance(hit["context_before"][0]["chunk_id"], int)
+    assert hit["context_before"][0]["chunk_id"].startswith("chunk:")
     assert len(hit["context_after"]) == 1
     assert hit["context_after"][0]["text"] == "alpha chunk two on results"
     assert hit["context_after"][0]["chunk_index"] == 2
-    assert isinstance(hit["context_after"][0]["chunk_id"], int)
+    assert hit["context_after"][0]["chunk_id"].startswith("chunk:")
 
 
 def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
@@ -85,7 +85,7 @@ def test_search_context_entries_resolve_via_read_chunks(seeded_project, capsys):
     capsys.readouterr()  # drain previous output
     read_chunks.main([
         "--project", seeded_project["project"],
-        "--chunks", str(neighbor["chunk_id"]),
+        "--chunks", neighbor["chunk_id"],
     ])
     fetched = json.loads(capsys.readouterr().out)
     assert fetched["chunks"][0]["text"] == neighbor["text"]
@@ -457,12 +457,12 @@ def test_search_in_documents_filters_to_listed_docs(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text",
-        "--in-documents", str(seeded_project["doc_b"]),
+        "--in-documents", f"document:{seeded_project['doc_b']}",
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
     # "alpha" appears in doc_a's chunks, but we scoped to doc_b — no hits.
-    assert out["filters"]["in_documents"] == [seeded_project["doc_b"]]
+    assert out["filters"]["in_documents"] == [f"document:{seeded_project['doc_b']}"]
     assert out["results"] == []
 
 
@@ -470,14 +470,14 @@ def test_search_in_documents_returns_hits_in_scope(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text",
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["results"]
     for r in out["results"]:
         assert r["source_kind"] == "document"
-        assert r["source_id"] == seeded_project["doc_a"]
+        assert r["source_id"] == f"document:{seeded_project['doc_a']}"
 
 
 def test_search_in_documents_drops_findings(seeded_project, capsys):
@@ -506,7 +506,7 @@ def test_search_in_documents_drops_findings(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text", "--findings",
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -518,11 +518,11 @@ def test_search_in_documents_invalid_ids_returns_empty(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text",
-        "--in-documents", "99999",
+        "--in-documents", "document:99999",
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["filters"]["in_documents"] == [99999]
+    assert out["filters"]["in_documents"] == ["document:99999"]
     assert out["results"] == []
 
 
@@ -537,7 +537,7 @@ def test_search_file_like_single_pattern(seeded_project, capsys):
     assert out["filters"]["file_like"] == ["alpha%"]
     assert out["results"]
     for r in out["results"]:
-        assert r["source_id"] == seeded_project["doc_a"]
+        assert r["source_id"] == f"document:{seeded_project['doc_a']}"
 
 
 def test_search_file_like_excludes_nonmatching_doc(seeded_project, capsys):
@@ -565,7 +565,7 @@ def test_search_file_like_repeated_ors(seeded_project, capsys):
     # The OR group admits both docs; "alpha" still only hits doc_a's chunks.
     assert out["results"]
     for r in out["results"]:
-        assert r["source_id"] == seeded_project["doc_a"]
+        assert r["source_id"] == f"document:{seeded_project['doc_a']}"
 
 
 def test_search_file_like_ands_with_in_documents(seeded_project, capsys):
@@ -573,12 +573,12 @@ def test_search_file_like_ands_with_in_documents(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text",
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
         "--file-like", "beta%",
         "alpha",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["filters"]["in_documents"] == [seeded_project["doc_a"]]
+    assert out["filters"]["in_documents"] == [f"document:{seeded_project['doc_a']}"]
     assert out["filters"]["file_like"] == ["beta%"]
     assert out["results"] == []
 
@@ -636,20 +636,20 @@ def test_search_semantic_scope_survives_global_nearest_elsewhere(
         "anything",
     ])
     unscoped = json.loads(capsys.readouterr().out)
-    assert unscoped["results"][0]["source_id"] != seeded_project["doc_a"]
+    assert unscoped["results"][0]["source_id"] != f"document:{seeded_project['doc_a']}"
 
     # Scoped to doc_a, the in-scope chunks must come back — not [].
     _run([
         "--project", seeded_project["project"],
         "--semantic", "--documents", "--limit", str(limit),
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
         "anything",
     ])
     scoped = json.loads(capsys.readouterr().out)
     assert scoped["results"], "scoped semantic search starved to empty (issue #55)"
     for r in scoped["results"]:
         assert r["source_kind"] == "document"
-        assert r["source_id"] == seeded_project["doc_a"]
+        assert r["source_id"] == f"document:{seeded_project['doc_a']}"
 
 
 def test_search_includes_image_chunks_with_id_and_path(seeded_project, capsys):
@@ -674,8 +674,8 @@ def test_search_includes_image_chunks_with_id_and_path(seeded_project, capsys):
     image_hits = [r for r in out["results"] if r["source_kind"] == "image"]
     assert image_hits, "expected an image hit for 'pm25' in the description"
     hit = image_hits[0]
-    assert hit["source_id"] == image_id
-    assert hit["image_id"] == image_id
+    assert hit["source_id"] == f"image:{image_id}"
+    assert hit["image_id"] == f"image:{image_id}"
     assert hit["image_file_path"] == "images/img-hash-1.jpg"
     # source_name renders the document anchor.
     assert "image in alpha.pdf" in hit["source_name"]
@@ -701,7 +701,7 @@ def test_search_in_documents_filters_image_chunks(seeded_project, capsys):
     _run([
         "--project", seeded_project["project"],
         "--full-text", "--images",
-        "--in-documents", str(seeded_project["doc_a"]),
+        "--in-documents", f"document:{seeded_project['doc_a']}",
         "image",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -926,7 +926,7 @@ def test_search_authored_after_filters_to_dated_doc(dated_corpus, capsys):
         "body",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert {r["source_id"] for r in out["results"]} == {dated_corpus["dated_doc"]}
+    assert {r["source_id"] for r in out["results"]} == {f"document:{dated_corpus['dated_doc']}"}
     f = out["filters"]
     assert f["authored_after"] == "2000-01-01"
     assert f["authored_before"] is None
@@ -956,7 +956,7 @@ def test_search_inclusive_bounds_match_scan_boundary(dated_corpus, capsys):
         "body",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert {r["source_id"] for r in out["results"]} == {dated_corpus["dated_doc"]}
+    assert {r["source_id"] for r in out["results"]} == {f"document:{dated_corpus['dated_doc']}"}
 
 
 def test_search_include_nulls_keeps_undated(dated_corpus, capsys):
@@ -991,14 +991,14 @@ def test_search_date_bound_ands_with_in_documents(dated_corpus, capsys):
     # the slice are counted as dropped.
     _run([
         "--project", dated_corpus["project"], "--full-text",
-        "--in-documents", str(dated_corpus["stub_doc"]),
+        "--in-documents", f"document:{dated_corpus['stub_doc']}",
         "--authored-after", "2000-01-01",
         "body",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["results"] == []
     f = out["filters"]
-    assert f["in_documents"] == [dated_corpus["stub_doc"]]
+    assert f["in_documents"] == [f"document:{dated_corpus['stub_doc']}"]
     # stub_doc is undated and the only doc in scope → 1 dropped.
     assert f["excluded_null_dated"] == 1
 
@@ -1036,7 +1036,7 @@ def test_search_date_filter_matches_scan_on_same_bounds(dated_corpus, capsys):
     # document-kind chunks) and the same excluded_null_dated count.
     scan_docs = {m["document_id"] for m in scan_out["matches"]}
     search_docs = {r["source_id"] for r in search_out["results"]}
-    assert search_docs == scan_docs == {dated_corpus["summary_doc"]}
+    assert search_docs == scan_docs == {f"document:{dated_corpus['summary_doc']}"}
     assert (
         search_out["filters"]["excluded_null_dated"]
         == scan_out["filters"]["excluded_null_dated"]

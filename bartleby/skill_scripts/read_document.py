@@ -8,7 +8,7 @@ override.
 Successful output:
     {
       "document": {
-        "id": int, "file_name": str, "token_count": int,
+        "id": "document:<id>", "file_name": str, "token_count": int,
         "authored_date": str|null
       },
       "summary": str|null,
@@ -36,7 +36,7 @@ import argparse
 from bartleby.config import load_config
 from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import positive_int
+from bartleby.skill_scripts._ids import format_id, prefixed_int
 
 
 DEFAULT_MAX_READ_TOKENS = 50_000
@@ -44,7 +44,10 @@ DEFAULT_MAX_READ_TOKENS = 50_000
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_document", __doc__)
-    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
+    p.add_argument(
+        "--document-id", type=prefixed_int("document"), required=True,
+        dest="document_id", help="Type-tagged document id, e.g. document:204.",
+    )
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--summary", action="store_true")
     mode.add_argument("--full", action="store_true")
@@ -112,7 +115,7 @@ def work(*, conn, args, session_id) -> dict:
 
     return {
         "document": {
-            "id": doc_id,
+            "id": format_id("document", doc_id),
             "file_name": file_name,
             "token_count": token_count,
             "authored_date": authored_date,

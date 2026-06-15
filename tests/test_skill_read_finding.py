@@ -39,7 +39,7 @@ def test_read_finding_happy_path(seeded_project, capsys):
                 (seeded_project["doc_a"],),
             )
         ]
-        body = f"Claim one[^{cited[0]}] and claim two[^{cited[1]}]."
+        body = f"Claim one[^chunk:{cited[0]}] and claim two[^chunk:{cited[1]}]."
         finding_id, body_chunk_ids = seed_finding(
             conn, session_id=session_id, title="PM25 equity",
             description="who bears the brunt", body=body, cited_chunk_ids=cited,
@@ -48,11 +48,11 @@ def test_read_finding_happy_path(seeded_project, capsys):
         conn.close()
 
     read_finding.main([
-        "--project", project, "--finding-id", str(finding_id),
+        "--project", project, "--finding-id", f"finding:{finding_id}",
     ])
     out = json.loads(capsys.readouterr().out)
 
-    assert out["finding_id"] == finding_id
+    assert out["finding_id"] == f"finding:{finding_id}"
     assert out["title"] == "PM25 equity"
     assert out["description"] == "who bears the brunt"
     # body comes back byte-for-byte (the verbatim-echo contract).
@@ -60,9 +60,11 @@ def test_read_finding_happy_path(seeded_project, capsys):
     assert out["created_at"] is not None
     assert out["session_id"] == session_id
     assert out["session_name"]
-    assert out["chunk_ids"] == body_chunk_ids
+    assert out["chunk_ids"] == [f"chunk:{cid}" for cid in body_chunk_ids]
 
-    assert [c["chunk_id"] for c in out["citations"]] == cited
+    assert [c["chunk_id"] for c in out["citations"]] == [
+        f"chunk:{cid}" for cid in cited
+    ]
     for c in out["citations"]:
         assert c["source_kind"] == "document"
         assert c["source_name"] == "alpha.pdf"
@@ -88,24 +90,24 @@ def test_read_finding_dangling_citation(seeded_project, capsys):
                 (seeded_project["doc_a"],),
             )
         ]
-        body = f"Live claim[^{cited[0]}] and orphaned claim[^{cited[1]}]."
+        body = f"Live claim[^chunk:{cited[0]}] and orphaned claim[^chunk:{cited[1]}]."
         finding_id, _ = seed_finding(
             conn, session_id=session_id, body=body, cited_chunk_ids=cited,
         )
         # Drop the cited document's chunks; ON DELETE CASCADE strips the
-        # finding_citations rows pointing at them, leaving both [^N] markers
+        # finding_citations rows pointing at them, leaving both [^chunk:N] markers
         # in the verbatim body pointing at nothing.
         delete_chunks_for(conn, "document", seeded_project["doc_a"])
     finally:
         conn.close()
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding-id", f"finding:{finding_id}"])
     out = json.loads(capsys.readouterr().out)
 
-    # Both cited chunks belonged to the deleted document, so both [^N] markers
+    # Both cited chunks belonged to the deleted document, so both [^chunk:N] markers
     # dangle and neither resolves.
     assert out["citations"] == []
-    assert out["dangling_citations"] == cited
+    assert out["dangling_citations"] == [f"chunk:{cid}" for cid in cited]
 
 
 def test_read_finding_no_citations(seeded_project, capsys):
@@ -118,7 +120,7 @@ def test_read_finding_no_citations(seeded_project, capsys):
     finally:
         conn.close()
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding-id", f"finding:{finding_id}"])
     out = json.loads(capsys.readouterr().out)
     assert out["citations"] == []
     assert len(out["chunk_ids"]) == 1
@@ -126,7 +128,7 @@ def test_read_finding_no_citations(seeded_project, capsys):
 
 def test_read_finding_not_found(seeded_project, capsys):
     code, captured = _run(capsys, [
-        "--project", seeded_project["project"], "--finding-id", "99999",
+        "--project", seeded_project["project"], "--finding-id", "finding:99999",
     ])
     assert code == 1
     out = json.loads(captured.out)
@@ -153,7 +155,7 @@ def test_read_finding_memory_off_other_session(seeded_project, capsys):
     start_session(project, memory_enabled=False)
 
     code, captured = _run(capsys, [
-        "--project", project, "--finding-id", str(finding_id),
+        "--project", project, "--finding-id", f"finding:{finding_id}",
     ])
     assert code == 1
     out = json.loads(captured.out)
@@ -175,8 +177,8 @@ def test_read_finding_memory_off_own_session(seeded_project, capsys):
     finally:
         conn.close()
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding-id", f"finding:{finding_id}"])
     out = json.loads(capsys.readouterr().out)
-    assert out["finding_id"] == finding_id
+    assert out["finding_id"] == f"finding:{finding_id}"
     assert out["title"] == "own"
     assert out["session_id"] == info["session_id"]

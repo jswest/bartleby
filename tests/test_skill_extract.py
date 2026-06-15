@@ -142,20 +142,20 @@ def test_add_tag_rejects_pattern_without_value_type(project_env, capsys):
 def test_extract_stores_normalized_values(corpus, capsys):
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", ",".join(str(c) for c in corpus["a_chunks"] + corpus["b_chunks"]),
+        "--chunks", ",".join(f"chunk:{c}" for c in corpus["a_chunks"] + corpus["b_chunks"]),
     ])
     out = json.loads(capsys.readouterr().out)
 
     stored = {s["document_id"]: s for s in out["stored"]}
     # doc_a: "$1,234,567" → stripped of $ and commas.
-    assert stored[corpus["doc_a"]]["value"] == "1234567"
-    assert stored[corpus["doc_a"]]["chunk_id"] == corpus["a_chunks"][1]
+    assert stored[f"document:{corpus['doc_a']}"]["value"] == "1234567"
+    assert stored[f"document:{corpus['doc_a']}"]["chunk_id"] == f"chunk:{corpus['a_chunks'][1]}"
     # doc_b: "42".
-    assert stored[corpus["doc_b"]]["value"] == "42"
+    assert stored[f"document:{corpus['doc_b']}"]["value"] == "42"
 
     # Non-matching chunks land in no_match, never fabricated.
-    assert corpus["a_chunks"][0] in out["no_match"]
-    assert corpus["b_chunks"][1] in out["no_match"]
+    assert f"chunk:{corpus['a_chunks'][0]}" in out["no_match"]
+    assert f"chunk:{corpus['b_chunks'][1]}" in out["no_match"]
 
     # Persisted to document_tags.value + chunk_id.
     assert _stored_value(corpus["project"], corpus["doc_a"]) == (
@@ -175,14 +175,14 @@ def test_extract_conflict_stores_neither(corpus, capsys):
 
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", f"{corpus['a_chunks'][1]},{extra[0]}",
+        "--chunks", f"chunk:{corpus['a_chunks'][1]},chunk:{extra[0]}",
     ])
     out = json.loads(capsys.readouterr().out)
 
     assert out["stored"] == []
     assert len(out["conflicts"]) == 1
     conflict = out["conflicts"][0]
-    assert conflict["document_id"] == corpus["doc_a"]
+    assert conflict["document_id"] == f"document:{corpus['doc_a']}"
     assert {v["value"] for v in conflict["values"]} == {"1234567", "999"}
     # Nothing persisted.
     assert _stored_value(corpus["project"], corpus["doc_a"]) is None
@@ -199,22 +199,22 @@ def test_extract_same_value_twice_is_not_a_conflict(corpus, capsys):
 
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", f"{corpus['a_chunks'][1]},{dup[0]}",
+        "--chunks", f"chunk:{corpus['a_chunks'][1]},chunk:{dup[0]}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["conflicts"] == []
     assert len(out["stored"]) == 1
     # First matching chunk is the stored anchor.
-    assert out["stored"][0]["chunk_id"] == corpus["a_chunks"][1]
+    assert out["stored"][0]["chunk_id"] == f"chunk:{corpus['a_chunks'][1]}"
 
 
 def test_extract_reports_missing_chunk_ids(corpus, capsys):
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", f"{corpus['a_chunks'][1]},999999",
+        "--chunks", f"chunk:{corpus['a_chunks'][1]},chunk:999999",
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["missing"] == [999999]
+    assert out["missing"] == ["chunk:999999"]
     assert len(out["stored"]) == 1
 
 
@@ -227,7 +227,7 @@ def test_extract_rejects_boolean_tag(corpus, capsys):
     with pytest.raises(SystemExit):
         extract.main([
             "--project", corpus["project"], "--tag", "plain",
-            "--chunks", str(corpus["a_chunks"][1]),
+            "--chunks", f"chunk:{corpus['a_chunks'][1]}",
         ])
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "NOT_A_VALUE_TAG"
@@ -236,7 +236,7 @@ def test_extract_rejects_boolean_tag(corpus, capsys):
 def test_extract_rerun_overwrites_value(corpus, capsys):
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", str(corpus["a_chunks"][1]),
+        "--chunks", f"chunk:{corpus['a_chunks'][1]}",
     ])
     capsys.readouterr()
     # New chunk with a different revenue figure; re-running over just it
@@ -248,7 +248,7 @@ def test_extract_rerun_overwrites_value(corpus, capsys):
         conn.close()
     extract.main([
         "--project", corpus["project"], "--tag", "revenue",
-        "--chunks", str(new[0]),
+        "--chunks", f"chunk:{new[0]}",
     ])
     json.loads(capsys.readouterr().out)
     assert _stored_value(corpus["project"], corpus["doc_a"]) == ("77", new[0])
@@ -270,7 +270,7 @@ def test_extract_cast_error_skips_and_reports(project_env, capsys):
     capsys.readouterr()
     extract.main([
         "--project", project_env, "--tag", "amount",
-        "--chunks", str(chunks[0]),
+        "--chunks", f"chunk:{chunks[0]}",
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["stored"] == []

@@ -30,8 +30,8 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
 
     body_file = tmp_path / "finding.md"
     body_text = (
-        f"# A finding\n\nFirst claim[^{cited_ids[0]}].\n\n"
-        f"Second claim[^{cited_ids[1]}]."
+        f"# A finding\n\nFirst claim[^chunk:{cited_ids[0]}].\n\n"
+        f"Second claim[^chunk:{cited_ids[1]}]."
     )
     body_file.write_text(body_text, encoding="utf-8")
 
@@ -42,7 +42,8 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert out["finding_id"] >= 1
+    finding_id = int(out["finding_id"].split(":")[1])
+    assert finding_id >= 1
     assert len(out["citations"]) == 2
     assert len(out["chunk_ids"]) == 1
     assert out["session_name"]
@@ -52,14 +53,16 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
         assert c["source_name"] == "alpha.pdf"
         assert c["file_name"] == "alpha.pdf"
         assert c["page_number"] is None
-    assert [c["chunk_id"] for c in out["citations"]] == cited_ids
+    assert [c["chunk_id"] for c in out["citations"]] == [
+        f"chunk:{cid}" for cid in cited_ids
+    ]
 
     conn = open_db(seeded_project["project"])
     try:
         cur = conn.cursor()
         title, description, body = cur.execute(
             "SELECT title, description, body FROM findings WHERE finding_id = ?",
-            (out["finding_id"],),
+            (finding_id,),
         ).fetchone()
         assert title == "PM25 equity"
         assert description == "Who bears the brunt of PM2.5 monitoring gaps."
@@ -71,7 +74,7 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
 
         n_citations = cur.execute(
             "SELECT COUNT(*) FROM finding_citations WHERE finding_id = ?",
-            (out["finding_id"],),
+            (finding_id,),
         ).fetchone()[0]
         assert n_citations == 2
     finally:
@@ -101,7 +104,7 @@ def test_save_finding_memory_off_session_can_write(seeded_project, tmp_path, cap
         conn.close()
 
     body_file = tmp_path / "finding.md"
-    body_file.write_text(f"A memory-off claim[^{cited_id}].", encoding="utf-8")
+    body_file.write_text(f"A memory-off claim[^chunk:{cited_id}].", encoding="utf-8")
     save_finding.main([
         "--project", project,
         "--title", "memory-off write",
@@ -111,8 +114,9 @@ def test_save_finding_memory_off_session_can_write(seeded_project, tmp_path, cap
     out = json.loads(capsys.readouterr().out)
 
     # Success: the finding was written with its citation intact ...
-    assert out["finding_id"] >= 1
-    assert [c["chunk_id"] for c in out["citations"]] == [cited_id]
+    finding_id = int(out["finding_id"].split(":")[1])
+    assert finding_id >= 1
+    assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{cited_id}"]
     # ... and attributed to the memory-off session that authored it.
     assert out["session_id"] == info["session_id"]
     assert out["session_name"] == info["name"]
@@ -121,7 +125,7 @@ def test_save_finding_memory_off_session_can_write(seeded_project, tmp_path, cap
     try:
         row_session_id = conn.cursor().execute(
             "SELECT session_id FROM findings WHERE finding_id = ?",
-            (out["finding_id"],),
+            (finding_id,),
         ).fetchone()[0]
         assert row_session_id == info["session_id"]
     finally:
@@ -142,7 +146,9 @@ def test_save_finding_dedupes_repeated_markers(seeded_project, tmp_path, capsys)
         conn.close()
 
     body_file = tmp_path / "f.md"
-    body_file.write_text(f"X[^{a}] Y[^{b}] Z[^{a}].", encoding="utf-8")
+    body_file.write_text(
+        f"X[^chunk:{a}] Y[^chunk:{b}] Z[^chunk:{a}].", encoding="utf-8"
+    )
     save_finding.main([
         "--project", seeded_project["project"],
         "--title", "dedup",
@@ -150,7 +156,7 @@ def test_save_finding_dedupes_repeated_markers(seeded_project, tmp_path, capsys)
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    assert [c["chunk_id"] for c in out["citations"]] == [a, b]
+    assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{a}", f"chunk:{b}"]
 
 
 def test_save_finding_citations_include_page_number_when_available(
@@ -180,7 +186,7 @@ def test_save_finding_citations_include_page_number_when_available(
         conn.close()
 
     body_file = tmp_path / "f.md"
-    body_file.write_text(f"Cited from page 7[^{new_chunk_id}].", encoding="utf-8")
+    body_file.write_text(f"Cited from page 7[^chunk:{new_chunk_id}].", encoding="utf-8")
     save_finding.main([
         "--project", seeded_project["project"],
         "--title", "page test",
@@ -214,7 +220,7 @@ def test_save_finding_rejects_malformed_citation(seeded_project, tmp_path, capsy
     agent fixes the typo instead of shipping silent phantom citations."""
     body_file = tmp_path / "f.md"
     body_file.write_text(
-        "Real claim[^1] and typoed claim[3] in the same body.",
+        "Real claim[^chunk:1] and typoed claim[3] in the same body.",
         encoding="utf-8",
     )
     with pytest.raises(SystemExit) as exc:
@@ -232,7 +238,7 @@ def test_save_finding_rejects_malformed_citation(seeded_project, tmp_path, capsy
 
 def test_save_finding_unknown_inline_marker(seeded_project, tmp_path, capsys):
     body_file = tmp_path / "f.md"
-    body_file.write_text("body[^999999].", encoding="utf-8")
+    body_file.write_text("body[^chunk:999999].", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         save_finding.main([
             "--project", seeded_project["project"],
@@ -263,20 +269,20 @@ def test_finding_scripts_surface_session_provenance(seeded_project, tmp_path, ca
         conn.close()
 
     body_file = tmp_path / "f.md"
-    body_file.write_text(f"Claim[^{cid}].", encoding="utf-8")
+    body_file.write_text(f"Claim[^chunk:{cid}].", encoding="utf-8")
     save_finding.main([
         "--project", project, "--title", "t", "--description", "d",
         "--body-file", str(body_file),
     ])
     saved = json.loads(capsys.readouterr().out)
-    finding_id = saved["finding_id"]
+    finding_id = saved["finding_id"]  # already type-tagged, e.g. "finding:1"
     # save_finding always reports the keys (value may be env-derived at create time).
     assert "model" in saved and "harness" in saved
 
     # Stamp the authoring (active) session, then confirm read/list reflect it.
     set_session_provenance(project, model="qwen3.6:35b-mlx", harness="ollama-cli")
 
-    read_finding.main(["--project", project, "--finding-id", str(finding_id)])
+    read_finding.main(["--project", project, "--finding-id", finding_id])
     read_out = json.loads(capsys.readouterr().out)
     assert read_out["model"] == "qwen3.6:35b-mlx"
     assert read_out["harness"] == "ollama-cli"
@@ -324,7 +330,7 @@ def test_save_finding_failure_mid_write_leaves_no_trace(
     monkeypatch.setattr("bartleby.db.chunks._pack_embedding", _boom)
 
     body_file = tmp_path / "f.md"
-    body_file.write_text(f"A claim[^{cited_id}].", encoding="utf-8")
+    body_file.write_text(f"A claim[^chunk:{cited_id}].", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         save_finding.main([
             "--project", seeded_project["project"],

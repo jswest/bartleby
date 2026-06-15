@@ -2,18 +2,21 @@
 """read_chunks — read chunks by document (paginated), by chunk_id list, or
 around a target chunk.
 
+All ids are type-tagged on both input and output (e.g. ``chunk:4192``,
+``document:204``).
+
 Three modes (mutually exclusive):
 
-  read_chunks --document-id <id> [--offset N] [--limit N]
+  read_chunks --document-id document:<id> [--offset N] [--limit N]
       Paginated read of a single document's chunks in chunk_index order.
       Output includes a ``document`` field and pagination metadata.
 
-  read_chunks --chunks 4192,4193,4194
+  read_chunks --chunks chunk:4192,chunk:4193,chunk:4194
       Direct lookup by chunk_id. Returns those chunks regardless of source.
       Each chunk carries its source_kind/source_id/chunk_index so the agent
       can locate it. Output includes a ``requested`` and ``missing`` list.
 
-  read_chunks --around-chunk <id> [--window N]
+  read_chunks --around-chunk chunk:<id> [--window N]
       Neighborhood read: returns the target chunk plus N chunks on each
       side (default ``--window 3``), in chunk_index order. Source is
       derived from the target chunk — no need to pass --document-id. Works
@@ -54,11 +57,11 @@ unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error naming the valid set.
 Paginated output:
     {
       "mode": "document",
-      "document": {"id": int, "file_name": str},
+      "document": {"id": "document:<id>", "file_name": str},
       "offset": int, "limit": int, "total": int,
       "preview": int|null,
       "chunks": [{
-        "chunk_id": int, "chunk_index": int,
+        "chunk_id": "chunk:<id>", "chunk_index": int,
         "section_heading": str|null,
         "page_number": int|null,
         "content_type": str|null,
@@ -70,13 +73,13 @@ Paginated output:
 Direct-lookup output:
     {
       "mode": "chunks",
-      "requested": [int, ...],
-      "missing": [int, ...],
-      "hints": {"<id>": str, ...},   # present only when a missing id is a live document_id
+      "requested": ["chunk:<id>", ...],
+      "missing": ["chunk:<id>", ...],
+      "hints": {"chunk:<id>": str, ...},   # present only when a missing id is a live document_id
       "preview": int|null,
       "chunks": [{
-        "chunk_id": int,
-        "source_kind": str, "source_id": int, "source_name": str,
+        "chunk_id": "chunk:<id>",
+        "source_kind": str, "source_id": "<source_kind>:<id>", "source_name": str,
         "file_name": str|null,
         "page_number": int|null,
         "chunk_index": int,
@@ -89,12 +92,12 @@ Direct-lookup output:
 Around-chunk output:
     {
       "mode": "around",
-      "target": {"chunk_id": int, "chunk_index": int,
-                 "source_kind": str, "source_id": int, "source_name": str},
+      "target": {"chunk_id": "chunk:<id>", "chunk_index": int,
+                 "source_kind": str, "source_id": "<source_kind>:<id>", "source_name": str},
       "window": int,
       "preview": int|null,
       "chunks": [{
-        "chunk_id": int, "chunk_index": int,
+        "chunk_id": "chunk:<id>", "chunk_index": int,
         "section_heading": str|null,
         "page_number": int|null,
         "content_type": str|null,
@@ -111,9 +114,13 @@ import argparse
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     add_returning_arg, apply_preview, assert_findings_accessible,
-    chunk_locations, comma_int_list, memory_enabled, nonneg_int,
+    chunk_locations, memory_enabled, nonneg_int,
     owned_finding_ids, positive_int, project_row, source_names,
     validate_returning,
+)
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, format_source_id, prefixed_int,
+    prefixed_int_list,
 )
 
 
@@ -134,18 +141,22 @@ CHUNK_FIELDS = [
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_chunks", __doc__)
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--document-id", type=positive_int, dest="document_id")
+    mode.add_argument(
+        "--document-id", type=prefixed_int("document"), dest="document_id",
+        help="Type-tagged document id, e.g. document:204.",
+    )
     mode.add_argument(
         "--chunks",
-        type=comma_int_list("chunk_id"),
+        type=prefixed_int_list("chunk"),
         dest="chunk_ids",
-        help="Comma-separated chunk_ids to fetch directly.",
+        help="Comma-separated type-tagged chunk ids, e.g. chunk:4192,chunk:4193.",
     )
     mode.add_argument(
         "--around-chunk",
-        type=positive_int,
+        type=prefixed_int("chunk"),
         dest="around_chunk",
-        help="Target chunk_id; returns target plus --window chunks on each side.",
+        help="Target chunk id (e.g. chunk:4192); returns target plus --window "
+             "chunks on each side.",
     )
     p.add_argument("--offset", type=nonneg_int, default=0)
     p.add_argument("--limit", type=positive_int, default=50)
@@ -238,7 +249,8 @@ def _read_by_chunk_ids(
             "chunk_id": cid,
             "document_id": sid if sk == "document" else None,
             "source_kind": sk,
-            "source_id": sid,
+            # source_id is polymorphic: prefix by source_kind, not the map.
+            "source_id": format_source_id(sk, sid),
             "source_name": names.get((sk, sid), ""),
             "file_name": loc["file_name"],
             "page_number": loc["page_number"],
@@ -272,22 +284,28 @@ def _read_by_chunk_ids(
     # holds. The hint fires only for ids that are not chunks here at all.
     live_chunk_ids = _live_chunk_ids(conn, missing)
     doc_ids = _live_document_ids(conn, missing)
+    # Key the hint by the type-tagged chunk id the agent passed; the body now
+    # points at the typed --document-id form (a document:<id>, not a bare int).
     hints = {
-        str(cid): f"{cid} is a document_id — did you mean --document-id {cid}?"
+        format_id("chunk", cid): (
+            f"chunk:{cid} is a document_id — did you mean "
+            f"--document-id document:{cid}?"
+        )
         for cid in missing
         if cid in doc_ids and cid not in live_chunk_ids
     }
 
     out = {
         "mode": "chunks",
-        "requested": ordered,
-        "missing": missing,
+        # requested/missing are chunk ids; type-tag them (not in the field map).
+        "requested": [format_id("chunk", cid) for cid in ordered],
+        "missing": [format_id("chunk", cid) for cid in missing],
         "preview": preview,
         "chunks": chunks,
     }
     if hints:
         out["hints"] = hints
-    return out
+    return format_output_ids(out)
 
 
 def _live_chunk_ids(conn, ids: list[int]) -> set[int]:
@@ -331,12 +349,12 @@ def _read_by_document(conn, args) -> dict:
         extra = {}
         if _live_chunk_ids(conn, [args.document_id]):
             extra["hint"] = (
-                f"{args.document_id} is a chunk_id — "
-                f"did you mean --chunks {args.document_id}?"
+                f"chunk:{args.document_id} is a chunk_id — "
+                f"did you mean --chunks chunk:{args.document_id}?"
             )
         raise SkillError(
             "DOCUMENT_NOT_FOUND",
-            f"No document with id {args.document_id}.",
+            f"No document with id document:{args.document_id}.",
             **extra,
         )
 
@@ -356,17 +374,18 @@ def _read_by_document(conn, args) -> dict:
     ))
 
     # Every row here is a document-kind chunk of this one document, so the
-    # source context is constant across the page.
+    # source context is constant across the page. source_id is prefixed by kind;
+    # document_id rides as a bare int and is tagged by the outer format pass.
     source = {
         "source_kind": "document",
-        "source_id": doc_row[0],
+        "source_id": format_source_id("document", doc_row[0]),
         "source_name": doc_row[1],
         "file_name": doc_row[1],
         "document_id": doc_row[0],
     }
-    return {
+    return format_output_ids({
         "mode": "document",
-        "document": {"id": doc_row[0], "file_name": doc_row[1]},
+        "document": {"id": format_id("document", doc_row[0]), "file_name": doc_row[1]},
         "offset": args.offset,
         "limit": args.limit,
         "total": total,
@@ -374,7 +393,7 @@ def _read_by_document(conn, args) -> dict:
         "chunks": _chunks_from_rows(
             rows, args.preview, returning=args.returning, source=source,
         ),
-    }
+    })
 
 
 def _read_around_chunk(conn, args, *, session_id: int) -> dict:
@@ -387,7 +406,7 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
     if target is None:
         raise SkillError(
             "CHUNK_NOT_FOUND",
-            f"No chunk with id {args.around_chunk}.",
+            f"No chunk with id chunk:{args.around_chunk}.",
         )
     target_id, sk, sid, target_idx = target
 
@@ -416,18 +435,18 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
     )["file_name"]
     source = {
         "source_kind": sk,
-        "source_id": sid,
+        "source_id": format_source_id(sk, sid),
         "source_name": name,
         "file_name": file_name,
         "document_id": sid if sk == "document" else None,
     }
-    return {
+    return format_output_ids({
         "mode": "around",
         "target": {
             "chunk_id": target_id,
             "chunk_index": target_idx,
             "source_kind": sk,
-            "source_id": sid,
+            "source_id": format_source_id(sk, sid),
             "source_name": name,
         },
         "window": args.window,
@@ -435,7 +454,7 @@ def _read_around_chunk(conn, args, *, session_id: int) -> dict:
         "chunks": _chunks_from_rows(
             rows, args.preview, returning=args.returning, source=source,
         ),
-    }
+    })
 
 
 def work(*, conn, args, session_id) -> dict:

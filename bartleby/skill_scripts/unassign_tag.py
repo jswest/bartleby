@@ -11,10 +11,10 @@ One tag, any number of documents in a single process start (``--documents
 nothing); the call still succeeds. An id with no document is reported in
 ``not_found`` and skipped; the rest of the batch still applies.
 
-Output:
-    {"tag_id": int, "tag": str,
-     "unassigned": [{"document_id": int, "file_name": str}, ...],
-     "not_found": [int, ...]}
+Output (ids are type-tagged, e.g. ``"tag:7"``, ``"document:1"``):
+    {"tag_id": "tag:<id>", "tag": str,
+     "unassigned": [{"document_id": "document:<id>", "file_name": str}, ...],
+     "not_found": ["document:<id>", ...]}
 """
 
 from __future__ import annotations
@@ -22,15 +22,18 @@ from __future__ import annotations
 import argparse
 
 from bartleby.skill_runner import build_arg_parser, run
-from bartleby.skill_scripts._common import comma_int_list
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, prefixed_int_list,
+)
 from bartleby.skill_scripts._tags import require_tag_by_name, resolve_documents, unassign
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("unassign_tag", __doc__)
     p.add_argument(
-        "--documents", type=comma_int_list("document_id"), required=True,
-        dest="document_ids", help="Comma-separated document ids, e.g. 1,2,3.",
+        "--documents", type=prefixed_int_list("document"), required=True,
+        dest="document_ids",
+        help="Comma-separated type-tagged document ids, e.g. document:1,document:2.",
     )
     p.add_argument("--tag", type=str, required=True)
     return p.parse_args(argv)
@@ -43,12 +46,13 @@ def work(*, conn, args, session_id) -> dict:
     for document_id, _ in found:
         unassign(conn, document_id, tag.tag_id)
 
-    return {
+    return format_output_ids({
         "tag_id": tag.tag_id,
         "tag": tag.name,
         "unassigned": [{"document_id": d, "file_name": f} for d, f in found],
-        "not_found": not_found,
-    }
+        # not_found is a document-id list (not in the field map): tag each.
+        "not_found": [format_id("document", d) for d in not_found],
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

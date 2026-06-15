@@ -30,7 +30,8 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
     seeded_project, tmp_path, capsys
 ):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
-    finding_id = saved["finding_id"]
+    finding_id = saved["finding_id"]  # type-tagged, e.g. "finding:1"
+    fid = int(finding_id.split(":")[1])
     a, b = saved["_chunks"]
 
     # Fetch a third chunk to verify swapping citations works, and capture the
@@ -47,27 +48,27 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ?",
-                (finding_id,),
+                (fid,),
             )
         }
     finally:
         conn.close()
     assert old_finding_chunk_ids  # sanity: the finding had body chunks
 
-    new_body = f"# Fixed\n\nOnly claim now[^{c}]."
+    new_body = f"# Fixed\n\nOnly claim now[^chunk:{c}]."
     new_body_file = tmp_path / "edited.md"
     new_body_file.write_text(new_body, encoding="utf-8")
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(finding_id),
+        "--finding-id", finding_id,
         "--body-file", str(new_body_file),
     ])
     out = json.loads(capsys.readouterr().out)
 
     assert out["finding_id"] == finding_id
     assert out["body"] == new_body
-    assert [cite["chunk_id"] for cite in out["citations"]] == [c]
+    assert [cite["chunk_id"] for cite in out["citations"]] == [f"chunk:{c}"]
     assert out["session_name"]  # owning session round-tripped
 
     conn = open_db(seeded_project["project"])
@@ -75,7 +76,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
         cur = conn.cursor()
         title, description, body = cur.execute(
             "SELECT title, description, body FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()
         assert title == "Original title"
         assert description == "Original description."
@@ -84,7 +85,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
         citation_rows = list(cur.execute(
             "SELECT chunk_id FROM finding_citations WHERE finding_id = ? "
             "ORDER BY chunk_id",
-            (finding_id,),
+            (fid,),
         ))
         assert [r[0] for r in citation_rows] == [c]
 
@@ -95,7 +96,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
             row[0] for row in cur.execute(
                 "SELECT text FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ? ORDER BY chunk_index",
-                (finding_id,),
+                (fid,),
             )
         ]
         assert finding_chunk_texts == [new_body]
@@ -103,7 +104,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ?",
-                (finding_id,),
+                (fid,),
             )
         ]
         # The chunks_fts mirror is in sync with the new body too; that is
@@ -133,6 +134,7 @@ def test_edit_finding_title_only_leaves_body_and_citations_intact(
 ):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
+    fid = int(finding_id.split(":")[1])
 
     conn = open_db(seeded_project["project"])
     try:
@@ -141,14 +143,14 @@ def test_edit_finding_title_only_leaves_body_and_citations_intact(
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ? ORDER BY chunk_index",
-                (finding_id,),
+                (fid,),
             )
         ]
         original_citation_ids = [
             row[0] for row in cur.execute(
                 "SELECT chunk_id FROM finding_citations WHERE finding_id = ? "
                 "ORDER BY chunk_id",
-                (finding_id,),
+                (fid,),
             )
         ]
     finally:
@@ -156,20 +158,22 @@ def test_edit_finding_title_only_leaves_body_and_citations_intact(
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(finding_id),
+        "--finding-id", finding_id,
         "--title", "Renamed title",
     ])
     out = json.loads(capsys.readouterr().out)
 
     assert out["body"] == saved["body"]
-    assert out["chunk_ids"] == original_chunk_ids
-    assert [c["chunk_id"] for c in out["citations"]] == original_citation_ids
+    assert out["chunk_ids"] == [f"chunk:{cid}" for cid in original_chunk_ids]
+    assert [c["chunk_id"] for c in out["citations"]] == [
+        f"chunk:{cid}" for cid in original_citation_ids
+    ]
 
     conn = open_db(seeded_project["project"])
     try:
         title, description = conn.cursor().execute(
             "SELECT title, description FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()
         assert title == "Renamed title"
         assert description == "Original description."  # untouched
@@ -182,7 +186,7 @@ def test_edit_finding_requires_at_least_one_field(seeded_project, tmp_path, caps
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -193,7 +197,7 @@ def test_edit_finding_unknown_id(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", "99999",
+            "--finding-id", "finding:99999",
             "--title", "x",
         ])
     assert exc.value.code == 1
@@ -211,7 +215,7 @@ def test_edit_finding_rejects_body_without_citations(
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -227,14 +231,14 @@ def test_edit_finding_rejects_malformed_citation(
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     new_body_file = tmp_path / "typo.md"
     new_body_file.write_text(
-        "Real[^1] but typoed[3] and again[42].",
+        "Real[^chunk:1] but typoed[3] and again[42].",
         encoding="utf-8",
     )
 
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -248,12 +252,12 @@ def test_edit_finding_rejects_unknown_chunk_marker(
 ):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     new_body_file = tmp_path / "bad-cite.md"
-    new_body_file.write_text("Garbage[^999999].", encoding="utf-8")
+    new_body_file.write_text("Garbage[^chunk:999999].", encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -271,6 +275,7 @@ def test_edit_finding_rejects_citation_to_own_chunk(
     citation row is replaced). The finding is left untouched."""
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
+    fid = int(finding_id.split(":")[1])
     a, _ = saved["_chunks"]
 
     conn = open_db(seeded_project["project"])
@@ -278,21 +283,21 @@ def test_edit_finding_rejects_citation_to_own_chunk(
         own_chunk = conn.cursor().execute(
             "SELECT chunk_id FROM chunks WHERE source_kind='finding' "
             "AND source_id = ? ORDER BY chunk_index LIMIT 1",
-            (finding_id,),
+            (fid,),
         ).fetchone()[0]
     finally:
         conn.close()
 
     new_body_file = tmp_path / "self-cite.md"
     new_body_file.write_text(
-        f"# Reworked\n\nValid doc cite[^{a}] plus my own chunk[^{own_chunk}].",
+        f"# Reworked\n\nValid doc cite[^chunk:{a}] plus my own chunk[^chunk:{own_chunk}].",
         encoding="utf-8",
     )
 
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(finding_id),
+            "--finding-id", finding_id,
             "--body-file", str(new_body_file),
         ])
     assert exc.value.code == 1
@@ -305,7 +310,7 @@ def test_edit_finding_rejects_citation_to_own_chunk(
     try:
         title, body = conn.cursor().execute(
             "SELECT title, body FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()
         assert title == "Original title"
         assert body == saved["body"]
@@ -321,6 +326,7 @@ def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys)
 
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
+    fid = int(finding_id.split(":")[1])
 
     # The seed finding belongs to the (memory-on) default session; open a
     # fresh memory-off session as the would-be attacker.
@@ -329,7 +335,7 @@ def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys)
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(finding_id),
+            "--finding-id", finding_id,
             "--title", "Hijacked title",
         ])
     assert exc.value.code == 1
@@ -344,7 +350,7 @@ def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys)
     try:
         title = conn.cursor().execute(
             "SELECT title FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()[0]
         assert title == "Original title"
     finally:
@@ -358,10 +364,11 @@ def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
     start_session(seeded_project["project"], memory_enabled=False)
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
+    fid = int(finding_id.split(":")[1])
 
     edit_finding.main([
         "--project", seeded_project["project"],
-        "--finding-id", str(finding_id),
+        "--finding-id", finding_id,
         "--title", "Self-renamed",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -372,7 +379,7 @@ def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
     try:
         title = conn.cursor().execute(
             "SELECT title FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()[0]
         assert title == "Self-renamed"
     finally:
@@ -391,6 +398,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
     the chunk insert, after the UPDATE — so it's a true mid-write rollback."""
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
+    fid = int(finding_id.split(":")[1])
     a, b = saved["_chunks"]
 
     conn = open_db(seeded_project["project"])
@@ -398,19 +406,19 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
         cur = conn.cursor()
         before_title, before_body = cur.execute(
             "SELECT title, body FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()
         before_chunk_texts = [
             r[0] for r in cur.execute(
                 "SELECT text FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ? ORDER BY chunk_index",
-                (finding_id,),
+                (fid,),
             )
         ]
         before_citations = sorted(
             r[0] for r in cur.execute(
                 "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
-                (finding_id,),
+                (fid,),
             )
         )
     finally:
@@ -424,11 +432,11 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
 
     # Edit the body (and title) — the rebuild must fail and roll everything back.
     new_body_file = tmp_path / "doomed.md"
-    new_body_file.write_text(f"# Doomed\n\nNew claim[^{a}].", encoding="utf-8")
+    new_body_file.write_text(f"# Doomed\n\nNew claim[^chunk:{a}].", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(finding_id),
+            "--finding-id", finding_id,
             "--title", "Doomed title",
             "--body-file", str(new_body_file),
         ])
@@ -443,7 +451,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
         # chunk write.
         title, body = cur.execute(
             "SELECT title, body FROM findings WHERE finding_id = ?",
-            (finding_id,),
+            (fid,),
         ).fetchone()
         assert title == before_title
         assert body == before_body
@@ -452,7 +460,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
             r[0] for r in cur.execute(
                 "SELECT text FROM chunks WHERE source_kind='finding' "
                 "AND source_id = ? ORDER BY chunk_index",
-                (finding_id,),
+                (fid,),
             )
         ]
         assert chunk_texts == before_chunk_texts
@@ -460,7 +468,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
         citations = sorted(
             r[0] for r in cur.execute(
                 "SELECT chunk_id FROM finding_citations WHERE finding_id = ?",
-                (finding_id,),
+                (fid,),
             )
         )
         assert citations == before_citations
@@ -474,7 +482,7 @@ def test_edit_finding_rejects_empty_title(seeded_project, tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
             "--title", "   ",
         ])
     assert exc.value.code == 1
@@ -487,7 +495,7 @@ def test_edit_finding_rejects_empty_description(seeded_project, tmp_path, capsys
     with pytest.raises(SystemExit) as exc:
         edit_finding.main([
             "--project", seeded_project["project"],
-            "--finding-id", str(saved["finding_id"]),
+            "--finding-id", saved["finding_id"],
             "--description", "   ",
         ])
     assert exc.value.code == 1

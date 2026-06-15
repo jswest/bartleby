@@ -23,11 +23,14 @@
   // ordinal); the matching note carries the same dagger+ordinal in the gutter.
   // The ordinal is the tie-back — daggers repeat, the number disambiguates.
   //
-  // Two kinds of marker:
-  //   [^N]            corpus-chunk citation. Resolves against byId →
-  //                     resolved  → † "source" note (amber, filename, jumps)
-  //                     unresolved → ‡ "no longer available" note (danger)
-  //   [^url:…]/[^doc:…]  external citation → † "source" note (link / ref)
+  // One type-tagged marker grammar (issue #624): [^<scheme>:<ref>].
+  //   [^chunk:N]         corpus-chunk citation. Resolves against byId →
+  //                        resolved  → † "source" note (amber, filename, jumps)
+  //                        unresolved → ‡ "no longer available" note (danger)
+  //   [^url:…]/[^doc:…]   external citation → † "source" note (link / ref)
+  // Mirrors the backend grammar in skill_scripts/_common.py: `chunk` is the
+  // internal scheme, `url`/`doc` are external; any other scheme (incl. a stray
+  // document/finding marker) is dropped, not rendered as a citation.
   //
   // `notes` is rebuilt alongside `bodyHtml` in one ordered pass so the gutter
   // order matches reading order. Reactive on `active` so the .active state
@@ -39,25 +42,27 @@
     const collected = [];
     let n = 0;
     const html = marked.parse(
-      body
-        .replace(/\[\^([A-Za-z]+):([^\]]+)\]/g, (match, scheme, ref) => {
-          const note = externalNote(++n, scheme.toLowerCase(), ref.trim());
-          if (!note) {
-            n--; // unknown scheme: drop, don't burn an ordinal
-            return esc(match);
-          }
-          collected.push(note);
-          return marker(note);
-        })
-        .replace(/\[\^(\d+)\]/g, (match, idStr) => {
-          const id = Number(idStr);
+      body.replace(/\[\^([A-Za-z]+):([^\]]+)\]/g, (match, scheme, ref) => {
+        const s = scheme.toLowerCase();
+        if (s === "chunk") {
+          const id = Number(ref.trim());
+          // A non-numeric chunk ref can't resolve; leave the marker verbatim.
+          if (!Number.isInteger(id)) return esc(match);
           const c = byId.get(id);
           const note = c
             ? sourceNote(++n, c, c === active)
             : goneNote(++n, id);
           collected.push(note);
           return marker(note);
-        }),
+        }
+        const note = externalNote(++n, s, ref.trim());
+        if (!note) {
+          n--; // unknown scheme: drop, don't burn an ordinal
+          return esc(match);
+        }
+        collected.push(note);
+        return marker(note);
+      }),
     );
     notes = collected;
     return html;

@@ -56,7 +56,7 @@ Output:
         "median": int|null, "p90": int|null, "max": int|null
       },
       "largest_documents": [
-        {"id": int, "file_name": str, "title": str|null, "token_count": int}, ...
+        {"id": "document:<id>", "file_name": str, "title": str|null, "token_count": int}, ...
       ]
       # plus "filters": {...} when a scope filter is active
     }
@@ -70,7 +70,10 @@ import math
 from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, comma_int_list, positive_int,
+    add_date_filter_args, positive_int,
+)
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, prefixed_int_list,
 )
 from bartleby.skill_scripts._tags import resolve_scope
 
@@ -87,9 +90,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
              "OR semantics.",
     )
     p.add_argument(
-        "--in-documents", type=comma_int_list("document_id"), default=None,
+        "--in-documents", type=prefixed_int_list("document"), default=None,
         dest="in_documents",
-        help="Comma-separated document_ids to restrict the overview to.",
+        help="Comma-separated type-tagged document ids to restrict the overview "
+             "to (e.g. document:12,document:34).",
     )
     add_date_filter_args(p)
     return p.parse_args(argv)
@@ -146,7 +150,7 @@ def work(*, conn, args, session_id) -> dict:
     S = scope.document_ids
 
     if S is not None and not S:
-        return scope.echo_into(_empty_overview())
+        return format_output_ids(scope.echo_into(_empty_overview()))
 
     doc_ph = ",".join("?" * len(S)) if S is not None else None
 
@@ -277,11 +281,12 @@ def work(*, conn, args, session_id) -> dict:
         [*wp, args.top_n],
     )
     largest_documents = [
-        {"id": doc_id, "file_name": file_name, "title": title, "token_count": tok}
+        {"id": format_id("document", doc_id), "file_name": file_name,
+         "title": title, "token_count": tok}
         for doc_id, file_name, title, tok in largest_rows
     ]
 
-    return scope.echo_into({
+    return format_output_ids(scope.echo_into({
         "document_count": document_count,
         "chunk_count": chunk_count,
         "token_count": token_count,
@@ -300,7 +305,7 @@ def work(*, conn, args, session_id) -> dict:
         "content_mix": content_mix,
         "chunk_length": chunk_length,
         "largest_documents": largest_documents,
-    })
+    }))
 
 
 def main(argv: list[str] | None = None) -> None:

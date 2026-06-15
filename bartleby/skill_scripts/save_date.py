@@ -2,7 +2,7 @@
 """save_date — backfill or correct a document's authored_date.
 
 Output:
-    {"document_id": int, "old_authored_date": str|null, "new_authored_date": str|null}
+    {"document_id": "document:<id>", "old_authored_date": str|null, "new_authored_date": str|null}
 
 A curation write in the ``save_summary`` / ``assign_tag`` mold: use it when you
 have *read the evidence* for the date (a dateline, a signed-on line, an export
@@ -22,12 +22,15 @@ import argparse
 
 from bartleby.ingest.summarize import normalize_authored_date
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import positive_int
+from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("save_date", __doc__)
-    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
+    p.add_argument(
+        "--document-id", type=prefixed_int("document"), required=True,
+        dest="document_id", help="Type-tagged document id, e.g. document:204.",
+    )
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--date", type=str, default=None, dest="authored_date",
@@ -83,11 +86,11 @@ def work(*, conn, args, session_id) -> dict:
         (new_date, summary_id),
     )
 
-    return {
+    return format_output_ids({
         "document_id": args.document_id,
         "old_authored_date": old_date,
         "new_authored_date": new_date,
-    }
+    })
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -7,6 +7,9 @@ full row (page_count, token_count, chunk_count). ``--brief`` drops below the
 default to just id, file_name, title — the skinniest useful projection for
 triage. ``--verbose`` and ``--brief`` are mutually exclusive.
 
+Every id is type-tagged (the ``id`` / ``document_id`` of a row is rendered
+``"document:<id>"``; a ``tag_values`` chip's ``chunk_id`` is ``"chunk:<id>"``).
+
 Output:
     {
       "documents": [{...}, ...],
@@ -49,8 +52,8 @@ include_nulls, excluded_null_dated}`` — the same nested contract ``search`` /
 
 Value-tags: when a ``--tag`` names a value-tag (one carrying a per-document
 value), each returned document gains a ``tag_values`` object mapping that tag's
-name to ``{"value": str|null, "chunk_id": int|null}`` for the document — its
-value chip. A document with no extracted value for the tag maps to null entries.
+name to ``{"value": str|null, "chunk_id": "chunk:<id>"|null}`` for the document —
+its value chip. A document with no extracted value for the tag maps to null entries.
 ``tag_values`` is omitted (not empty) on rows when no value-tag is among the
 filters and on ``--brief`` rows.
 
@@ -74,8 +77,11 @@ import argparse
 from bartleby.lib.consts import BACKFILL_MODEL
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
-    add_date_filter_args, add_file_like_arg, add_returning_arg, comma_int_list,
+    add_date_filter_args, add_file_like_arg, add_returning_arg,
     nonneg_int, pagination_hint, positive_int, project_row, validate_returning,
+)
+from bartleby.skill_scripts._ids import (
+    format_id, format_output_ids, prefixed_int_list,
 )
 
 
@@ -109,10 +115,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--in-documents",
-        type=comma_int_list("document_id"),
+        type=prefixed_int_list("document"),
         default=None,
         dest="in_documents",
-        help="Comma-separated document_ids to restrict the listing to.",
+        help="Comma-separated type-tagged document ids to restrict the listing "
+             "to (e.g. document:12,document:34).",
     )
     p.add_argument(
         "--tag",
@@ -253,7 +260,10 @@ def work(*, conn, args, session_id) -> dict:
                 }
             documents.append(project_row({
                 "document_id": doc_id,
-                "id": doc_id,
+                # "id" is a document-id alias; tag it explicitly (the field map
+                # tags document_id, not the bare "id" key). document_id stays a
+                # bare int here so format_output_ids tags it at the envelope.
+                "id": format_id("document", doc_id),
                 "file_name": file_name,
                 "title": title,
                 "description": description,
@@ -268,10 +278,13 @@ def work(*, conn, args, session_id) -> dict:
             }, args.returning, DOCUMENT_FIELDS))
             continue
         if args.brief:
-            documents.append({"id": doc_id, "file_name": file_name, "title": title})
+            documents.append({
+                "id": format_id("document", doc_id),
+                "file_name": file_name, "title": title,
+            })
             continue
         doc = {
-            "id": doc_id,
+            "id": format_id("document", doc_id),
             "file_name": file_name,
             "title": title,
             "description": description,
@@ -297,14 +310,14 @@ def work(*, conn, args, session_id) -> dict:
 
     hint = pagination_hint(args.offset, len(documents), total)
 
-    return scope.echo_into({
+    return format_output_ids(scope.echo_into({
         "documents": documents,
         "total": total,
         "offset": args.offset,
         "limit": args.limit,
         "verbose": args.verbose,
         "hint": hint,
-    })
+    }))
 
 
 def main(argv: list[str] | None = None) -> None:
