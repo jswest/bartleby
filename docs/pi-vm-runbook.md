@@ -301,24 +301,38 @@ pi --help            # confirm `pi` is on PATH; see shakeout note if not
   `run` errors with `XPC connection error: Connection invalid`, the runtime
   wasn't up yet; just re-run.
 
-## Viewing findings while the agent runs
+## Don't touch a pi-vm corpus from the host while it runs
 
-If you browse the corpus with `bartleby serve` **on the host** while the VM agent
-is working the same project, expect intermittent `500`s —
-`SqliteError: database disk image is malformed`. Your data is **not** corrupt;
-it's a SQLite WAL limitation. Bartleby opens corpus DBs in **WAL mode**, whose
-write-ahead index lives in a shared-memory sidecar (`bartleby.db-shm`) that is
-only coherent *within one kernel*. With the agent (Linux guest) holding the DB
-read-write over the `/corpus` mount **and** the host `bartleby serve` reading it
-at the same time, two kernels share one WAL DB — which SQLite explicitly does not
-support. The host reader sees the guest's wal-index as garbage and reports
-"malformed." It clears the moment the agent's writes are checkpointed (`-wal`
-back to `0` bytes).
+**Operational rule: while a pi-vm (containerized) session is running against a
+corpus, do not access that corpus from the host.** Stop `bartleby serve` for that
+project, and don't start a host research session on it. View between runs, or once
+the container is idle.
 
-Practical rule: **don't drive the host viewer against a project the VM agent is
-actively writing.** View between runs, or refresh once the agent is idle. (There
-is no clean reader-side fix — `better-sqlite3`, which the web UI uses, doesn't
-support SQLite's `immutable=1` URI escape hatch.)
+This is a **cross-kernel** limitation, **not** a concurrency one. Same-kernel
+concurrent access *is* supported and tested — multiple host research sessions, or
+host `serve` + a host session, are fine (`busy_timeout` + `BEGIN IMMEDIATE`
+serialize writers; `tests/test_skill_concurrent_writes.py` lands six concurrent
+writers with zero BusyError). The breakage is **strictly** the container (Linux
+guest) and the host (macOS) touching the same corpus *at once*.
+
+Why: Bartleby opens corpus DBs in **WAL mode**, whose write-ahead index lives in a
+shared-memory sidecar (`bartleby.db-shm`) that is only coherent *within one
+kernel*. With the agent holding the DB read-write over the `/corpus` mount **and**
+a host process reading or writing it at the same time, two kernels share one WAL
+DB — which SQLite explicitly does not support. This bug has two faces, and both
+clear once the container is idle and its writes are checkpointed (`-wal` back to
+`0` bytes):
+
+- **Malformed (the loud face).** A host `bartleby serve` throws intermittent
+  `500`s — `SqliteError: database disk image is malformed`. Your data is **not**
+  corrupt; the host reader is seeing the guest's wal-index as garbage.
+- **Stale reads (the quiet face).** A host `bartleby serve` that *doesn't* error
+  will silently show **stale** data — new findings written by the containerized
+  session won't appear until you restart `serve`. Trusting a viewer that looks
+  fine but is hiding the run's output is the more dangerous half.
+
+There is no clean reader-side fix — `better-sqlite3`, which the web UI uses,
+doesn't support SQLite's `immutable=1` URI escape hatch.
 
 ## Disk & cleanup
 
