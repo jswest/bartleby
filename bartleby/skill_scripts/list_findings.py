@@ -10,7 +10,7 @@ Per finding: ``finding_id``, ``title``, ``description``, ``session_name``
 (the session that authored it), ``model`` / ``harness`` (the backend behind
 it, null when unrecorded), ``created_at``, and ``citation_count`` (how many
 chunks it cites). To read a whole finding, call
-``read_finding --finding <N>``.
+``read_finding --finding-id <N>``.
 
 Output:
     {

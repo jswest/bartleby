@@ -44,7 +44,7 @@ DEFAULT_MAX_READ_TOKENS = 50_000
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_document", __doc__)
-    p.add_argument("--document", type=positive_int, required=True, dest="document_id")
+    p.add_argument("--document-id", type=positive_int, required=True, dest="document_id")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--summary", action="store_true")
     mode.add_argument("--full", action="store_true")

@@ -163,7 +163,7 @@ def test_imported_finding_reads_back_like_a_local_one(
     finally:
         conn.close()
 
-    read_finding.main(["--project", "fresh", "--finding", str(new_id)])
+    read_finding.main(["--project", "fresh", "--finding-id", str(new_id)])
     read_out = json.loads(capsys.readouterr().out)
     assert read_out["title"] == "Air quality gaps"
     assert "Imported from" in read_out["body"]

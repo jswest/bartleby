@@ -4,7 +4,7 @@ around a target chunk.
 
 Three modes (mutually exclusive):
 
-  read_chunks --document <id> [--offset N] [--limit N]
+  read_chunks --document-id <id> [--offset N] [--limit N]
       Paginated read of a single document's chunks in chunk_index order.
       Output includes a ``document`` field and pagination metadata.
 
@@ -16,12 +16,12 @@ Three modes (mutually exclusive):
   read_chunks --around-chunk <id> [--window N]
       Neighborhood read: returns the target chunk plus N chunks on each
       side (default ``--window 3``), in chunk_index order. Source is
-      derived from the target chunk — no need to pass --document. Works
+      derived from the target chunk — no need to pass --document-id. Works
       for any source kind, though image chunks have no neighbors.
 
 The modes are mutually exclusive: pick one, and any flags belonging to the
 other modes are silently ignored (e.g. ``--window`` is read only in
-``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document``
+``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document-id``
 mode).
 
 In a memory-off session the finding wall (see ``read_finding``) extends here:
@@ -46,7 +46,7 @@ Selectable fields: ``chunk_id``, ``document_id``, ``source_kind``,
 ``source_id``, ``source_name``, ``file_name``, ``page_number``,
 ``chunk_index``, ``section_heading``, ``content_type``, ``text``,
 ``text_length``. ``document_id`` is the originating document for a
-document-kind chunk and ``null`` otherwise. ``--document`` / ``--around-chunk``
+document-kind chunk and ``null`` otherwise. ``--document-id`` / ``--around-chunk``
 default rows omit the ``source_*`` / ``file_name`` columns (the envelope names
 the document/target once), but ``--returning`` can pull them in any mode. An
 unknown field returns an ``UNKNOWN_RETURNING_FIELD`` error naming the valid set.
@@ -121,7 +121,7 @@ from bartleby.skill_scripts._common import (
 # modes. chunk_id + document_id lead so a citable id is always selectable.
 # document_id is the originating document for a document-kind chunk and null
 # otherwise (summaries/images/findings have no single document anchor here) —
-# honest-null, never faked. The --document and --around-chunk default rows are a
+# honest-null, never faked. The --document-id and --around-chunk default rows are a
 # locator-light subset (no source_* / file_name), but --returning can pull the
 # full set in any mode since every row carries it underneath.
 CHUNK_FIELDS = [
@@ -134,7 +134,7 @@ CHUNK_FIELDS = [
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = build_arg_parser("read_chunks", __doc__)
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--document", type=positive_int, dest="document_id")
+    mode.add_argument("--document-id", type=positive_int, dest="document_id")
     mode.add_argument(
         "--chunks",
         type=comma_int_list("chunk_id"),
@@ -168,7 +168,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def _chunks_from_rows(
     rows, preview: int | None, *, returning=None, source=None,
 ) -> list[dict]:
-    """Build the per-chunk dicts for --document / --around-chunk modes.
+    """Build the per-chunk dicts for --document-id / --around-chunk modes.
 
     Without ``--returning`` each row is the locator-light default (no source_*/
     file_name — both modes already name the document/target once at the
@@ -261,7 +261,7 @@ def _read_by_chunk_ids(
             )})
 
     # Cross-namespace hint: a missing chunk_id that exists as a document_id is
-    # very likely a --document id passed to --chunks. Surface a per-id hint so a
+    # very likely a --document-id id passed to --chunks. Surface a per-id hint so a
     # silently-wrong-namespace lookup gets caught before it becomes a citation.
     # Memory-walled foreign finding chunks also land in ``missing``, but their
     # ids ARE chunk ids (chunk and document ids overlap freely), so a walled id
@@ -273,7 +273,7 @@ def _read_by_chunk_ids(
     live_chunk_ids = _live_chunk_ids(conn, missing)
     doc_ids = _live_document_ids(conn, missing)
     hints = {
-        str(cid): f"{cid} is a document_id — did you mean --document {cid}?"
+        str(cid): f"{cid} is a document_id — did you mean --document-id {cid}?"
         for cid in missing
         if cid in doc_ids and cid not in live_chunk_ids
     }
@@ -324,7 +324,7 @@ def _read_by_document(conn, args) -> dict:
     ).fetchone()
     if doc_row is None:
         # Chunk and document ids share an integer namespace; a common slip is
-        # passing a chunk_id to --document. Hint toward --chunks only when the
+        # passing a chunk_id to --document-id. Hint toward --chunks only when the
         # unknown id is in fact a live chunk_id (silent otherwise — an id that's
         # genuinely unknown everywhere, or valid in both namespaces, carries no
         # detectable intent).

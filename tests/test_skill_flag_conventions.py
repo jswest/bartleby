@@ -11,9 +11,14 @@ argparse parser and fails the moment a convention drifts:
     ``--tag`` (never ``--name`` / ``--tag-name``); ``--name`` is reserved for the
     tag being *created* (``add_tag``).
   - #408 — every scope-supporting script exposes ``--in-documents``.
-  - #111 — no flag carries a redundant ``-id`` suffix (the convention is
-    ``--document`` / ``--finding`` / ``--chunk``, with ``dest`` carrying the
-    ``_id``, not the option string).
+  - #573 (supersedes #111) — *name the value you accept*: an id-valued flag
+    ends in ``-id`` (``--document-id`` / ``--finding-id`` / ``--chunk-id``), a
+    name/key/path/predicate flag stays bare. The enforceable invariant is a
+    biconditional: a flag's option string ends in ``-id`` **iff** its argparse
+    ``dest`` ends in ``_id``. Plural/relational id flags whose ``dest`` ends in
+    ``_ids`` or another stem (``--documents`` → ``document_ids``, ``--chunks`` →
+    ``chunk_ids``, ``--from`` → ``from_ids``, ``--into`` → ``into``,
+    ``--around-chunk`` → ``around_chunk``) stay bare by the same rule.
 
 By design these assertions are LITERAL: each names the exact scripts and exact
 flags the conventions cover. They are a tripwire, not a re-derivation of the
@@ -26,8 +31,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import pkgutil
+import re
+import subprocess
+from pathlib import Path
 
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from bartleby import skill_scripts
 from bartleby.commands.skill import SCRIPTS
@@ -155,13 +165,89 @@ def test_scope_scripts_expose_in_documents(script):
 
 
 @pytest.mark.parametrize("script", SCRIPTS)
-def test_no_redundant_id_suffixed_flags(script):
-    """#111: no flag ends in ``-id`` (use --document/--finding/--chunk; the
-    ``_id`` lives on ``dest``, not the option string)."""
-    offenders = sorted(
-        opt for opt in _option_strings(_parser_for(script)) if opt.endswith("-id")
+def test_id_flag_suffix_matches_dest(script):
+    """#573 (supersedes #111): a flag's option string ends in ``-id`` IFF its
+    argparse ``dest`` ends in ``_id``.
+
+    This is the *name the value you accept* convention as a biconditional, so it
+    cannot drift back to the bare-noun #111 form (a renamed-away ``--finding``
+    re-suffixes its dest, a freshly-added ``--document`` that takes an id trips
+    the other arm). Plural/relational id flags (``dest`` ends ``_ids`` or another
+    stem — ``--documents``/``--chunks``/``--from``/``--into``/``--around-chunk``)
+    stay bare and pass both arms.
+    """
+    parser = _parser_for(script)
+    mismatches = []
+    for action in parser._actions:
+        if not action.option_strings:
+            continue  # positionals carry no convention here
+        dest_is_id = action.dest.endswith("_id")
+        for opt in action.option_strings:
+            flag_is_id = opt.endswith("-id")
+            if flag_is_id != dest_is_id:
+                mismatches.append((opt, action.dest))
+    assert not mismatches, (
+        f"{script} violates the #573 id-flag biconditional (flag ends -id IFF "
+        f"dest ends _id): {sorted(mismatches)}. An id-valued flag must end in "
+        "-id (--finding-id, --document-id, --chunk-id); a name/key/path flag "
+        "stays bare. Plural id lists keep an _ids/other-stem dest and stay bare."
     )
+
+
+# ---- #573 regression grep: no stale bare id-flag invocation survives ------
+#
+# The biconditional above guards the *live* argparse parsers; this guards every
+# other place an old flag spelling could regress — docs, examples, --help/epilog
+# prose, tests, fixtures. It matches an actual flag *invocation* (the token
+# ``--finding`` / ``--document`` / ``--chunk`` bounded by non-word, non-hyphen on
+# both sides, so ``--finding-id`` / ``--findings`` / ``--documents`` /
+# ``--around-chunk`` / the ``surface--finding`` CSS class never trip it).
+#
+# Two paths are allow-listed because they *legitimately* name the old spelling:
+#   - ``docs/decisions/`` — the GH-0573 record documents the old→new rename, and
+#     prior decision records quote the historical bare-noun convention as the
+#     "why" of past calls (they must not be rewritten).
+#   - this test file — its docstrings spell out both the old and new forms.
+# (There is no in-repo CHANGELOG; release notes live in GitHub Releases, off VC.)
+
+_STALE_FLAG_RE = re.compile(r"(?<![\w-])--(?:finding|document|chunk)(?![\w-])")
+
+_GREP_ALLOWLIST = (
+    "docs/decisions/",
+    "tests/test_skill_flag_conventions.py",
+)
+
+
+def _version_controlled_files() -> list[str]:
+    out = subprocess.run(
+        ["git", "ls-files"],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return [line for line in out.splitlines() if line]
+
+
+def test_no_stale_bare_id_flag_anywhere():
+    """#573: no old bare id-flag invocation (``--finding`` / ``--document`` /
+    ``--chunk``) survives anywhere under version control, except the allow-listed
+    decision records and this test's own docstrings."""
+    offenders: dict[str, list[int]] = {}
+    for rel in _version_controlled_files():
+        # Allow-list entries ending in "/" are dir prefixes; bare paths are
+        # exact files — hence the ``==`` *or* ``startswith`` pair.
+        if any(rel == p or rel.startswith(p) for p in _GREP_ALLOWLIST):
+            continue
+        path = _REPO_ROOT / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue  # binary/asset or removed-but-staged; nothing to scan
+        hits = [
+            i for i, line in enumerate(text.splitlines(), 1)
+            if _STALE_FLAG_RE.search(line)
+        ]
+        if hits:
+            offenders[rel] = hits
     assert not offenders, (
-        f"{script} has redundant -id-suffixed flag(s) {offenders}; name them "
-        "--document / --finding / --chunk (the _id belongs on dest only)"
+        "stale bare id-flag invocation(s) survive the #573 rename — rename to "
+        f"--finding-id / --document-id / --chunk-id:\n{offenders}"
     )

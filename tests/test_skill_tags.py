@@ -722,7 +722,7 @@ def test_tag_single_tag_force_can_unassign(
     stub_classifier.append({"applies": False})
     tag_script.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--tag", "a", "--force",
     ])
     out = json.loads(capsys.readouterr().out)
@@ -828,7 +828,7 @@ def test_tag_retries_transient_failure_once(seeded_project, capsys, monkeypatch)
 
     tag_script.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]), "--tag", "a",
+        "--document-id", str(seeded_project["doc_a"]), "--tag", "a",
     ])
     out = json.loads(capsys.readouterr().out)
 
@@ -1244,7 +1244,7 @@ def test_assign_tag_chunk_requires_value(seeded_project, capsys):
         assign_tag.main([
             "--project", seeded_project["project"],
             "--documents", str(seeded_project["doc_a"]), "--tag", "revenue",
-            "--chunk", "1",
+            "--chunk-id", "1",
         ])
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "CHUNK_WITHOUT_VALUE"

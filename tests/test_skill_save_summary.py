@@ -19,7 +19,7 @@ from tests._skill_fixtures import (  # noqa: F401
 def test_save_summary_creates_new_summary(seeded_project, capsys):
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_b"]),
+        "--document-id", str(seeded_project["doc_b"]),
         "--title", "Beta paper",
         "--description", "An agent's take on beta's main argument.",
         "--text", "Agent-authored summary of beta.",
@@ -70,7 +70,7 @@ def test_save_summary_replaces_existing(seeded_project, capsys):
 
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_a"]),
+        "--document-id", str(seeded_project["doc_a"]),
         "--title", "Alpha v2",
         "--description", "Replacement description for alpha.",
         "--text", "Replacement summary for alpha.",
@@ -117,7 +117,7 @@ def test_save_summary_replaces_existing(seeded_project, capsys):
 def test_save_summary_accepts_iso_authored_date(seeded_project, capsys):
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_b"]),
+        "--document-id", str(seeded_project["doc_b"]),
         "--title", "Beta",
         "--description", "Dated.",
         "--text", "body",
@@ -138,7 +138,7 @@ def test_save_summary_accepts_iso_authored_date(seeded_project, capsys):
 def test_save_summary_drops_malformed_authored_date(seeded_project, capsys):
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(seeded_project["doc_b"]),
+        "--document-id", str(seeded_project["doc_b"]),
         "--title", "Beta",
         "--description", "Dated.",
         "--text", "body",
@@ -166,7 +166,7 @@ def test_save_summary_replace_carries_authored_date_forward(
     doc_b = seeded_project["doc_b"]
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(doc_b),
+        "--document-id", str(doc_b),
         "--title", "Beta dated",
         "--description", "First save, with a date.",
         "--text", "Dated body.",
@@ -177,7 +177,7 @@ def test_save_summary_replace_carries_authored_date_forward(
     # Re-save with no --authored-date at all.
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(doc_b),
+        "--document-id", str(doc_b),
         "--title", "Beta v2",
         "--description", "Second save, no date arg.",
         "--text", "Replacement body.",
@@ -204,7 +204,7 @@ def test_save_summary_explicit_date_overwrites_prior_on_replace(
     doc_b = seeded_project["doc_b"]
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(doc_b),
+        "--document-id", str(doc_b),
         "--title", "Beta dated",
         "--description", "First save.",
         "--text", "Dated body.",
@@ -214,7 +214,7 @@ def test_save_summary_explicit_date_overwrites_prior_on_replace(
 
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(doc_b),
+        "--document-id", str(doc_b),
         "--title", "Beta v2",
         "--description", "Second save, new date.",
         "--text", "Replacement body.",
@@ -240,7 +240,7 @@ def test_save_summary_new_save_with_no_date_stays_null(seeded_project, capsys):
     doc_b = seeded_project["doc_b"]
     save_summary.main([
         "--project", seeded_project["project"],
-        "--document", str(doc_b),
+        "--document-id", str(doc_b),
         "--title", "Beta",
         "--description", "Brand-new, undated.",
         "--text", "body",
@@ -307,7 +307,7 @@ def test_save_summary_failed_replace_preserves_prior_summary_and_chunks(
     with pytest.raises(SystemExit) as exc:
         save_summary.main([
             "--project", seeded_project["project"],
-            "--document", str(doc_a),
+            "--document-id", str(doc_a),
             "--title", "Doomed v2",
             "--description", "Replacement that must roll back.",
             "--text", "Replacement summary that never lands.",
@@ -346,7 +346,7 @@ def test_save_summary_unknown_document(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_summary.main([
             "--project", seeded_project["project"],
-            "--document", "999",
+            "--document-id", "999",
             "--title", "x",
             "--description", "x",
             "--text", "irrelevant",
@@ -361,7 +361,7 @@ def test_save_summary_rejects_empty_title(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_summary.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_b"]),
+            "--document-id", str(seeded_project["doc_b"]),
             "--title", "   ",
             "--description", "A real description.",
             "--text", "A real body.",
@@ -375,7 +375,7 @@ def test_save_summary_rejects_empty_description(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_summary.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_b"]),
+            "--document-id", str(seeded_project["doc_b"]),
             "--title", "A real title",
             "--description", "   ",
             "--text", "A real body.",
@@ -389,7 +389,7 @@ def test_save_summary_rejects_empty_text(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         save_summary.main([
             "--project", seeded_project["project"],
-            "--document", str(seeded_project["doc_b"]),
+            "--document-id", str(seeded_project["doc_b"]),
             "--title", "A real title",
             "--description", "A real description.",
             "--text", "   ",

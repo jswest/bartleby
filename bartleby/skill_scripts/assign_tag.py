@@ -18,8 +18,8 @@ whose regex can't reach the value — odd formatting, or a value read by eye —
 pass ``--value`` to record it manually, mirroring manual tag assignment. The
 value is cast/normalized per the tag's value_type exactly as ``extract`` would,
 then written to every named document (one value per (tag, document)). Optionally
-anchor it to a chunk with ``--chunk <id>`` (the citation source). ``--value`` is
-rejected on a plain boolean tag; ``--chunk`` requires ``--value``.
+anchor it to a chunk with ``--chunk-id <id>`` (the citation source). ``--value`` is
+rejected on a plain boolean tag; ``--chunk-id`` requires ``--value``.
 
 Output:
     {"tag_id": int, "tag": str,
@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
              "value_type). Only valid on a value-tag.",
     )
     p.add_argument(
-        "--chunk", type=positive_int, default=None, dest="chunk_id",
+        "--chunk-id", type=positive_int, default=None, dest="chunk_id",
         help="Chunk to anchor a manual --value to (its citation source).",
     )
     return p.parse_args(argv)
@@ -79,7 +79,7 @@ def work(*, conn, args, session_id) -> dict:
             )
     elif args.chunk_id is not None:
         raise SkillError(
-            "CHUNK_WITHOUT_VALUE", "--chunk requires --value.",
+            "CHUNK_WITHOUT_VALUE", "--chunk-id requires --value.",
         )
 
     found, not_found = resolve_documents(conn, args.document_ids)

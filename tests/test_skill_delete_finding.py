@@ -55,7 +55,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
 
     delete_finding.main([
         "--project", seeded_project["project"],
-        "--finding", str(finding_id),
+        "--finding-id", str(finding_id),
     ])
     out = json.loads(capsys.readouterr().out)
 
@@ -105,7 +105,7 @@ def test_delete_finding_unknown_id(seeded_project, capsys):
     with pytest.raises(SystemExit) as exc:
         delete_finding.main([
             "--project", seeded_project["project"],
-            "--finding", "99999",
+            "--finding-id", "99999",
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -132,7 +132,7 @@ def test_delete_finding_memory_off_other_session(seeded_project, capsys):
 
     with pytest.raises(SystemExit) as exc:
         delete_finding.main([
-            "--project", project, "--finding", str(finding_id),
+            "--project", project, "--finding-id", str(finding_id),
         ])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
@@ -152,7 +152,7 @@ def test_delete_finding_memory_off_own_session(seeded_project, capsys):
     finally:
         conn.close()
 
-    delete_finding.main(["--project", project, "--finding", str(finding_id)])
+    delete_finding.main(["--project", project, "--finding-id", str(finding_id)])
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "deleted"
     assert out["finding_id"] == finding_id

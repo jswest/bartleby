@@ -201,7 +201,7 @@ def test_read_finding_surfaces_external_citations(seeded_project, tmp_path, caps
 
     read_finding.main([
         "--project", seeded_project["project"],
-        "--finding", str(saved["finding_id"]),
+        "--finding-id", str(saved["finding_id"]),
     ])
     out = json.loads(capsys.readouterr().out)
     assert out["body"] == body_text
