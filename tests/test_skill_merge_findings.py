@@ -15,6 +15,7 @@ from tests._skill_fixtures import (  # noqa: F401
     project_env,
     seed_finding,
     seeded_project,
+    unprefix,
 )
 
 
@@ -58,7 +59,7 @@ def _save(project, tmp_path, capsys, *, name, title, cite) -> int:
     out = json.loads(capsys.readouterr().out)
     # save_finding emits a type-tagged id ("finding:N"); return the bare int so
     # callers can build SQL params and the prefixed flag/output forms freely.
-    return int(out["finding_id"].split(":")[1])
+    return unprefix(out["finding_id"])
 
 
 def test_merge_folds_sources_into_target(seeded_project, tmp_path, capsys):

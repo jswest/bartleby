@@ -14,6 +14,7 @@ from tests._skill_fixtures import (  # noqa: F401
     project_env,
     seed_finding_via_main,
     seeded_project,
+    unprefix,
 )
 
 
@@ -31,7 +32,7 @@ def test_edit_finding_body_rebuilds_citations_and_chunks(
 ):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]  # type-tagged, e.g. "finding:1"
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
     a, b = saved["_chunks"]
 
     # Fetch a third chunk to verify swapping citations works, and capture the
@@ -134,7 +135,7 @@ def test_edit_finding_title_only_leaves_body_and_citations_intact(
 ):
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
 
     conn = open_db(seeded_project["project"])
     try:
@@ -275,7 +276,7 @@ def test_edit_finding_rejects_citation_to_own_chunk(
     citation row is replaced). The finding is left untouched."""
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
     a, _ = saved["_chunks"]
 
     conn = open_db(seeded_project["project"])
@@ -326,7 +327,7 @@ def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys)
 
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
 
     # The seed finding belongs to the (memory-on) default session; open a
     # fresh memory-off session as the would-be attacker.
@@ -364,7 +365,7 @@ def test_edit_finding_memory_off_own_session(seeded_project, tmp_path, capsys):
     start_session(seeded_project["project"], memory_enabled=False)
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
 
     edit_finding.main([
         "--project", seeded_project["project"],
@@ -398,7 +399,7 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
     the chunk insert, after the UPDATE — so it's a true mid-write rollback."""
     saved = _seed_finding(seeded_project, tmp_path, capsys)
     finding_id = saved["finding_id"]
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
     a, b = saved["_chunks"]
 
     conn = open_db(seeded_project["project"])

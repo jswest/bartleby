@@ -16,6 +16,7 @@ from tests._skill_fixtures import (  # noqa: F401
     seed_finding,
     seed_finding_via_main,
     seeded_project,
+    unprefix,
 )
 
 
@@ -37,7 +38,7 @@ def test_delete_finding_removes_row_chunks_and_citations(
         title="Stale draft", description="A draft to retract.",
     )
     finding_id = saved["finding_id"]  # type-tagged, e.g. "finding:1"
-    fid = int(finding_id.split(":")[1])
+    fid = unprefix(finding_id)
     a, b = saved["_chunks"]
 
     # Capture the finding's own body chunk ids before deletion.

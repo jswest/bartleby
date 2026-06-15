@@ -20,12 +20,13 @@ from tests._skill_fixtures import (  # noqa: F401
     mock_embed,
     project_env,
     seeded_project,
+    unprefix,
 )
 
 
 def _bare(finding_id) -> int:
     """Strip the ``finding:`` type tag from a save/read response id (#624)."""
-    return int(str(finding_id).split(":")[1])
+    return unprefix(finding_id)
 
 
 def _save_a_finding(seeded_project, tmp_path, capsys, *, with_page=False):

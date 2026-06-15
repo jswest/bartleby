@@ -23,6 +23,11 @@ def _emb(seed: float = 0.0) -> list[float]:
     return [seed + 0.001 * j for j in range(EMBEDDING_DIM)]
 
 
+def unprefix(tagged: str) -> int:
+    """Strip a ``"<type>:<int>"`` output id back to its bare int (#624)."""
+    return int(tagged.split(":", 1)[1])
+
+
 @pytest.fixture(autouse=True)
 def mock_embed(monkeypatch):
     """Autouse stub so finding/summary skill tests never reach the real BGE model.

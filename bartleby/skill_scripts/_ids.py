@@ -17,11 +17,6 @@ from __future__ import annotations
 
 import argparse
 
-# The canonical entity types an id may carry. ``summary`` rides along because a
-# chunk's ``source_id`` can point at a summaries row (search emits summary-kind
-# hits), so its id must prefix as ``summary:`` not ``chunk:``.
-ID_TYPES = ("chunk", "document", "finding", "image", "tag", "summary")
-
 # The fixed field-name → entity-type map for output formatting. ``source_id`` is
 # deliberately absent — its real type depends on the row's ``source_kind``, so it
 # is prefixed by kind explicitly at its emission sites, never through this map.
@@ -68,9 +63,8 @@ def parse_id(value: str, expected_type: str) -> int:
 
     Accepts *only* the prefixed form: a bare int (the pre-#624 shape) is
     rejected, as is a correctly-shaped value carrying the wrong type (e.g. a
-    ``document:`` value handed to a chunk flag). Raised as
-    :class:`argparse.ArgumentTypeError` so the argparse ``type=`` machinery
-    surfaces the message; callers using it outside argparse can catch it too.
+    ``document:`` value handed to a chunk flag). Raises
+    :class:`argparse.ArgumentTypeError`.
     """
     text = value.strip()
     # Distinguish "bare int" from "wrong type" so the message points at the fix.

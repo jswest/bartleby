@@ -13,6 +13,7 @@ from tests._skill_fixtures import (  # noqa: F401
     mock_embed,
     project_env,
     seeded_project,
+    unprefix,
 )
 
 
@@ -42,7 +43,7 @@ def test_save_finding_with_inline_citations(seeded_project, tmp_path, capsys):
         "--body-file", str(body_file),
     ])
     out = json.loads(capsys.readouterr().out)
-    finding_id = int(out["finding_id"].split(":")[1])
+    finding_id = unprefix(out["finding_id"])
     assert finding_id >= 1
     assert len(out["citations"]) == 2
     assert len(out["chunk_ids"]) == 1
@@ -114,7 +115,7 @@ def test_save_finding_memory_off_session_can_write(seeded_project, tmp_path, cap
     out = json.loads(capsys.readouterr().out)
 
     # Success: the finding was written with its citation intact ...
-    finding_id = int(out["finding_id"].split(":")[1])
+    finding_id = unprefix(out["finding_id"])
     assert finding_id >= 1
     assert [c["chunk_id"] for c in out["citations"]] == [f"chunk:{cited_id}"]
     # ... and attributed to the memory-off session that authored it.
