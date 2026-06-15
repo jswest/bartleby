@@ -92,9 +92,15 @@
 
 {#if isMarkdown}
   {#if errorMsg}
-    <p class="status">Couldn't load source: {errorMsg}</p>
+    <div class="placeholder placeholder--error">
+      <span class="placeholder__icon" aria-hidden="true">⚠</span>
+      <p class="placeholder__msg">Source unavailable</p>
+      <p class="placeholder__detail">{errorMsg}</p>
+    </div>
   {:else if loading}
-    <p class="status">Loading source…</p>
+    <div class="placeholder">
+      <p class="placeholder__msg">Loading source…</p>
+    </div>
   {:else if srcdoc}
     <iframe title="Rendered markdown source" {srcdoc} sandbox=""></iframe>
   {/if}
@@ -103,11 +109,61 @@
     <iframe title="Source document" {src} sandbox={isPdf ? undefined : ""}></iframe>
   {/key}
 {:else}
-  <p class="empty">Click an inline citation to view the source here.</p>
+  <div class="placeholder">
+    <span class="placeholder__icon" aria-hidden="true">◧</span>
+    <p class="placeholder__msg">No source selected</p>
+    <p class="placeholder__detail">Click an inline citation to view the source here.</p>
+  </div>
 {/if}
 
 <style>
-  .status {
-    padding: var(--space-lg);
+  /* B5 — SourceViewer empty/error placeholder.
+     The viewer panel sits on the dark shell (not a paper card), so these states
+     use shell-chrome tokens throughout. The placeholder sizes to its own content
+     (no fixed height here — the .split .viewer container owns the height) and is
+     centred vertically within whatever space the viewer gives it. */
+  .placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-xs);
+    height: 100%;
+    min-height: 8rem;
+    padding: var(--space-2xl);
+    color: var(--color-shell-text-soft);
+    font-family: var(--font-sans);
+    text-align: center;
+  }
+  .placeholder__icon {
+    font-size: var(--text-2xl);
+    line-height: 1;
+    opacity: 0.45;
+    margin-bottom: var(--space-xs);
+  }
+  .placeholder__msg {
+    font-size: var(--text-sm);
+    color: var(--color-shell-text-soft);
+    font-family: var(--font-sans);
+  }
+  .placeholder__detail {
+    font-size: var(--text-xs);
+    color: var(--color-shell-text-soft);
+    opacity: 0.7;
+    font-family: var(--font-sans);
+    max-width: 22ch;
+    line-height: 1.4;
+  }
+  .placeholder--error .placeholder__icon {
+    color: var(--color-token-dark);
+    opacity: 0.8;
+  }
+  .placeholder--error .placeholder__msg {
+    color: var(--color-shell-text);
+  }
+  .placeholder--error .placeholder__detail {
+    color: var(--color-shell-text-soft);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
   }
 </style>
