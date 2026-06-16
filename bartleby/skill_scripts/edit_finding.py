@@ -6,7 +6,10 @@ local model that produced ``[chunks 1, 2]`` instead of ``[^chunk:1][^chunk:2]``.
 The agent re-writes the body with proper markers and calls this script; the body
 is re-chunked, re-embedded, and the ``finding_citations`` rows are rebuilt.
 
-At least one of ``--title``, ``--description``, or ``--body-file`` is required.
+At least one of ``--title``/``--title-file``, ``--description``/
+``--description-file``, or ``--body-file`` is required.  ``--title-file`` and
+``--description-file`` read the value verbatim from a file path, bypassing shell
+expansion — prefer them when the value may contain ``$``, backticks, or parens.
 When ``--body-file`` is provided, the new body must contain at least one
 ``[^chunk:N]`` citation marker and every marker must reference a real chunk_id —
 same rules as ``save_finding``.
@@ -18,6 +21,8 @@ contract still works after an edit):
       "finding_id": "finding:<id>",
       "session_id": int, "session_name": str,
       "model": str|null, "harness": str|null,
+      "title": str,
+      "description": str,
       "body": str,
       "chunk_ids": ["chunk:<id>", ...],
       "citations": [{...}, ...],
@@ -49,6 +54,7 @@ from bartleby.skill_scripts._common import (
     extract_external_citations,
     finding_chunk_and_citation_ids,
     load_finding_body,
+    read_text_arg,
     reject_citations_to_involved_findings,
     replace_finding_citations,
     resolve_citations,
@@ -65,14 +71,25 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--finding-id", type=prefixed_int("finding"), required=True,
         dest="finding_id", help="Type-tagged finding id, e.g. finding:204.",
     )
-    p.add_argument("--title", type=str, default=None)
-    p.add_argument("--description", type=str, default=None)
+    title_g = p.add_mutually_exclusive_group()
+    title_g.add_argument("--title", type=str)
+    title_g.add_argument("--title-file", dest="title_file")
+    desc_g = p.add_mutually_exclusive_group()
+    desc_g.add_argument("--description", type=str)
+    desc_g.add_argument("--description-file", dest="description_file")
     p.add_argument("--body-file", type=str, default=None, dest="body_file")
     return p.parse_args(argv)
 
 
 def work(*, conn, args, session_id) -> dict:
-    if args.title is None and args.description is None and args.body_file is None:
+    title_raw = read_text_arg(
+        args.title, args.title_file, flag="title", error_code="TITLE_FILE_NOT_FOUND",
+    )
+    description_raw = read_text_arg(
+        args.description, args.description_file,
+        flag="description", error_code="DESCRIPTION_FILE_NOT_FOUND",
+    )
+    if title_raw is None and description_raw is None and args.body_file is None:
         raise SkillError(
             "NOTHING_TO_UPDATE",
             "edit_finding requires at least one of --title, --description, "
@@ -98,10 +115,10 @@ def work(*, conn, args, session_id) -> dict:
     assert_findings_accessible(conn, session_id, [args.finding_id], action="edit")
 
     new_title = validated_replacement(
-        args.title, current_title, code="EMPTY_TITLE", label="title",
+        title_raw, current_title, code="EMPTY_TITLE", label="title",
     )
     new_description = validated_replacement(
-        args.description, current_description,
+        description_raw, current_description,
         code="EMPTY_DESCRIPTION", label="description",
     )
 
@@ -138,6 +155,8 @@ def work(*, conn, args, session_id) -> dict:
         "finding_id": args.finding_id,
         "session_id": owning_session_id,
         **session_provenance(conn, owning_session_id),
+        "title": new_title,
+        "description": new_description,
         "body": new_body,
         "chunk_ids": chunk_ids,
         "citations": resolve_citations(conn, citation_ids),

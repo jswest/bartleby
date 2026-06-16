@@ -372,3 +372,101 @@ def test_save_finding_missing_body_file(seeded_project, capsys):
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "BODY_FILE_NOT_FOUND"
+
+
+def test_save_finding_response_echoes_title_and_description(
+    seeded_project, tmp_path, capsys
+):
+    """save_finding echoes title and description in the response so a
+    shell-mangled title is visible without a follow-up read_finding."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cited_id = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text(f"Claim[^chunk:{cited_id}].", encoding="utf-8")
+    save_finding.main([
+        "--project", seeded_project["project"],
+        "--title", "Echo test title",
+        "--description", "Echo test description.",
+        "--body-file", str(body_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["title"] == "Echo test title"
+    assert out["description"] == "Echo test description."
+
+
+def test_save_finding_title_file_reads_verbatim(seeded_project, tmp_path, capsys):
+    """--title-file reads the title verbatim from a file — dollar signs, backticks,
+    and parens must survive with no shell expansion."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cited_id = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    tricky_title = "Spending ~$8M/quarter (in-house `estimate`)"
+    title_file = tmp_path / "title.txt"
+    title_file.write_text(tricky_title, encoding="utf-8")
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text(f"Claim[^chunk:{cited_id}].", encoding="utf-8")
+    save_finding.main([
+        "--project", seeded_project["project"],
+        "--title-file", str(title_file),
+        "--description", "desc",
+        "--body-file", str(body_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["title"] == tricky_title
+
+    # Confirm it landed in the DB verbatim too.
+    conn = open_db(seeded_project["project"])
+    try:
+        db_title = conn.cursor().execute(
+            "SELECT title FROM findings WHERE finding_id = ?",
+            (unprefix(out["finding_id"]),),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert db_title == tricky_title
+
+
+def test_save_finding_description_file_reads_verbatim(
+    seeded_project, tmp_path, capsys
+):
+    """--description-file reads the description verbatim, including shell-unsafe chars."""
+    conn = open_db(seeded_project["project"])
+    try:
+        cited_id = conn.cursor().execute(
+            "SELECT chunk_id FROM chunks WHERE source_kind='document' "
+            "AND source_id = ? ORDER BY chunk_index LIMIT 1",
+            (seeded_project["doc_a"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    tricky_desc = "Revenue is $TOTAL (see `quarterly_report.pdf`)"
+    desc_file = tmp_path / "desc.txt"
+    desc_file.write_text(tricky_desc, encoding="utf-8")
+
+    body_file = tmp_path / "f.md"
+    body_file.write_text(f"Claim[^chunk:{cited_id}].", encoding="utf-8")
+    save_finding.main([
+        "--project", seeded_project["project"],
+        "--title", "t",
+        "--description-file", str(desc_file),
+        "--body-file", str(body_file),
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["description"] == tricky_desc
