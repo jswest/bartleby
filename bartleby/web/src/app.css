@@ -738,13 +738,22 @@ input[type="number"] {
 }
 
 /* --- Margin-note citation gutter --- */
+/* #631: notes are absolutely positioned so each one's top aligns to its inline
+   dagger (Tufte-style). JS measures dagger positions and assigns `top` after
+   mount + on resize. The aside acts as the positioning context; its height is
+   set by the layout function to prevent collapse. On narrow screens JS resets
+   to normal flow (see the @media block below). */
 .cite-notes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
+  position: relative;
   /* Sits beside the prose; on the dark-ledger paper it reads as a quiet rail. */
   border-left: 1px solid var(--color-rule);
   padding-left: var(--space-lg);
+}
+/* left/right are invariant — set once here so they're final before JS measures
+   offsetHeight in pass 2. Inert under position:static (narrow-screen fallback). */
+.cite-notes .margin-note {
+  left: 0;
+  right: 0;
 }
 .margin-note {
   font-family: var(--font-sans);
@@ -770,7 +779,15 @@ input[type="number"] {
   font-style: italic;
   color: var(--color-text-soft);
 }
-/* The resolved-source note links to the chunk; a bare button styled as text. */
+/* The resolved-source note: a row with the primary label + secondary open-chunk
+   icon. The label activates the right-pane viewer; the icon navigates to the
+   chunk page. (#631) Paired with .margin-note__body for spacing/typography. */
+.margin-note__source-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3xs);
+}
+/* The resolved-source note label; a bare button styled as text. */
 .margin-note__link {
   display: inline;
   padding: 0;
@@ -785,6 +802,19 @@ input[type="number"] {
 .margin-note__link.active {
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+/* Secondary affordance: opens the chunk page. Visually minor — the CHUNK_ICON
+   pixel glyph at --text-2xs, amber-toned, no underline by default. */
+.margin-note__open-chunk {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--color-token-text);
+  opacity: 0.6;
+  line-height: 1;
+}
+.margin-note__open-chunk:hover {
+  opacity: 1;
 }
 /* Resolved = amber "source". */
 .margin-note--source .margin-note__head {
@@ -837,12 +867,26 @@ input[type="number"] {
     grid-template-columns: minmax(0, 1fr);
   }
   .cite-notes {
-    /* already column-stacked; only swap the rail from left edge to top */
+    /* On narrow screens, restore normal flow. JS also resets inline styles on
+       the .margin-note children when it detects the aside has collapsed width.
+       Use flex column (same reading-order stack as the old wide layout was). */
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+    /* swap the rail from left edge to top */
     border-left: 0;
     border-top: 1px solid var(--color-rule);
     padding-left: 0;
     padding-top: var(--space-lg);
     margin-top: var(--space-md);
+    /* override the height set by the JS layout pass */
+    height: auto !important;
+  }
+  /* JS resets inline position styles when the gutter collapses, but guard
+     here too so static flow wins even if JS is slow or hasn't run yet. */
+  .cite-notes .margin-note {
+    position: static !important;
+    top: auto !important;
   }
 }
 

@@ -1,10 +1,10 @@
 <script>
-  import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
+  import { onMount, onDestroy, afterUpdate } from "svelte";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
   import { stripExt } from "$lib/format.js";
+  import { CHUNK_ICON } from "$lib/icons.js";
 
   export let data;
 
@@ -32,11 +32,15 @@
   // internal scheme, `url`/`doc` are external; any other scheme (incl. a stray
   // document/finding marker) is dropped, not rendered as a citation.
   //
-  // `notes` is rebuilt alongside `bodyHtml` in one ordered pass so the gutter
-  // order matches reading order. Reactive on `active` so the .active state
-  // bakes into the rendered HTML.
-  let notes = [];
-  $: bodyHtml = renderBody(data.finding.body, byId, active);
+  // renderBody is a PURE function returning { html, notes } in one ordered pass,
+  // so the gutter order matches reading order. Reactive on `active` so the
+  // .active state bakes into the rendered HTML. It must NOT assign `notes` as a
+  // side effect: a reactive computation that mutates another reactive variable
+  // creates an update cycle Svelte cannot order, and the `tick()` relayout below
+  // then re-enters the flush forever, freezing the tab (#631).
+  $: rendered = renderBody(data.finding.body, byId, active);
+  $: bodyHtml = rendered.html;
+  $: notes = rendered.notes;
 
   function renderBody(body, byId, active) {
     const collected = [];
@@ -64,8 +68,7 @@
         return marker(note);
       }),
     );
-    notes = collected;
-    return html;
+    return { html, notes: collected };
   }
 
   // The inline dagger anchor that sits at the cited point in the prose. A
@@ -154,6 +157,76 @@
   // it (loads the source in the viewer). Delegated on the report container
   // since the markers are static {@html}.
   let container;
+  let citesAside;
+
+  // ===== Dagger-aligned sidenote layout (#631) =========================
+  // Each margin note's top is pinned to the vertical position of its inline
+  // dagger in the prose (Tufte-style). A downward de-overlap pass ensures
+  // notes never overlap. On narrow screens (≤56 rem) the gutter collapses to
+  // normal flow — the layout function clears inline styles and returns early.
+  //
+  // The breakpoint mirrors the `@media (max-width: 56rem)` in app.css, checked
+  // via matchMedia so it matches the CSS condition exactly.
+  const NOTE_GAP = 8; // px — minimum breathing room between stacked notes
+
+  function layoutNotes() {
+    if (!citesAside || !container) return;
+    // Guard: on narrow screens, clear any inline absolute styles and let static
+    // CSS flow take over (the @media block handles display/position).
+    const narrow = typeof window !== "undefined" && window.matchMedia("(max-width: 56rem)").matches;
+    if (narrow) {
+      const noteEls = citesAside.querySelectorAll(".margin-note");
+      for (const el of noteEls) {
+        el.style.position = "";
+        el.style.top = "";
+      }
+      citesAside.style.height = "";
+      return;
+    }
+
+    const noteEls = Array.from(citesAside.querySelectorAll(".margin-note"));
+    if (noteEls.length === 0) return;
+
+    const asideTop = citesAside.getBoundingClientRect().top + window.scrollY;
+
+    // Pass 1: set position:absolute and initial top from the dagger offset.
+    // left/right are set via CSS (.cite-notes .margin-note { left:0; right:0 })
+    // so the final width is established before we measure heights in pass 2.
+    const items = noteEls.map((el) => {
+      const n = el.dataset.note;
+      const ref = container.querySelector(`.cite-ref[data-note="${n}"]`);
+      let top = 0;
+      if (ref) {
+        top = ref.getBoundingClientRect().top + window.scrollY - asideTop;
+        if (top < 0) top = 0;
+      }
+      el.style.position = "absolute";
+      el.style.top = `${top}px`;
+      return { el, top };
+    });
+
+    // Pass 2: now that each note is absolutely positioned at its final width,
+    // read offsetHeight and run the downward de-overlap sweep.
+    let runningBottom = 0;
+    for (const item of items) {
+      const height = item.el.offsetHeight;
+      if (item.top < runningBottom) item.top = runningBottom;
+      item.el.style.top = `${item.top}px`;
+      runningBottom = item.top + height + NOTE_GAP;
+    }
+
+    citesAside.style.height = `${runningBottom - NOTE_GAP}px`;
+  }
+
+  // Re-run layout after every DOM update (content/active change, gutter mount).
+  // afterUpdate runs once the DOM reflects the latest state, so we measure real
+  // dagger positions. It must NOT be a reactive `$:` block calling tick(): doing
+  // so re-enters Svelte's flush every cycle and pins the main thread (#631).
+  // layoutNotes only mutates inline styles, so it never schedules a new update.
+  afterUpdate(layoutNotes);
+
+  let resizeObserver;
+
   onMount(() => {
     container.addEventListener("click", (e) => {
       const ref = e.target.closest(".cite-ref");
@@ -166,6 +239,18 @@
       const noteEl = el?.querySelector("[data-chunk-id]");
       if (noteEl) activate(Number(noteEl.dataset.chunkId));
     });
+
+    // Re-measure on resize. ResizeObserver on the prose body catches both
+    // window resize and flex/grid reflow of the prose column.
+    const proseEl = container.querySelector(".body");
+    if (proseEl && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => layoutNotes());
+      resizeObserver.observe(proseEl);
+    }
+  });
+
+  onDestroy(() => {
+    resizeObserver?.disconnect();
   });
 
   let copied = false;
@@ -208,7 +293,7 @@
       </div>
 
       {#if notes.length}
-        <aside class="cite-notes" aria-label="Citations">
+        <aside class="cite-notes" aria-label="Citations" bind:this={citesAside}>
           {#each notes as note (note.n)}
             <div
               class="margin-note margin-note--{note.gone ? 'gone' : 'source'}"
@@ -227,14 +312,22 @@
               {:else if note.external === "doc"}
                 <p class="margin-note__body margin-note__body--doc" title={note.title}>{note.label}</p>
               {:else}
-                <button
-                  type="button"
-                  class="margin-note__body margin-note__link"
-                  class:active={note.active}
-                  data-chunk-id={note.chunkId}
-                  title={note.title}
-                  on:click={() => goto(`/chunks/${note.chunkId}`)}
-                >{note.label}</button>
+                <!-- Primary: clicking the label opens the source in the right pane.
+                     Secondary: the ↗ icon navigates to the chunk page. -->
+                <span class="margin-note__body margin-note__source-row">
+                  <button
+                    type="button"
+                    class="margin-note__link"
+                    class:active={note.active}
+                    data-chunk-id={note.chunkId}
+                    title={note.title}
+                    on:click={() => activate(note.chunkId)}
+                  >{note.label}</button><a
+                    href="/chunks/{note.chunkId}"
+                    class="margin-note__open-chunk"
+                    title="Open chunk {note.chunkId}"
+                  >{@html CHUNK_ICON}</a>
+                </span>
               {/if}
             </div>
           {/each}
