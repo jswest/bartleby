@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy, tick } from "svelte";
+  import { onMount, onDestroy, afterUpdate } from "svelte";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
@@ -32,11 +32,15 @@
   // internal scheme, `url`/`doc` are external; any other scheme (incl. a stray
   // document/finding marker) is dropped, not rendered as a citation.
   //
-  // `notes` is rebuilt alongside `bodyHtml` in one ordered pass so the gutter
-  // order matches reading order. Reactive on `active` so the .active state
-  // bakes into the rendered HTML.
-  let notes = [];
-  $: bodyHtml = renderBody(data.finding.body, byId, active);
+  // renderBody is a PURE function returning { html, notes } in one ordered pass,
+  // so the gutter order matches reading order. Reactive on `active` so the
+  // .active state bakes into the rendered HTML. It must NOT assign `notes` as a
+  // side effect: a reactive computation that mutates another reactive variable
+  // creates an update cycle Svelte cannot order, and the `tick()` relayout below
+  // then re-enters the flush forever, freezing the tab (#631).
+  $: rendered = renderBody(data.finding.body, byId, active);
+  $: bodyHtml = rendered.html;
+  $: notes = rendered.notes;
 
   function renderBody(body, byId, active) {
     const collected = [];
@@ -64,8 +68,7 @@
         return marker(note);
       }),
     );
-    notes = collected;
-    return html;
+    return { html, notes: collected };
   }
 
   // The inline dagger anchor that sits at the cited point in the prose. A
@@ -215,10 +218,12 @@
     citesAside.style.height = `${runningBottom - NOTE_GAP}px`;
   }
 
-  // Re-run layout whenever notes or bodyHtml change (after DOM settles).
-  $: if (notes, bodyHtml, citesAside) {
-    tick().then(layoutNotes);
-  }
+  // Re-run layout after every DOM update (content/active change, gutter mount).
+  // afterUpdate runs once the DOM reflects the latest state, so we measure real
+  // dagger positions. It must NOT be a reactive `$:` block calling tick(): doing
+  // so re-enters Svelte's flush every cycle and pins the main thread (#631).
+  // layoutNotes only mutates inline styles, so it never schedules a new update.
+  afterUpdate(layoutNotes);
 
   let resizeObserver;
 
