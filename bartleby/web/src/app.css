@@ -684,11 +684,24 @@ input[type="number"] {
   grid-template-columns: minmax(0, 54rem) minmax(0, 1fr);
 }
 
+/* Shared cap: the title, meta line, and dek should not bleed past the right
+   edge of the .ledger-column block (prose 36rem + gap 1.5rem + notes 14rem).
+   Defined once here; the three header selectors below all reference it so the
+   three values and .ledger-column's grid can't drift apart. */
+.ledger {
+  --ledger-content-width: calc(36rem + var(--space-xl) + 14rem);
+}
+
 /* --- Hed + dek: Iosevka chrome, not serif --- */
 .ledger-hed {
   font-family: var(--font-sans);
   font-weight: 700;
   letter-spacing: -0.01em;
+  max-width: var(--ledger-content-width);
+}
+/* Meta line: same right-edge cap as the hed and dek. */
+.ledger .meta {
+  max-width: var(--ledger-content-width);
 }
 .ledger-dek {
   font-family: var(--font-sans);
@@ -698,6 +711,7 @@ input[type="number"] {
   font-feature-settings: "lnum" 1;
   color: var(--color-text-soft);
   margin-bottom: var(--space-lg);
+  max-width: var(--ledger-content-width);
 }
 /* The shared `.split .desc` rule italicises + serif-spaces the dek; the ledger
    overrides that to plain Iosevka. (Equal-ish specificity — pin it here.) */
