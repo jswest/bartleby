@@ -684,12 +684,16 @@ input[type="number"] {
   grid-template-columns: minmax(0, 54rem) minmax(0, 1fr);
 }
 
-/* Shared cap: the title, meta line, and dek should not bleed past the right
-   edge of the .ledger-column block (prose 36rem + gap 1.5rem + notes 14rem).
-   Defined once here; the three header selectors below all reference it so the
-   three values and .ledger-column's grid can't drift apart. */
+/* The ledger column's track widths, defined once. .ledger-column's grid and the
+   header cap below both reference these, so the two can't drift apart. The cap
+   keeps the title, meta line, and dek from bleeding past the right edge of the
+   prose + gap + note-gutter block. */
 .ledger {
-  --ledger-content-width: calc(36rem + var(--space-xl) + 14rem);
+  --ledger-prose-width: 36rem;
+  --ledger-notes-width: 14rem;
+  --ledger-content-width: calc(
+    var(--ledger-prose-width) + var(--space-xl) + var(--ledger-notes-width)
+  );
 }
 
 /* --- Hed + dek: Iosevka chrome, not serif --- */
@@ -723,7 +727,7 @@ input[type="number"] {
 .ledger-column {
   display: grid;
   /* ~62–66 characters at the body serif size, then the margin-note gutter. */
-  grid-template-columns: minmax(0, 36rem) minmax(0, 14rem);
+  grid-template-columns: minmax(0, var(--ledger-prose-width)) minmax(0, var(--ledger-notes-width));
   gap: var(--space-xl);
   align-items: start;
   margin: var(--space-xl) 0;
