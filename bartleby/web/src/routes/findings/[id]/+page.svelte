@@ -27,7 +27,10 @@
   //   [^chunk:N]         corpus-chunk citation. Resolves against byId →
   //                        resolved  → † "source" note (amber, filename, jumps)
   //                        unresolved → ‡ "no longer available" note (danger)
-  //   [^url:…]/[^doc:…]   external citation → † "source" note (link / ref)
+  //   [^url:…]/[^doc:…]   external citation → § "source" note (link / ref)
+  // Glyphs follow the traditional footnote sequence * † ‡ §: † is a corpus
+  // chunk, ‡ a chunk whose source is gone, § an external url/doc — the glyph
+  // alone tells corpus-vs-external apart; the ordinal stays the tie-back.
   // Mirrors the backend grammar in skill_scripts/_common.py: `chunk` is the
   // internal scheme, `url`/`doc` are external; any other scheme (incl. a stray
   // document/finding marker) is dropped, not rendered as a citation.
@@ -125,10 +128,10 @@
   // scheme a muted ref. Unknown schemes return null (dropped upstream).
   function externalNote(n, scheme, ref) {
     if (scheme === "url") {
-      return { n, dagger: "†", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
+      return { n, dagger: "§", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
     }
     if (scheme === "doc") {
-      return { n, dagger: "†", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
+      return { n, dagger: "§", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
     }
     return null;
   }
