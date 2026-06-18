@@ -24,9 +24,11 @@
   $: title = item.title ?? stripExt(item.file_name) ?? item.source_name;
   $: scorePct = Math.round((item.normalized_score ?? 0) * 100);
 
-  // The "open chunk in context" link → /chunks/<id>. Built as a string (chunk_id
-  // is an integer, so no escaping) and {@html}'d so the identical markup isn't
-  // duplicated across the two meta-line variants. CHUNK_ICON is inline SVG.
+  // The "open chunk in context" link → /chunks/<id>. chunk_id is a `chunk:<int>`
+  // token from trusted skill output (constrained to chunk:\d+, so no escaping
+  // needed; the colon is path-legal and parseIdParam strips it). Built as a
+  // string and {@html}'d so the identical markup isn't duplicated across the two
+  // meta-line variants. CHUNK_ICON is inline SVG.
   $: chunkLink =
     `<a class="chunk-link" href="/chunks/${item.chunk_id}"` +
     ` title="Open chunk ${item.chunk_id} in context"` +
