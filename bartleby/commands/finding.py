@@ -1,6 +1,16 @@
-"""`bartleby finding` — out-of-band Markdown share of a single finding.
+"""`bartleby finding` — out-of-band Markdown share and terminal read of a finding.
 
-Two halves of one artifact format:
+Three subcommands:
+
+- ``read <finding-id>`` emits a terminal-friendly Markdown view of a finding to
+  stdout, with citations resolved live against the current corpus and rewritten
+  as sequential Markdown footnotes.  Compose with pagers/renderers::
+
+      bartleby finding read 22 | glow
+      bartleby finding read 22 | less
+      bartleby finding read 22 --render   # pretty-print via rich in-terminal
+
+  ``--json`` falls through to the existing ``read_finding`` JSON (scripting).
 
 - ``export <finding-id>`` reads a finding from a corpus and writes a
   self-describing ``.md``: a YAML front-matter block (title, description, and
@@ -34,6 +44,7 @@ from pathlib import Path
 import apsw
 import yaml
 from rich.console import Console
+from rich.markdown import Markdown
 
 from bartleby.db.connection import open_db
 from bartleby.lib import console
@@ -46,6 +57,10 @@ _console = Console()
 # shape the finding write path recognises (``_common._CITATION_MARKER``). The
 # group captures the bare chunk_id so ``int(...)`` resolution is unchanged.
 _CHUNK_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
+# General marker pattern matching any ``[^scheme:ref]`` footnote — mirrors
+# ``_common._EXTERNAL_MARKER``.  Used in ``_render_body_as_markdown`` to rewrite
+# external ``[^url:…]``/``[^doc:…]`` citations to numbered footnotes.
+_TYPED_MARKER = re.compile(r"\[\^([A-Za-z]+):([^\]]+)\]")
 # An inert corpus citation an export emits / an import preserves verbatim. It is
 # deliberately NOT a ``[^…]`` footnote (so the finding write path's malformed-
 # and external-citation guards never trip on it) and carries no digits in the
@@ -68,20 +83,23 @@ def _slug(title: str) -> str:
     return slug or "finding"
 
 
-def _inert_marker(citation: dict) -> str:
-    """An inert, human-readable ``[corpus: …]`` marker for one resolved citation.
+def _citation_label(citation: dict) -> str:
+    """Human-readable label for one resolved citation (shared by inert and live renderers).
 
-    Carries ``file · page`` for corpus chunks (the metadata a reader needs once
-    the chunk_id is meaningless), or the finding title for finding-kind
-    citations. Never a live link — see the module docstring.
+    Finding chunks: ``finding · <title>``.
+    Document/image/summary chunks: ``<file_name>`` (with ``· p.N`` when page is set).
     """
     if citation["source_kind"] == "finding":
         label = citation["source_name"] or f"finding {citation['chunk_id']}"
-        return f"{_INERT_PREFIX}finding · {label}]"
+        return f"finding · {label}"
     file_name = citation["file_name"] or citation["source_name"] or "unknown source"
     page = citation["page_number"]
-    page_part = f" · p.{page}" if page is not None else ""
-    return f"{_INERT_PREFIX}{file_name}{page_part}]"
+    return file_name + (f" · p.{page}" if page is not None else "")
+
+
+def _inert_marker(citation: dict) -> str:
+    """An inert ``[corpus: …]`` marker for one resolved citation (used by export)."""
+    return f"{_INERT_PREFIX}{_citation_label(citation)}]"
 
 
 def _rewrite_citations(body: str, citations: list[dict]) -> str:
@@ -131,6 +149,201 @@ def _read_finding_for_export(conn, finding_id: int) -> dict:
         "body": body,
         "citations": resolve_citations(conn, citation_ids),
     }
+
+
+def _live_footnote_label(citation: dict) -> str:
+    """``†``-prefixed label for one live chunk citation (used by ``read``)."""
+    return f"† {_citation_label(citation)}"
+
+
+def _render_body_as_markdown(
+    body: str,
+    citations: list[dict],
+    dangling_chunk_ids: list[int],
+    external_citations: list[dict],
+) -> str:
+    """Rewrite ``[^chunk:N]`` markers in *body* as sequential Markdown footnotes.
+
+    Each unique marker is assigned a footnote number in first-appearance order.
+    Live corpus citations render ``† file · p.N``; dangling (source removed)
+    render ``‡ source no longer available``; external ``[^url:…]``/``[^doc:…]``
+    markers render ``§ <ref>``. A footnote-definition block is appended.
+
+    Glyph convention (per GH-0642-external-citation-glyph-0002.md):
+      †  live corpus chunk
+      ‡  chunk whose source is gone
+      §  external (url / doc)
+    """
+    by_chunk_id = {c["chunk_id"]: c for c in citations}
+    dangling_set = set(dangling_chunk_ids)
+
+    # Assign sequential footnote numbers to chunk citations in first-appearance
+    # order.  External markers keep their verbatim [^scheme:ref] text and are
+    # collected separately for the definition block.
+    fn_counter = 0
+    chunk_to_fn: dict[int, int] = {}
+    fn_defs: list[str] = []
+
+    def _chunk_sub(m: re.Match) -> str:
+        nonlocal fn_counter
+        chunk_id = int(m.group(1))
+        if chunk_id not in chunk_to_fn:
+            fn_counter += 1
+            n = fn_counter
+            chunk_to_fn[chunk_id] = n
+            if chunk_id in dangling_set:
+                fn_defs.append(f"[^{n}]: ‡ source no longer available")
+            else:
+                citation = by_chunk_id.get(chunk_id)
+                label = _live_footnote_label(citation) if citation else "† unknown"
+                fn_defs.append(f"[^{n}]: {label}")
+        return f"[^{chunk_to_fn[chunk_id]}]"
+
+    rewritten = _CHUNK_MARKER.sub(_chunk_sub, body)
+
+    # Rewrite external markers [^url:…] / [^doc:…] → sequential numbered
+    # footnotes continuing from the chunk counter.
+    ext_seen: dict[tuple[str, str], int] = {}
+
+    def _ext_sub(m: re.Match) -> str:
+        nonlocal fn_counter
+        scheme = m.group(1).lower()
+        ref = m.group(2).strip()
+        if scheme not in ("url", "doc"):
+            return m.group(0)
+        key = (scheme, ref)
+        if key not in ext_seen:
+            fn_counter += 1
+            n = fn_counter
+            ext_seen[key] = n
+            if scheme == "url":
+                fn_defs.append(f"[^{n}]: § <{ref}>")
+            else:
+                fn_defs.append(f"[^{n}]: § {ref}")
+        return f"[^{ext_seen[key]}]"
+
+    rewritten = _TYPED_MARKER.sub(_ext_sub, rewritten)
+
+    if fn_defs:
+        rewritten = rewritten.rstrip("\n") + "\n\n" + "\n".join(fn_defs) + "\n"
+
+    return rewritten
+
+
+def _read_finding_for_display(conn, finding_id: int) -> dict:
+    """Read one finding + resolved/dangling/external citations for terminal display.
+
+    Same read path as ``_read_finding_for_export`` but also returns dangling
+    chunk ids and external citations, which ``read`` needs for live footnotes.
+    No memory-wall check — this is a human CLI operation.
+    """
+    from bartleby.skill_scripts._common import (
+        extract_citations,
+        extract_external_citations,
+        finding_chunk_and_citation_ids,
+        resolve_citations,
+        session_provenance,
+    )
+
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT session_id, title, description, body, created_at "
+        "FROM findings WHERE finding_id = ?",
+        (finding_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No finding with id {finding_id} in this corpus.")
+    owning_session_id, title, description, body, created_at = row
+
+    _chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, finding_id)
+    citations = resolve_citations(conn, citation_ids)
+    resolved_ids = {c["chunk_id"] for c in citations}
+    dangling = [cid for cid in extract_citations(body) if cid not in resolved_ids]
+    external = extract_external_citations(body)
+
+    prov = session_provenance(conn, owning_session_id)
+
+    return {
+        "title": title,
+        "description": description,
+        "body": body,
+        "created_at": created_at,
+        "session_name": prov["session_name"],
+        "model": prov["model"],
+        "citations": citations,
+        "dangling": dangling,
+        "external": external,
+    }
+
+
+def _finding_as_markdown(finding: dict) -> str:
+    """Render a finding dict (from ``_read_finding_for_display``) as Markdown text."""
+    parts: list[str] = []
+
+    parts.append(f"# {finding['title']}\n")
+
+    meta_bits: list[str] = []
+    if finding.get("session_name"):
+        meta_bits.append(f"session: {finding['session_name']}")
+    if finding.get("model"):
+        meta_bits.append(f"model: {finding['model']}")
+    if finding.get("created_at"):
+        meta_bits.append(f"saved: {finding['created_at']}")
+    if meta_bits:
+        parts.append("_" + " · ".join(meta_bits) + "_\n")
+
+    if finding.get("description"):
+        parts.append(finding["description"] + "\n")
+
+    rendered_body = _render_body_as_markdown(
+        finding["body"],
+        finding["citations"],
+        finding["dangling"],
+        finding["external"],
+    )
+    parts.append(rendered_body)
+
+    return "\n".join(parts)
+
+
+def read(*, finding_id: int, project: str | None, json_out: bool, render: bool) -> None:
+    """Emit a terminal-friendly Markdown view of one finding to stdout.
+
+    Default: raw Markdown (composable with pagers/renderers).
+    ``--json``: emit the existing ``read_finding`` JSON (scripting path).
+    ``--render``: pretty-print via ``rich.markdown.Markdown`` in-terminal.
+    """
+    if json_out:
+        # Fall through to the skill script's JSON output; it handles its own
+        # memory-wall check and exit codes, so just invoke it directly.
+        from bartleby.skill_scripts import read_finding as _rf_script
+
+        argv = ["--finding-id", f"finding:{finding_id}"]
+        if project:
+            argv += ["--project", project]
+        _rf_script.main(argv)
+        return
+
+    corpus = project or get_active_project()
+    if not corpus:
+        console.error("No active project. Specify one with --project.")
+        sys.exit(1)
+
+    conn = _open_or_exit(corpus)
+    try:
+        finding = _read_finding_for_display(conn, finding_id)
+    except ValueError as e:
+        console.error(str(e))
+        sys.exit(1)
+    finally:
+        conn.close()
+
+    md_text = _finding_as_markdown(finding)
+
+    if render:
+        _console.print(Markdown(md_text))
+    else:
+        print(md_text, end="")
 
 
 def export(*, finding_id: int, project: str | None, out: str | None) -> None:
