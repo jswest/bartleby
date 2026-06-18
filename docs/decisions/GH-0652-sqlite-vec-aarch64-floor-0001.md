@@ -1,0 +1,5 @@
+# sqlite-vec floor bumped to >=0.1.9 for correct aarch64 wheel (issue #652)
+
+> Source: [#652](https://github.com/jswest/bartleby/issues/652)
+
+On aarch64, the `sqlite-vec==0.1.6` wheel on PyPI installs a 32-bit (`ELFCLASS32`) `vec0.so` shared library. When `apsw` tries to load it as a SQLite extension it refuses with `apsw.ExtensionLoadingError: … wrong ELF class: ELFCLASS32`, which errors every test that opens a corpus DB. This is a packaging defect in the 0.1.6 aarch64 wheel — the upstream project shipped a 32-bit artifact for a 64-bit platform target. `sqlite-vec==0.1.9` corrects this: its aarch64 wheel contains a properly built 64-bit `vec0.so` that `apsw` loads without error. The fix is a one-line floor bump in `pyproject.toml` (`sqlite-vec>=0.1.6` → `>=0.1.9`) plus a minimal `uv lock --upgrade-package sqlite-vec` relock. No query logic, schema, runtime behavior, or API surface changed; the only effect is that `uv sync` now resolves to a wheel whose extension binary matches the host architecture.
