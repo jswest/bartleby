@@ -8,13 +8,14 @@ Three visual tweaks to the finding-detail marginalia (right-hand citation gutter
 All changes are in `bartleby/web/src/routes/findings/[id]/+page.svelte` and
 `bartleby/web/src/app.css`.
 
-## Decision 1 — glyph rotation (supersedes GH-0654)
+## Decision 1 — glyph rotation (supersedes GH-0654 and GH-0642)
 
-GH-0654 established the initial glyph assignment when finding-to-finding links
-were introduced. That assignment is now revised so the glyphs better match
-typographic convention and visual weight:
+GH-0642 assigned `†` to corpus chunks and `§` to external `[^url:…]`/`[^doc:…]`
+citations; GH-0654 then assigned `¶` to finding-to-finding links. That combined
+assignment is now revised so the glyphs better match typographic convention and
+visual weight:
 
-| Scheme | Before (#654) | After (#666) | Note |
+| Scheme | Before | After (#666) | Note |
 |---|---|---|---|
 | `[^chunk:N]` resolved | `†` | `¶` | pilcrow — the primary corpus citation glyph |
 | `[^chunk:N]` gone | `‡` | `‡` | unchanged — double-dagger for missing |
