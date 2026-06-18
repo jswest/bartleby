@@ -57,10 +57,6 @@ _console = Console()
 # shape the finding write path recognises (``_common._CITATION_MARKER``). The
 # group captures the bare chunk_id so ``int(...)`` resolution is unchanged.
 _CHUNK_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
-# General marker pattern matching any ``[^scheme:ref]`` footnote — mirrors
-# ``_common._EXTERNAL_MARKER``.  Used in ``_render_body_as_markdown`` to rewrite
-# external ``[^url:…]``/``[^doc:…]`` citations to numbered footnotes.
-_TYPED_MARKER = re.compile(r"\[\^([A-Za-z]+):([^\]]+)\]")
 # An inert corpus citation an export emits / an import preserves verbatim. It is
 # deliberately NOT a ``[^…]`` footnote (so the finding write path's malformed-
 # and external-citation guards never trip on it) and carries no digits in the
