@@ -434,6 +434,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "--count-by returns a per-document histogram, not per-chunk matches, "
             "so it cannot be combined with --preview or --brief."
         )
+    if args.body_matches is not None and args.count_by is not None:
+        p.error(
+            "--body-matches filters per-chunk matches, but --count-by returns an "
+            "aggregate histogram that does not carry that filter; pass one."
+        )
     if args.extract is not None:
         if args.count_by is not None:
             p.error(

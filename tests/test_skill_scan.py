@@ -1273,6 +1273,17 @@ def test_scan_body_matches_filters_to_regex_hits(scan_corpus, capsys):
     assert not any("ACME CORP" in t for t in texts)
 
 
+def test_scan_body_matches_rejects_count_by(scan_corpus, capsys):
+    """--body-matches filters per-chunk matches; --count-by returns an aggregate
+    histogram that can't carry that filter, so the combination is rejected rather
+    than silently ignored (the #653 × #641 seam)."""
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--body-matches", "/GAMMA/",
+                           "--count-by", "document"])
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
+
+
 def test_scan_body_matches_total_is_honest(scan_corpus, capsys):
     """--body-matches total reflects post-filter count, not FTS count."""
     # Without --body-matches: total=3 (three MARKER chunks).
