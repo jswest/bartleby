@@ -151,23 +151,22 @@ def _read_finding_for_export(conn, finding_id: int) -> dict:
     }
 
 
-def _live_footnote_label(citation: dict) -> str:
-    """``†``-prefixed label for one live chunk citation (used by ``read``)."""
-    return f"† {_citation_label(citation)}"
-
-
 def _render_body_as_markdown(
     body: str,
     citations: list[dict],
     dangling_chunk_ids: list[int],
-    external_citations: list[dict],
 ) -> str:
-    """Rewrite ``[^chunk:N]`` markers in *body* as sequential Markdown footnotes.
+    """Rewrite citation markers in *body* as sequential Markdown footnotes.
 
-    Each unique marker is assigned a footnote number in first-appearance order.
-    Live corpus citations render ``† file · p.N``; dangling (source removed)
-    render ``‡ source no longer available``; external ``[^url:…]``/``[^doc:…]``
-    markers render ``§ <ref>``. A footnote-definition block is appended.
+    Markers are scanned left-to-right in a **single pass**, combining chunk and
+    external citations into one sequence (``[^1]``, ``[^2]``, …).  First-
+    appearance order governs numbering; repeated markers reuse the same number.
+
+    Rendering per marker kind:
+      ``[^chunk:N]`` live    → ``† file · p.N`` (or ``† unknown``)
+      ``[^chunk:N]`` dangling → ``‡ source no longer available``
+      ``[^url:ref]``          → ``§ <ref>``
+      ``[^doc:ref]``          → ``§ ref``
 
     Glyph convention (per GH-0642-external-citation-glyph-0002.md):
       †  live corpus chunk
@@ -177,52 +176,53 @@ def _render_body_as_markdown(
     by_chunk_id = {c["chunk_id"]: c for c in citations}
     dangling_set = set(dangling_chunk_ids)
 
-    # Assign sequential footnote numbers to chunk citations in first-appearance
-    # order.  External markers keep their verbatim [^scheme:ref] text and are
-    # collected separately for the definition block.
     fn_counter = 0
     chunk_to_fn: dict[int, int] = {}
+    ext_seen: dict[tuple[str, str], int] = {}
     fn_defs: list[str] = []
 
-    def _chunk_sub(m: re.Match) -> str:
+    # Combined pattern matching both chunk and typed external markers so that
+    # footnote numbers are assigned in a single left-to-right scan.
+    _COMBINED = re.compile(
+        r"\[\^chunk:(\d+)\]"          # group 1: chunk id
+        r"|"
+        r"\[\^([A-Za-z]+):([^\]]+)\]"  # group 2: scheme, group 3: ref
+    )
+
+    def _sub(m: re.Match) -> str:
         nonlocal fn_counter
-        chunk_id = int(m.group(1))
-        if chunk_id not in chunk_to_fn:
-            fn_counter += 1
-            n = fn_counter
-            chunk_to_fn[chunk_id] = n
-            if chunk_id in dangling_set:
-                fn_defs.append(f"[^{n}]: ‡ source no longer available")
-            else:
-                citation = by_chunk_id.get(chunk_id)
-                label = _live_footnote_label(citation) if citation else "† unknown"
-                fn_defs.append(f"[^{n}]: {label}")
-        return f"[^{chunk_to_fn[chunk_id]}]"
+        if m.group(1) is not None:
+            # chunk marker
+            chunk_id = int(m.group(1))
+            if chunk_id not in chunk_to_fn:
+                fn_counter += 1
+                n = fn_counter
+                chunk_to_fn[chunk_id] = n
+                if chunk_id in dangling_set:
+                    fn_defs.append(f"[^{n}]: ‡ source no longer available")
+                else:
+                    citation = by_chunk_id.get(chunk_id)
+                    label = f"† {_citation_label(citation)}" if citation else "† unknown"
+                    fn_defs.append(f"[^{n}]: {label}")
+            return f"[^{chunk_to_fn[chunk_id]}]"
+        else:
+            # external marker [^scheme:ref]
+            scheme = m.group(2).lower()
+            ref = m.group(3).strip()
+            if scheme not in ("url", "doc"):
+                return m.group(0)
+            key = (scheme, ref)
+            if key not in ext_seen:
+                fn_counter += 1
+                n = fn_counter
+                ext_seen[key] = n
+                if scheme == "url":
+                    fn_defs.append(f"[^{n}]: § <{ref}>")
+                else:
+                    fn_defs.append(f"[^{n}]: § {ref}")
+            return f"[^{ext_seen[key]}]"
 
-    rewritten = _CHUNK_MARKER.sub(_chunk_sub, body)
-
-    # Rewrite external markers [^url:…] / [^doc:…] → sequential numbered
-    # footnotes continuing from the chunk counter.
-    ext_seen: dict[tuple[str, str], int] = {}
-
-    def _ext_sub(m: re.Match) -> str:
-        nonlocal fn_counter
-        scheme = m.group(1).lower()
-        ref = m.group(2).strip()
-        if scheme not in ("url", "doc"):
-            return m.group(0)
-        key = (scheme, ref)
-        if key not in ext_seen:
-            fn_counter += 1
-            n = fn_counter
-            ext_seen[key] = n
-            if scheme == "url":
-                fn_defs.append(f"[^{n}]: § <{ref}>")
-            else:
-                fn_defs.append(f"[^{n}]: § {ref}")
-        return f"[^{ext_seen[key]}]"
-
-    rewritten = _TYPED_MARKER.sub(_ext_sub, rewritten)
+    rewritten = _COMBINED.sub(_sub, body)
 
     if fn_defs:
         rewritten = rewritten.rstrip("\n") + "\n\n" + "\n".join(fn_defs) + "\n"
@@ -231,15 +231,14 @@ def _render_body_as_markdown(
 
 
 def _read_finding_for_display(conn, finding_id: int) -> dict:
-    """Read one finding + resolved/dangling/external citations for terminal display.
+    """Read one finding + resolved/dangling citations for terminal display.
 
     Same read path as ``_read_finding_for_export`` but also returns dangling
-    chunk ids and external citations, which ``read`` needs for live footnotes.
+    chunk ids, which ``read`` needs for footnote rendering.
     No memory-wall check — this is a human CLI operation.
     """
     from bartleby.skill_scripts._common import (
         extract_citations,
-        extract_external_citations,
         finding_chunk_and_citation_ids,
         resolve_citations,
         session_provenance,
@@ -259,7 +258,6 @@ def _read_finding_for_display(conn, finding_id: int) -> dict:
     citations = resolve_citations(conn, citation_ids)
     resolved_ids = {c["chunk_id"] for c in citations}
     dangling = [cid for cid in extract_citations(body) if cid not in resolved_ids]
-    external = extract_external_citations(body)
 
     prov = session_provenance(conn, owning_session_id)
 
@@ -272,7 +270,6 @@ def _read_finding_for_display(conn, finding_id: int) -> dict:
         "model": prov["model"],
         "citations": citations,
         "dangling": dangling,
-        "external": external,
     }
 
 
@@ -299,7 +296,6 @@ def _finding_as_markdown(finding: dict) -> str:
         finding["body"],
         finding["citations"],
         finding["dangling"],
-        finding["external"],
     )
     parts.append(rendered_body)
 

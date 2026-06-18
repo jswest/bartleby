@@ -282,6 +282,44 @@ def test_read_footnote_numbering_is_sequential(seeded_project, capsys):
     assert "[^3]:" in out
 
 
+def test_read_footnote_numbering_external_before_chunk(seeded_project, capsys):
+    """External citation appearing before chunk citation is numbered first (body order).
+
+    A body like ``See[^url:…] then[^chunk:N] then[^chunk:M]`` must produce inline
+    refs [^1]/[^2]/[^3] in that textual order, with matching definitions.
+    """
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+    conn = open_db(project)
+    try:
+        cited = _doc_chunk_ids(conn, seeded_project["doc_a"], limit=2)
+        body = (
+            f"See[^url:https://example.com]"
+            f" then[^chunk:{cited[0]}]"
+            f" then[^chunk:{cited[1]}]."
+        )
+        finding_id, _ = seed_finding(
+            conn, session_id, title="Order Test", description="d", body=body,
+            cited_chunk_ids=cited,
+        )
+    finally:
+        conn.close()
+
+    finding_cmd.read(finding_id=finding_id, project=project, json_out=False, render=False)
+    out = capsys.readouterr().out
+
+    # Inline refs must appear in body order: url→[^1], chunk[0]→[^2], chunk[1]→[^3].
+    assert f"See[^1]" in out
+    assert f"then[^2]" in out
+    assert f"then[^3]" in out
+    # Definitions in numeric order.
+    assert "[^1]: § <https://example.com>" in out
+    assert "[^2]:" in out
+    assert "[^3]:" in out
+    # The § definition must come before the † definitions in the output.
+    assert out.index("[^1]: §") < out.index("[^2]:")
+
+
 # ---------------------------------------------------------------------------
 # --json flag
 # ---------------------------------------------------------------------------

@@ -41,7 +41,9 @@ and reused. This matches standard footnote semantics.
 
 ## `_citation_label` extraction
 
-`_inert_marker` (export) and `_live_footnote_label` (read) shared identical
-branching logic: `source_kind == "finding"` → title fallback, else file+page.
-That was factored into `_citation_label(citation) -> str` returning the bare label;
-callers add their own prefix (`[corpus: …]` vs. `†`).
+`_inert_marker` (export) shared its branching logic with the chunk-rendering path
+in `_render_body_as_markdown` (read): `source_kind == "finding"` → title fallback,
+else file+page.  That was factored into `_citation_label(citation) -> str` returning
+the bare label; callers add their own prefix (`[corpus: …]` vs. `†` inline in the
+single-pass callback).  There is no separate `_live_footnote_label` wrapper —
+the `†` prefix is applied directly at the call site.
