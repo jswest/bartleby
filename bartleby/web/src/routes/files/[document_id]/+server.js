@@ -31,11 +31,15 @@ export function GET({ params }) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_BY_EXT[ext] ?? 'application/octet-stream';
 
-  const stat = fs.statSync(filePath);
-  const stream = fs.createReadStream(filePath);
+  // Buffer the file rather than streaming it. A streamed Response throws an
+  // unhandled ERR_INVALID_STATE (ReadableStream already closed) when a client
+  // aborts mid-flight — iframe reloads, early-closing probes — which takes down
+  // the entire Vite dev server. These are small local evidence docs, so reading
+  // into memory is simpler and bulletproof. Response derives Content-Length from
+  // the buffer automatically.
+  const data = fs.readFileSync(filePath);
   const headers = {
     'Content-Type': contentType,
-    'Content-Length': String(stat.size),
     'Content-Disposition': 'inline',
     // Don't let the browser MIME-sniff a text or octet-stream file into runnable HTML.
     'X-Content-Type-Options': 'nosniff'
@@ -46,5 +50,5 @@ export function GET({ params }) {
   if (ext === '.html' || ext === '.htm') {
     headers['Content-Security-Policy'] = 'sandbox';
   }
-  return new Response(stream, { headers });
+  return new Response(data, { headers });
 }
