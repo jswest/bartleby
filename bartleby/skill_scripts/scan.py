@@ -645,7 +645,6 @@ def _count_by_field(cur, spec: CaptureSpec) -> tuple[Counter, bool]:
     return counter, False
 
 
-
 def _heading_qualified_fts(fts_expr: str) -> str:
     """Column-qualify an FTS5 MATCH expression to the ``section_heading`` column.
 
@@ -894,6 +893,9 @@ def work(*, conn, args, session_id) -> dict:
                 "--returning has no effect on --count-by 'field_name:/regex/' "
                 "output: filename buckets carry no citable id to project.",
             )
+        # Deliberately corpus-wide: the field histogram answers "what's in the
+        # corpus", so it does NOT take the FTS `where`/`params` the other count
+        # modes do — scoping it would silently produce a partial histogram.
         counter, truncated = _count_by_field(cur, count_regex)
         ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
         page = ordered[args.offset : args.offset + args.limit]
