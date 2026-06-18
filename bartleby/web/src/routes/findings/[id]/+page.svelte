@@ -27,13 +27,16 @@
   //   [^chunk:N]         corpus-chunk citation. Resolves against byId →
   //                        resolved  → † "source" note (amber, filename, jumps)
   //                        unresolved → ‡ "no longer available" note (danger)
+  //   [^finding:N]       finding-to-finding link (#654) → ¶ note with a link
+  //                        to /findings/N. No DB row — validated at save time,
+  //                        rendered from body text on read.
   //   [^url:…]/[^doc:…]   external citation → § "source" note (link / ref)
-  // Glyphs follow the traditional footnote sequence * † ‡ §: † is a corpus
-  // chunk, ‡ a chunk whose source is gone, § an external url/doc — the glyph
-  // alone tells corpus-vs-external apart; the ordinal stays the tie-back.
-  // Mirrors the backend grammar in skill_scripts/_common.py: `chunk` is the
-  // internal scheme, `url`/`doc` are external; any other scheme (incl. a stray
-  // document/finding marker) is dropped, not rendered as a citation.
+  // Glyphs follow the traditional footnote sequence * † ‡ § ¶: † is a corpus
+  // chunk, ‡ a chunk whose source is gone, § an external url/doc, ¶ a finding
+  // link — the glyph alone tells the kind apart; the ordinal stays the tie-back.
+  // Mirrors the backend grammar in skill_scripts/_common.py: `chunk` and
+  // `finding` are internal schemes; `url`/`doc` are external; any other scheme
+  // (incl. `document`) is dropped, not rendered as a citation.
   //
   // renderBody is a PURE function returning { html, notes } in one ordered pass,
   // so the gutter order matches reading order. Reactive on `active` so the
@@ -62,6 +65,14 @@
           collected.push(note);
           return marker(note);
         }
+        if (s === "finding") {
+          const id = Number(ref.trim());
+          // A non-numeric finding ref can't resolve; leave the marker verbatim.
+          if (!Number.isInteger(id)) return esc(match);
+          const note = findingNote(++n, id);
+          collected.push(note);
+          return marker(note);
+        }
         const note = externalNote(++n, s, ref.trim());
         if (!note) {
           n--; // unknown scheme: drop, don't burn an ordinal
@@ -79,10 +90,16 @@
   // its gutter note. Stable class hooks (`cite-ref`, kind modifier) so R3 (#592)
   // can splice a pixel icon in without touching this code.
   function marker(note) {
-    const kindCls = note.gone ? "cite-ref--gone" : "cite-ref--source";
+    const kindCls = note.gone
+      ? "cite-ref--gone"
+      : note.finding
+        ? "cite-ref--finding"
+        : "cite-ref--source";
     const title = note.gone
       ? `${note.dagger} cited source no longer available`
-      : `${note.dagger} source · ${note.title}`;
+      : note.finding
+        ? `${note.dagger} finding · ${note.title}`
+        : `${note.dagger} source · ${note.title}`;
     return `<sup class="cite-ref ${kindCls}" data-note="${note.n}" title="${esc(title)}">${note.dagger}${note.n}</sup>`;
   }
 
@@ -109,9 +126,9 @@
     };
   }
 
-  // An unresolved [^N]: the cited source has been removed (deleted, or rebuilt
-  // under new chunk ids by an edit/merge), so only the id survives. Danger-toned
-  // gutter note rather than leaking raw [^N] text.
+  // An unresolved [^chunk:N]: the cited source has been removed (deleted, or
+  // rebuilt under new chunk ids by an edit/merge), so only the id survives.
+  // Danger-toned gutter note rather than leaking raw [^N] text.
   function goneNote(n, chunkId) {
     return {
       n,
@@ -120,6 +137,22 @@
       chunkId,
       label: "no longer available",
       title: `chunk ${chunkId} · cited source no longer available`,
+    };
+  }
+
+  // A [^finding:N] link — a unidirectional reference to another finding (#654).
+  // Rendered as a ¶-daggered gutter note with a link to /findings/N. No DB row
+  // backs this link; it is validated at save time and stored only in the body.
+  function findingNote(n, findingId) {
+    return {
+      n,
+      dagger: "¶",
+      gone: false,
+      finding: true,
+      findingId,
+      href: `/findings/${findingId}`,
+      label: `finding #${findingId}`,
+      title: `finding #${findingId}`,
     };
   }
 
@@ -299,7 +332,7 @@
         <aside class="cite-notes" aria-label="Citations" bind:this={citesAside}>
           {#each notes as note (note.n)}
             <div
-              class="margin-note margin-note--{note.gone ? 'gone' : 'source'}"
+              class="margin-note margin-note--{note.gone ? 'gone' : note.finding ? 'finding' : 'source'}"
               data-note={note.n}
             >
               <p class="margin-note__head">
@@ -308,6 +341,10 @@
               </p>
               {#if note.gone}
                 <p class="margin-note__body">no longer available</p>
+              {:else if note.finding}
+                <p class="margin-note__body">
+                  <a href={note.href} title={note.title}>{note.label}</a>
+                </p>
               {:else if note.external === "url"}
                 <p class="margin-note__body">
                   <a href={note.href} title={note.title}>{note.label}</a>

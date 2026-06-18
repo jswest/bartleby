@@ -148,6 +148,38 @@ Count-by capture (``--count-by '/regex/'``):
       ]
     }
 
+Count-by field (``--count-by 'file_name:/regex/'``):
+    Histogram the corpus by a document-level field instead of chunk body text.
+    Pass ``file_name:/regex/`` to apply the capture regex to every document's
+    ``file_name`` column — useful on corpora with structured filenames
+    (member prefixes, date stamps, doc-type codes) where a "docs per prefix"
+    tally is the answer:
+
+        scan "bill" --count-by 'file_name:/^([A-Za-z]+)_/'
+        → buckets: [{"value": "smith", "count": 14}, ...]
+
+    Counting is **per document** (first capture only) — a filename that matches
+    the regex twice still counts once. Buckets sort by count desc then value asc,
+    paginated by ``--limit``/``--offset``; ``--sort`` has no effect. Cannot
+    combine with ``--preview``/``--brief``. Only ``file_name`` is supported as
+    a field name; other fields raise ``INVALID_COUNT_BY_FIELD``.
+
+    Output differs from the body-text bucket envelope to avoid ambiguity:
+
+    {
+      "query": str, "match_mode": "phrase" | "terms",
+      "count_by_field": "file_name",    # the field name
+      "count_by_regex": "/regex/",      # the capture pattern
+      "offset": int, "limit": int,
+      "distinct_value_count": int,
+      "total_match_count": int,
+      "truncated": bool,
+      "buckets": [
+        {"value": str, "count": int}, ...
+      ]
+    }
+
+
 Extract capture table (``--extract '/regex/'``, repeatable):
     The tidy-table sibling of ``--count-by '/regex/'``: instead of folding
     captures into a histogram, return **one row per matching chunk** carrying
@@ -218,6 +250,30 @@ Zero-result diagnosis:
     real matches — where ``total`` is still > 0 — carries no diagnosis: there
     are matches, just not on this page.
 
+``--body-matches '/regex/'`` adds a **regex filter** that selects only chunks
+whose body text matches the given ``/pattern/`` (Python ``re.search``). It
+acts as the locator: the FTS query narrows to the token-matching chunks, then
+``--body-matches`` post-filters to those where the regex holds. Use it when
+the target is literal punctuation (``5376``, ``$``, ``H.R. 815``) that FTS5's
+tokenizer treats as a boundary and cannot phrase-match. Pairs naturally with
+``--extract`` — filter to locate, extract to project. The regex must be
+``/.../'``-delimited but carries **no capture group** (it is a selector, not a
+projector — use ``--extract`` for captures). Composes with all scope flags.
+Performance: O(n) over FTS5 matches (not all chunks); acceptable for a filter
+primitive, but avoid very broad regexes on very large match sets.
+
+Output shape with ``--body-matches``:
+
+    {
+      "query": str,
+      "match_mode": "phrase" | "terms",
+      "body_matches": "/regex/",    # the pattern as passed
+      "offset": int, "limit": int, "total": int,
+      "preview": int,
+      "filters": {...},             # scope filters only; body_matches is top-level
+      ...
+    }
+
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
 intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
@@ -245,7 +301,7 @@ from collections import Counter
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
-    apply_preview, nonneg_int, parse_capture_regex,
+    apply_preview, nonneg_int, parse_capture_regex, parse_field_capture, parse_filter_regex,
     positive_int, project_row, text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int_list
@@ -312,15 +368,30 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--body-matches",
+        default=None,
+        dest="body_matches",
+        metavar="/regex/",
+        help=(
+            "Post-filter: keep only chunks whose body text matches this /regex/ "
+            "(slash-delimited, Python re.search). Acts as the locator when FTS "
+            "phrase-matching is blocked by punctuation — e.g. '--body-matches "
+            "/5376/' or '--body-matches /H\\.R\\.\\s*815/'. No capture group "
+            "required (use --extract for captures). Composes with all scope flags."
+        ),
+    )
+    p.add_argument(
         "--count-by",
         default=None,
         dest="count_by",
-        metavar="document|/regex/",
+        metavar="document|/regex/|field_name:/regex/",
         help="Aggregate mode. 'document' returns a per-document hit histogram "
              "(distinct_document_count + total_chunk_count). A /regex/ with a "
              "capture group instead buckets matches by the captured substring "
-             "(distinct_value_count + total_match_count). Cannot be combined "
-             "with --preview/--brief.",
+             "(distinct_value_count + total_match_count). 'file_name:/regex/' "
+             "applies the capture regex to the document's file_name column "
+             "(per-document: first capture per doc, no double-counting). "
+             "Cannot be combined with --preview/--brief.",
     )
     p.add_argument(
         "--extract",
@@ -362,6 +433,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         p.error(
             "--count-by returns a per-document histogram, not per-chunk matches, "
             "so it cannot be combined with --preview or --brief."
+        )
+    if args.body_matches is not None and args.count_by is not None:
+        p.error(
+            "--body-matches filters per-chunk matches, but --count-by returns an "
+            "aggregate histogram that does not carry that filter; pass one."
         )
     if args.extract is not None:
         if args.count_by is not None:
@@ -416,24 +492,35 @@ def _build_fts_query(query: str, match_mode: str) -> str:
     return " ".join(pieces)
 
 
-def _parse_count_by(value: str) -> tuple[str, CaptureSpec | None]:
+def _parse_count_by(
+    value: str,
+) -> tuple[str, CaptureSpec | None, str | None]:
     """Classify a --count-by value.
 
-    Returns ('document', None) for the literal keyword, or ('regex', spec) for a
-    /pattern/ that carries at least one capture group — parsed through the shared
-    capture machinery (:func:`parse_capture_regex`), so --count-by '/regex/' is
-    extract-then-group-and-count over the *same* primitive --extract uses. A
-    capture spec may carry several groups; --count-by buckets on the first one.
-    Raises SkillError on a malformed value, an uncompilable pattern, or a
+    Returns a ``(mode, spec, field)`` triple:
+
+    - ``('document', None, None)`` for the literal keyword.
+    - ``('regex', spec, None)`` for a ``/pattern/`` — extract-then-group-and-count
+      over chunk body text; same primitive ``--extract`` uses.
+    - ``('field', spec, 'file_name')`` for a ``file_name:/pattern/`` — apply the
+      capture regex to the document's ``file_name`` column (per-document, first
+      capture only, no double-counting).
+
+    Raises ``SkillError`` on a malformed value, an uncompilable pattern, or a
     capture-less regex.
     """
     if value == "document":
-        return "document", None
+        return "document", None, None
+    field_result = parse_field_capture(value, flag="--count-by")
+    if field_result is not None:
+        field_name, spec = field_result
+        return "field", spec, field_name
     if value.startswith("/"):
-        return "regex", parse_capture_regex(value, flag="--count-by")
+        return "regex", parse_capture_regex(value, flag="--count-by"), None
     raise SkillError(
         "INVALID_COUNT_BY",
-        f"--count-by must be 'document' or a /regex/ with a capture group; "
+        f"--count-by must be 'document', a /regex/ with a capture group, or "
+        f"'file_name:/regex/' to histogram by document field; "
         f"got {value!r}.",
     )
 
@@ -528,6 +615,38 @@ def _count_by_regex(cur, where: str, params: list, spec: CaptureSpec) -> tuple[C
             total += 1
             if total >= CAPTURE_MAX_MATCHES:
                 return counter, True  # match cap hit → partial counts
+    return counter, False
+
+
+def _count_by_field(cur, spec: CaptureSpec) -> tuple[Counter, bool]:
+    """Tally spec's first capture group across all documents' file_name values.
+
+    Per-document counting: take only the FIRST match per document to avoid
+    double-counting when a filename matches the regex more than once. Returns the
+    histogram and whether the match cap truncated it.
+
+    Each project is its own SQLite DB, so querying all documents gives the full
+    project corpus — no project_id needed. The FTS scope filters (in_documents /
+    tag / file_like / date bounds) are intentionally **not** applied here — this
+    mode histograms the filename space of the whole project, not chunk hits.
+    The FTS query is required by ``scan``'s interface but the filename histogram
+    is query-independent.
+    """
+    counter: Counter = Counter()
+    total = 0
+    for (file_name,) in cur.execute("SELECT file_name FROM documents"):
+        if file_name is None:
+            continue
+        match = spec.pattern.search(file_name)
+        if match is None:
+            continue
+        value = match.group(1)
+        if value is None:
+            continue
+        counter[value] += 1
+        total += 1
+        if total >= CAPTURE_MAX_MATCHES:
+            return counter, True
     return counter, False
 
 
@@ -664,9 +783,12 @@ def work(*, conn, args, session_id) -> dict:
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     match_mode = "terms" if args.match_terms else "phrase"
-    count_mode, count_regex = (None, None)
+    body_filter = None
+    if args.body_matches is not None:
+        body_filter = parse_filter_regex(args.body_matches, flag="--body-matches")
+    count_mode, count_regex, count_field = (None, None, None)
     if args.count_by is not None:
-        count_mode, count_regex = _parse_count_by(args.count_by)
+        count_mode, count_regex, count_field = _parse_count_by(args.count_by)
     extract_specs = None
     if args.extract is not None:
         extract_specs = [
@@ -690,7 +812,10 @@ def work(*, conn, args, session_id) -> dict:
     restrict_sql, restrict_params = scope.restrict_in("c.source_id")
 
     def _envelope(extra: dict) -> dict:
-        env = scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        base = {"query": args.query, "match_mode": match_mode}
+        if body_filter is not None:
+            base["body_matches"] = args.body_matches
+        env = scope.echo_into({**base, **extra})
         if args.heading_like:
             # --heading-like is a chunk-level filter, so it lives outside Scope's
             # document-level echo; fold it into the same filters object (creating
@@ -743,23 +868,20 @@ def work(*, conn, args, session_id) -> dict:
                 "offset": args.offset, "limit": args.limit, "total": 0,
                 "columns": extract_columns, "rows": [],
             }))
-        total = _count_total(cur, where, params)
+        # Walk all FTS5 matches in memory (needed for the deadline guard anyway)
+        # and filter by body_filter when active; the list gives an honest total.
+        all_extract_rows = [
+            (chunk_id, source_id, file_name, text)
+            for chunk_id, source_id, file_name, text in _scan_chunk_texts(
+                cur, where, params, "--extract regex"
+            )
+            if body_filter is None or body_filter.search(text)
+        ]
+        total = len(all_extract_rows)
+        page = all_extract_rows[args.offset : args.offset + args.limit]
         rows_out = []
-        page_end = args.offset + args.limit
-        for i, (chunk_id, source_id, file_name, text) in enumerate(
-            _scan_chunk_texts(cur, where, params, "--extract regex")
-        ):
-            # Page in Python over the deterministic scan order — the spec walk is
-            # already a full read for the deadline; slicing here keeps one path.
-            if i < args.offset:
-                continue
-            if i >= page_end:
-                break
-            row = {
-                "chunk_id": chunk_id,
-                "document_id": source_id,
-                "file_name": file_name,
-            }
+        for chunk_id, source_id, file_name, text in page:
+            row = {"chunk_id": chunk_id, "document_id": source_id, "file_name": file_name}
             for spec in extract_specs:
                 row.update(spec.extract_first(text))
             rows_out.append(row)
@@ -768,6 +890,31 @@ def work(*, conn, args, session_id) -> dict:
             "columns": extract_columns, "rows": rows_out,
         })
         return _with_diagnosis(env) if total == 0 else env
+
+    if count_mode == "field":
+        if args.returning is not None:
+            raise SkillError(
+                "RETURNING_NOT_APPLICABLE",
+                "--returning has no effect on --count-by 'field_name:/regex/' "
+                "output: filename buckets carry no citable id to project.",
+            )
+        # Deliberately corpus-wide: the field histogram answers "what's in the
+        # corpus", so it does NOT take the FTS `where`/`params` the other count
+        # modes do — scoping it would silently produce a partial histogram.
+        counter, truncated = _count_by_field(cur, count_regex)
+        ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        page = ordered[args.offset : args.offset + args.limit]
+        env = _envelope({
+            "count_by_field": count_field,
+            "count_by_regex": count_regex.raw,
+            "offset": args.offset,
+            "limit": args.limit,
+            "distinct_value_count": len(counter),
+            "total_match_count": sum(counter.values()),
+            "truncated": truncated,
+            "buckets": [{"value": value, "count": count} for value, count in page],
+        })
+        return env
 
     if count_mode == "regex":
         if args.returning is not None:
@@ -843,18 +990,12 @@ def work(*, conn, args, session_id) -> dict:
     # Default mode: paginated per-chunk matches.
     validate_returning(args.returning, MATCH_FIELDS)
     preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
-    total = 0 if no_match else _count_total(cur, where, params)
-    if total == 0:
-        return _with_diagnosis(_envelope({
-            "offset": args.offset, "limit": args.limit, "total": 0,
-            "preview": preview, "matches": [],
-        }))
 
+    # The page query is shared; --body-matches only changes how we paginate it.
     # authored_date rides the summaries LEFT JOIN that --sort date already needs —
     # the canonical summarizer-inferred date that list_documents and the date
-    # filters use — so it costs no extra query and is NULL for undated docs (no
-    # summary, or a summary with no inferred date).
-    rows = cur.execute(
+    # filters use — so it costs no extra query and is NULL for undated docs.
+    base_sql = (
         f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
         f"       c.page_number, c.content_type, c.text, d.file_name, "
         f"       s.authored_date "
@@ -863,14 +1004,32 @@ def work(*, conn, args, session_id) -> dict:
         f"JOIN documents d ON d.document_id = c.source_id "
         f"LEFT JOIN summaries s ON s.document_id = c.source_id "
         f"WHERE {where} "
-        f"ORDER BY {_CHUNK_ORDER_BY[args.sort]} "
-        f"LIMIT ? OFFSET ?",
-        [*params, args.limit, args.offset],
+        f"ORDER BY {_CHUNK_ORDER_BY[args.sort]}"
     )
+
+    if body_filter is not None and not no_match:
+        # --body-matches is a Python post-filter over FTS5 matches: walk every
+        # FTS5-matching chunk in sort order, filter by regex, page manually. This
+        # gives an honest total (the pre-pagination count of regex-matching chunks)
+        # with no second SQL pass. O(n) over FTS5 matches — FTS5 narrows first.
+        filtered = [r for r in cur.execute(base_sql, params) if body_filter.search(r[6])]
+        total = len(filtered)
+        page_rows = filtered[args.offset : args.offset + args.limit]
+    else:
+        total = 0 if no_match else _count_total(cur, where, params)
+        page_rows = [] if total == 0 else list(cur.execute(
+            base_sql + " LIMIT ? OFFSET ?", [*params, args.limit, args.offset]
+        ))
+
+    if total == 0:
+        return _with_diagnosis(_envelope({
+            "offset": args.offset, "limit": args.limit, "total": 0,
+            "preview": preview, "matches": [],
+        }))
 
     matches = []
     for (chunk_id, source_id, chunk_index, section_heading,
-         page_number, content_type, text, file_name, authored_date) in rows:
+         page_number, content_type, text, file_name, authored_date) in page_rows:
         # The full whitelisted row, built once. --returning projects from it;
         # otherwise --brief / default shape it (and only then is text truncated).
         full = {

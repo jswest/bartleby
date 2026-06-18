@@ -30,7 +30,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "rich>=14.2.0",
     "sentence-transformers>=5.1.2",
-    "sqlite-vec>=0.1.6",
+    "sqlite-vec>=0.1.9",
     "tiktoken>=0.12.0",
 ]
 

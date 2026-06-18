@@ -3,8 +3,9 @@
 Covers the dedicated ``_ids`` helpers and the cross-cutting behaviors the hard
 cutover introduces: prefixed output shape, prefixed-only input flags (bare ints
 and wrong-typed ids both rejected), and the type-tagged ``[^chunk:N]`` citation
-marker (with bare ``[^N]`` and wrong-type ``[^document:N]`` / ``[^finding:N]``
-rejected). Storage stays integer — these are all interface-layer assertions.
+marker (with bare ``[^N]`` and wrong-type ``[^document:N]`` rejected). Since #654
+``[^finding:N]`` is a valid finding-link marker — accepted, validated, not rejected.
+Storage stays integer — these are all interface-layer assertions.
 """
 
 from __future__ import annotations
@@ -232,13 +233,19 @@ def test_document_typed_marker_rejected(seeded_project, tmp_path, capsys):
     assert any("document" in m for m in out["wrong_type_markers"])
 
 
-def test_finding_typed_marker_rejected(seeded_project, tmp_path, capsys):
+def test_finding_typed_marker_accepted_but_requires_existing_finding(
+    seeded_project, tmp_path, capsys
+):
+    """``[^finding:N]`` is now a valid finding-link marker (#654), not
+    WRONG_CITATION_TYPE. A reference to a non-existent finding raises
+    UNKNOWN_FINDING_LINKS instead."""
     (cid,) = _cited_ids(seeded_project, 1)
     with pytest.raises(SystemExit):
         _save(seeded_project, tmp_path,
-              f"Good[^chunk:{cid}]. Bad[^finding:1].")
+              f"Good[^chunk:{cid}]. Link[^finding:99999].")
     out = json.loads(capsys.readouterr().out)
-    assert out["code"] == "WRONG_CITATION_TYPE"
+    assert out["code"] == "UNKNOWN_FINDING_LINKS"
+    assert 99999 in out["unknown_finding_ids"]
 
 
 def test_nondigit_chunk_ref_rejected(seeded_project, tmp_path, capsys):

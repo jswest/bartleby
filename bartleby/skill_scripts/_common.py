@@ -16,11 +16,16 @@ from bartleby.skill_runner import SkillError
 
 
 # Inline corpus-chunk citation marker: ``[^chunk:<chunk_id>]`` (issue #624).
-# Type-tagged so the cited id can only ever be a chunk_id — never a document_id or
-# finding_id silently mis-stored (#623). ``chunk`` is the canonical *internal*
-# scheme of the shared ``[^<scheme>:<ref>]`` grammar (``_EXTERNAL_MARKER`` below):
-# it is routed to chunk-citation handling, while ``url`` / ``doc`` stay external.
+# Type-tagged so the cited id can only ever be a chunk_id — never a document_id
+# silently mis-stored (#623). ``chunk`` is the canonical *internal* scheme of the
+# shared ``[^<scheme>:<ref>]`` grammar (``_EXTERNAL_MARKER`` below): it is routed
+# to chunk-citation handling, while ``url`` / ``doc`` stay external.
 _CITATION_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
+# Finding-to-finding citation marker: ``[^finding:<finding_id>]`` (issue #654).
+# Unidirectional reference to another finding — valid in a finding body; no DB
+# row, no new table. Validated at save time (target must exist); stored as text in
+# ``findings.body``; rendered as a link in the web view.
+_FINDING_CITATION_MARKER = re.compile(r"\[\^finding:(\d+)\]")
 # Citation-shaped but untyped: caret-less ``[N]`` and the now-obsolete bare
 # ``[^N]`` chunk form. Both render as bracketed prose but are silently dropped by
 # the typed extractor, so both are rejected loudly — see
@@ -28,20 +33,30 @@ _CITATION_MARKER = re.compile(r"\[\^chunk:(\d+)\]")
 _MALFORMED_MARKER = re.compile(r"\[\^?(\d+)\]")
 # Typed citation marker: ``[^<scheme>:<ref>]``. The scheme is an alpha word.
 # ``chunk`` is the internal corpus-chunk scheme (matched by ``_CITATION_MARKER``
-# above); ``url`` / ``doc`` are external (stored opaque, never fetched);
-# ``document`` / ``finding`` are *rejected* — they are not valid citation targets.
+# above); ``finding`` is the finding-link scheme (#654); ``url`` / ``doc`` are
+# external (stored opaque, never fetched); ``document`` is *rejected* — a
+# document id is never a citation target.
 _EXTERNAL_MARKER = re.compile(r"\[\^([A-Za-z]+):([^\]]+)\]")
 # Schemes an external marker may carry. ``url`` is a web link; ``doc`` is an
 # external-dataset document ref (e.g. a filing id). Both are stored opaque.
 _EXTERNAL_SCHEMES = ("url", "doc")
 # ``chunk`` is internal (handled by ``_CITATION_MARKER``), so the external-marker
-# machinery must skip it as it does the rejected schemes — it is neither external
-# nor malformed.
+# machinery must skip it as it does the other named schemes.
 _INTERNAL_SCHEME = "chunk"
+# ``finding`` is the finding-link scheme (#654); treated like ``chunk`` — it is
+# handled by its own extractor and excluded from external-marker classification.
+_FINDING_SCHEME = "finding"
 # Typed schemes that parse as ``[^<scheme>:<ref>]`` but are *not* valid citation
-# targets: a document/finding id is never a citation — cite the chunk you were
-# handed instead (the #623 confusion, now structurally rejected).
-_REJECTED_CITATION_SCHEMES = ("document", "finding")
+# targets: a document id is never a citation — cite the chunk you were handed
+# instead (the #623 confusion, now structurally rejected).
+_REJECTED_CITATION_SCHEMES = ("document",)
+# Internal schemes: both require all-digit refs and are handled by their own
+# extractors; excluded from external-marker classification.
+_INTERNAL_SCHEMES = (_INTERNAL_SCHEME, _FINDING_SCHEME)
+# Schemes excluded from the external well-formedness check: internal schemes
+# handled by dedicated extractors, plus the rejected ``document`` scheme
+# (flagged separately by reject_wrong_typed_citations, not double-flagged here).
+_EXTERNAL_SKIP_SCHEMES = (_INTERNAL_SCHEME, _FINDING_SCHEME, *_REJECTED_CITATION_SCHEMES)
 
 
 def text_qualified_fts(fts_expr: str) -> str:
@@ -64,6 +79,14 @@ def extract_citations(body: str) -> list[int]:
     """Return chunk_ids from ``[^chunk:N]`` markers, first-appearance order, deduped."""
     seen: dict[int, None] = {}
     for m in _CITATION_MARKER.finditer(body):
+        seen[int(m.group(1))] = None
+    return list(seen)
+
+
+def extract_finding_citations(body: str) -> list[int]:
+    """Return finding_ids from ``[^finding:N]`` markers, first-appearance order, deduped."""
+    seen: dict[int, None] = {}
+    for m in _FINDING_CITATION_MARKER.finditer(body):
         seen[int(m.group(1))] = None
     return list(seen)
 
@@ -111,13 +134,14 @@ def extract_external_citations(body: str) -> list[dict]:
 
 
 def reject_wrong_typed_citations(body: str) -> None:
-    """Raise ``WRONG_CITATION_TYPE`` for ``[^document:N]`` / ``[^finding:N]``.
+    """Raise ``WRONG_CITATION_TYPE`` for ``[^document:N]``.
 
-    A type-tagged marker whose scheme is ``document`` or ``finding`` parses as a
-    typed citation but points at the wrong kind of id — the #623 confusion made
-    structural: a citation target is *always* a chunk_id you were handed this
-    session, never a document_id or finding_id. Refuse loudly so the agent
-    repoints the marker to the chunk it actually means (``[^chunk:<id>]``).
+    A type-tagged marker whose scheme is ``document`` parses as a typed citation
+    but points at the wrong kind of id — the #623 confusion made structural: a
+    corpus-chunk citation target is *always* a chunk_id you were handed this
+    session, never a document_id. Refuse loudly so the agent repoints the marker
+    to the chunk it actually means (``[^chunk:<id>]``). Note: ``[^finding:N]``
+    is now a *valid* finding-link marker (#654) and is not rejected here.
     """
     bad = [
         m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
@@ -128,16 +152,16 @@ def reject_wrong_typed_citations(body: str) -> None:
     bad = list(dict.fromkeys(bad))
     raise SkillError(
         "WRONG_CITATION_TYPE",
-        f"Found {len(bad)} citation marker(s) targeting a document/finding id: "
+        f"Found {len(bad)} citation marker(s) targeting a document id: "
         f"{', '.join(bad)}. A citation target is always a chunk_id you were "
-        "handed this session — write [^chunk:<chunk_id>], never "
-        "[^document:<id>] or [^finding:<id>].",
+        "handed this session — write [^chunk:<chunk_id>], never [^document:<id>].",
         wrong_type_markers=bad,
     )
 
 
 def reject_malformed_internal_citations(body: str) -> None:
-    """Raise ``MALFORMED_CITATION`` for a ``[^chunk:<ref>]`` whose ref isn't all-digits.
+    """Raise ``MALFORMED_CITATION`` for a ``[^chunk:<ref>]`` or ``[^finding:<ref>]``
+    whose ref isn't all-digits.
 
     A marker like ``[^chunk:42abc]`` carries the internal ``chunk`` scheme, so it
     slips every other guard: it's scrubbed by :func:`reject_malformed_citations`
@@ -146,21 +170,23 @@ def reject_malformed_internal_citations(body: str) -> None:
     skipped by :func:`reject_malformed_external_citations` (``chunk`` is the
     internal scheme, excluded there). But :func:`extract_citations` requires
     ``\\d+``, so a non-digit ref never extracts — the citation is *silently
-    dropped*, exactly the loss #624 exists to kill. Refuse loudly so the agent
-    fixes the ref before persisting.
+    dropped*, exactly the loss #624 exists to kill. Same logic applies to
+    ``[^finding:<ref>]`` — the int requirement is identical. Refuse loudly so the
+    agent fixes the ref before persisting.
     """
     bad = [
         m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
-        if m.group(1).lower() == _INTERNAL_SCHEME and not m.group(2).strip().isdigit()
+        if m.group(1).lower() in _INTERNAL_SCHEMES and not m.group(2).strip().isdigit()
     ]
     if not bad:
         return
     bad = list(dict.fromkeys(bad))
     raise SkillError(
         "MALFORMED_CITATION",
-        f"Found {len(bad)} malformed chunk citation marker(s): "
+        f"Found {len(bad)} malformed citation marker(s): "
         f"{', '.join(bad)}. A chunk citation must be [^chunk:<int>] "
-        "(e.g. [^chunk:4192]) — the ref must be a bare integer chunk_id.",
+        "(e.g. [^chunk:4192]) and a finding link must be [^finding:<int>] "
+        "(e.g. [^finding:7]) — the ref must be a bare integer.",
         malformed_markers=bad,
     )
 
@@ -173,15 +199,14 @@ def reject_malformed_external_citations(body: str) -> None:
     (e.g. ``[^ftp:…]``) or an empty ref (``[^url:]``) renders as bracketed prose
     but is silently dropped by :func:`extract_external_citations`, so the
     external attribution is effectively lost. Refuse loudly so the agent fixes
-    it before persisting. The internal ``chunk`` scheme (handled as a corpus
-    citation) and the rejected ``document`` / ``finding`` schemes (handled by
-    :func:`reject_wrong_typed_citations`) are excluded here so they aren't
-    double-flagged. The ref itself is never fetched or otherwise validated beyond
-    non-blankness — it is stored opaque.
+    it before persisting. Schemes in ``_EXTERNAL_SKIP_SCHEMES`` (``chunk``,
+    ``finding``, ``document``) are excluded here so they aren't double-flagged.
+    The ref itself is never fetched or otherwise validated beyond non-blankness —
+    it is stored opaque.
     """
     bad = [
         m.group(0) for m in _EXTERNAL_MARKER.finditer(body)
-        if m.group(1).lower() not in (_INTERNAL_SCHEME, *_REJECTED_CITATION_SCHEMES)
+        if m.group(1).lower() not in _EXTERNAL_SKIP_SCHEMES
         and _well_formed_external(m) is None
     ]
     if not bad:
@@ -332,6 +357,33 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
         )
 
 
+def live_finding_ids(conn, finding_ids: list[int]) -> set[int]:
+    """Return the subset of ``finding_ids`` that exist in ``findings``."""
+    if not finding_ids:
+        return set()
+    ph = ",".join("?" * len(finding_ids))
+    return {
+        row[0] for row in conn.cursor().execute(
+            f"SELECT finding_id FROM findings WHERE finding_id IN ({ph})",
+            finding_ids,
+        )
+    }
+
+
+def validate_finding_ids_exist(conn, finding_ids: list[int]) -> None:
+    """Raise ``UNKNOWN_FINDING_LINKS`` if any finding_id in ``[^finding:N]``
+    markers is missing from ``findings``."""
+    missing = sorted(set(finding_ids) - live_finding_ids(conn, finding_ids))
+    if missing:
+        raise SkillError(
+            "UNKNOWN_FINDING_LINKS",
+            f"Finding-link markers reference unknown finding_ids: {missing}. "
+            "Each [^finding:<id>] marker must reference a finding that exists "
+            "in this project.",
+            unknown_finding_ids=missing,
+        )
+
+
 def reject_citations_to_involved_findings(
     conn, citations: list[int], finding_ids, *, code: str, action: str,
 ) -> None:
@@ -406,16 +458,17 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
     The single read+validate path shared by ``save_finding``, ``edit_finding``,
     and ``merge_findings``: existence (``BODY_FILE_NOT_FOUND``), non-empty
     (``EMPTY_BODY``), no untyped ``[N]`` / ``[^N]`` markers and no non-integer
-    ``[^chunk:<ref>]`` ref (``MALFORMED_CITATION``),
-    no ``[^document:N]`` / ``[^finding:N]`` wrong-type markers
-    (``WRONG_CITATION_TYPE``), every external ``[^url:…]``/``[^doc:…]`` marker
-    well-formed (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^chunk:N]`` chunk
-    marker (``NO_INLINE_CITATIONS`` — external markers never satisfy this), and
-    every cited chunk_id real (``UNKNOWN_CITATIONS``). Citations are returned in
+    ``[^chunk:<ref>]`` / ``[^finding:<ref>]`` ref (``MALFORMED_CITATION``),
+    no ``[^document:N]`` wrong-type markers (``WRONG_CITATION_TYPE``), every
+    external ``[^url:…]``/``[^doc:…]`` marker well-formed
+    (``MALFORMED_EXTERNAL_CITATION``), at least one ``[^chunk:N]`` chunk marker
+    (``NO_INLINE_CITATIONS`` — external and finding markers never satisfy this),
+    every cited chunk_id real (``UNKNOWN_CITATIONS``), and every referenced
+    finding_id real (``UNKNOWN_FINDING_LINKS``). Citations are returned in
     first-appearance order, deduped.
     """
     body_path = Path(body_file)
-    if not body_path.exists() or not body_path.is_file():
+    if not body_path.is_file():
         raise SkillError(
             "BODY_FILE_NOT_FOUND",
             f"--body-file path does not exist: {body_path}",
@@ -436,6 +489,7 @@ def load_finding_body(conn, body_file: str) -> tuple[str, list[int]]:
             "of the form [^chunk:<chunk_id>] (e.g. [^chunk:4192]). See SKILL.md.",
         )
     validate_chunk_ids_exist(conn, citations)
+    validate_finding_ids_exist(conn, extract_finding_citations(body))
     return body, citations
 
 
@@ -815,6 +869,39 @@ class CaptureSpec:
         }
 
 
+def _compile_slash_regex(value: str, *, flag: str, error_code: str) -> re.Pattern:
+    """Shared prologue: validate ``/regex/`` delimiters and compile.
+
+    Raises ``SkillError(error_code, ...)`` for a missing slash-delimiter or a
+    pattern that doesn't compile.  Both :func:`parse_filter_regex` and
+    :func:`parse_capture_regex` differ only in what they do *after* this step.
+    """
+    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
+        raise SkillError(
+            error_code,
+            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
+        )
+    try:
+        return re.compile(value[1:-1])
+    except re.error as exc:
+        raise SkillError(
+            error_code,
+            f"{flag} regex {value!r} does not compile: {exc}.",
+        )
+
+
+def parse_filter_regex(value: str, *, flag: str) -> re.Pattern:
+    """Parse a ``/regex/`` filter pattern into a compiled :class:`re.Pattern`.
+
+    The selector sibling of :func:`parse_capture_regex`: a ``/.../``-delimited
+    pattern with no capture-group requirement.  Used by ``scan --body-matches``
+    to post-filter FTS5 chunks by body text.  Raises (as the JSON error envelope):
+
+    - ``INVALID_FILTER_REGEX`` — not ``/.../``-delimited, or doesn't compile.
+    """
+    return _compile_slash_regex(value, flag=flag, error_code="INVALID_FILTER_REGEX")
+
+
 def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
     """Parse a ``/regex/`` capture pattern into a :class:`CaptureSpec`.
 
@@ -827,19 +914,7 @@ def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
     - ``CAPTURE_NO_GROUP`` — compiles but carries no capture group (nothing to
       project into a column).
     """
-    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
-        raise SkillError(
-            "INVALID_CAPTURE_REGEX",
-            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
-        )
-    pattern_src = value[1:-1]
-    try:
-        compiled = re.compile(pattern_src)
-    except re.error as exc:
-        raise SkillError(
-            "INVALID_CAPTURE_REGEX",
-            f"{flag} regex {value!r} does not compile: {exc}.",
-        )
+    compiled = _compile_slash_regex(value, flag=flag, error_code="INVALID_CAPTURE_REGEX")
     if compiled.groups < 1:
         raise SkillError(
             "CAPTURE_NO_GROUP",
@@ -847,6 +922,52 @@ def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
             "capture in parentheses, e.g. '/H\\.R\\.\\s*(\\d+)/'.",
         )
     return CaptureSpec(compiled, value)
+
+
+# The only document field supported by ``--count-by field_name:/regex/``.
+# Defined here so the parser and error messages stay in sync.
+_COUNT_BY_FIELD_NAMES = ("file_name",)
+
+
+def parse_field_capture(value: str, *, flag: str) -> "tuple[str, CaptureSpec] | None":
+    """Parse a ``field_name:/regex/`` count-by value into ``(field_name, spec)``.
+
+    Returns ``None`` when ``value`` doesn't match the ``<word>:/regex/`` form (so
+    the caller can try the existing ``/regex/`` body-text path). Raises
+    ``SkillError`` when the prefix is present but the field name is not in the
+    supported set (``file_name`` only), the ``/regex/`` is missing delimiters,
+    doesn't compile, or carries no capture group.
+
+    Supported fields: ``file_name`` (the document's filename column in the
+    ``documents`` table). The field name must be an exact word match before the
+    first ``:``.
+    """
+    colon = value.find(":")
+    if colon < 1:
+        return None
+    prefix = value[:colon]
+    # Must look like a bare word (no slashes, no spaces) — otherwise this is
+    # not a field-prefix form at all (e.g. a plain ``/regex/`` starts with ``/``
+    # not a word).
+    if not prefix.isidentifier():
+        return None
+    rest = value[colon + 1:]
+    # The remainder must look like a /regex/ — if not, this isn't the
+    # field-prefix form; fall back to the existing parser.
+    if not rest.startswith("/"):
+        return None
+    # At this point we're committed: we have ``<word>:/...`` — validate the
+    # field name and parse the regex, raising on error.
+    if prefix not in _COUNT_BY_FIELD_NAMES:
+        raise SkillError(
+            "INVALID_COUNT_BY_FIELD",
+            f"{flag} field {prefix!r} is not supported. "
+            f"Supported fields: {', '.join(_COUNT_BY_FIELD_NAMES)}. "
+            f"Use '{_COUNT_BY_FIELD_NAMES[0]}:/regex/' to histogram by filename.",
+            supported_fields=list(_COUNT_BY_FIELD_NAMES),
+        )
+    spec = parse_capture_regex(rest, flag=flag)
+    return prefix, spec
 
 
 def comma_int_list(label: str) -> Callable[[str], list[int]]:
