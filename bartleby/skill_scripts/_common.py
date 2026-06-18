@@ -924,6 +924,52 @@ def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
     return CaptureSpec(compiled, value)
 
 
+# The only document field supported by ``--count-by field_name:/regex/``.
+# Defined here so the parser and error messages stay in sync.
+_COUNT_BY_FIELD_NAMES = ("file_name",)
+
+
+def parse_field_capture(value: str, *, flag: str) -> "tuple[str, CaptureSpec] | None":
+    """Parse a ``field_name:/regex/`` count-by value into ``(field_name, spec)``.
+
+    Returns ``None`` when ``value`` doesn't match the ``<word>:/regex/`` form (so
+    the caller can try the existing ``/regex/`` body-text path). Raises
+    ``SkillError`` when the prefix is present but the field name is not in the
+    supported set (``file_name`` only), the ``/regex/`` is missing delimiters,
+    doesn't compile, or carries no capture group.
+
+    Supported fields: ``file_name`` (the document's filename column in the
+    ``documents`` table). The field name must be an exact word match before the
+    first ``:``.
+    """
+    colon = value.find(":")
+    if colon < 1:
+        return None
+    prefix = value[:colon]
+    # Must look like a bare word (no slashes, no spaces) — otherwise this is
+    # not a field-prefix form at all (e.g. a plain ``/regex/`` starts with ``/``
+    # not a word).
+    if not prefix.isidentifier():
+        return None
+    rest = value[colon + 1:]
+    # The remainder must look like a /regex/ — if not, this isn't the
+    # field-prefix form; fall back to the existing parser.
+    if not rest.startswith("/"):
+        return None
+    # At this point we're committed: we have ``<word>:/...`` — validate the
+    # field name and parse the regex, raising on error.
+    if prefix not in _COUNT_BY_FIELD_NAMES:
+        raise SkillError(
+            "INVALID_COUNT_BY_FIELD",
+            f"{flag} field {prefix!r} is not supported. "
+            f"Supported fields: {', '.join(_COUNT_BY_FIELD_NAMES)}. "
+            f"Use '{_COUNT_BY_FIELD_NAMES[0]}:/regex/' to histogram by filename.",
+            supported_fields=list(_COUNT_BY_FIELD_NAMES),
+        )
+    spec = parse_capture_regex(rest, flag=flag)
+    return prefix, spec
+
+
 def comma_int_list(label: str) -> Callable[[str], list[int]]:
     """argparse ``type=`` factory for a comma-separated list of ints.
 
