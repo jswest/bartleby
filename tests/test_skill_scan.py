@@ -1252,3 +1252,129 @@ def test_scan_zero_heading_only_diagnosis(project_env, capsys):  # noqa: F811
     assert diag["verdict"] == "heading_only"
     assert diag["body_corpus_wide"] == 0
     assert diag["heading_corpus_wide"] == 1
+
+
+# --- --body-matches '/regex/' (regex filter mode, issue #653) ----------------
+
+
+def test_scan_body_matches_filters_to_regex_hits(scan_corpus, capsys):
+    """--body-matches keeps only chunks whose body text matches the regex.
+    The FTS query locates marker chunks; the regex sub-selects those containing
+    a specific company name that FTS can't phrase-match (punctuation etc.)."""
+    # MARKER matches chunks in d1 (ACME/BETA) and d2 (GAMMA). The regex
+    # selects only those containing "BETA" or "GAMMA" — not "ACME".
+    _run(scan_corpus, [MARKER, "--body-matches", "/(BETA|GAMMA)/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["body_matches"] == "/(BETA|GAMMA)/"
+    assert out["total"] == 2
+    texts = [m["text"] for m in out["matches"]]
+    assert any("BETA" in t for t in texts)
+    assert any("GAMMA" in t for t in texts)
+    assert not any("ACME CORP" in t for t in texts)
+
+
+def test_scan_body_matches_total_is_honest(scan_corpus, capsys):
+    """--body-matches total reflects post-filter count, not FTS count."""
+    # Without --body-matches: total=3 (three MARKER chunks).
+    _run(scan_corpus, [MARKER])
+    assert json.loads(capsys.readouterr().out)["total"] == 3
+
+    # With --body-matches limiting to one company: total=1.
+    _run(scan_corpus, [MARKER, "--body-matches", "/GAMMA/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert len(out["matches"]) == 1
+
+
+def test_scan_body_matches_pagination_stable(scan_corpus, capsys):
+    """Pagination over --body-matches uses the filtered total as the base."""
+    # MARKER + body_matches "/(BETA|GAMMA)/" → 2 matching chunks.
+    _run(scan_corpus, [MARKER, "--body-matches", "/(BETA|GAMMA)/",
+                       "--limit", "1", "--offset", "0"])
+    p1 = json.loads(capsys.readouterr().out)
+    assert p1["total"] == 2
+    assert len(p1["matches"]) == 1
+
+    _run(scan_corpus, [MARKER, "--body-matches", "/(BETA|GAMMA)/",
+                       "--limit", "1", "--offset", "1"])
+    p2 = json.loads(capsys.readouterr().out)
+    assert p2["total"] == 2
+    assert len(p2["matches"]) == 1
+    # The two pages cover different chunks.
+    assert p1["matches"][0]["chunk_id"] != p2["matches"][0]["chunk_id"]
+
+
+def test_scan_body_matches_no_regex_match_is_zero(scan_corpus, capsys):
+    """A regex that matches no chunk body → total=0, diagnosis attached."""
+    _run(scan_corpus, [MARKER, "--body-matches", "/XYZZY_IMPOSSIBLE/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []
+    # Diagnosis fires on the zero path.
+    assert "diagnosis" in out
+
+
+def test_scan_body_matches_composes_with_scope(scan_corpus, capsys):
+    """--body-matches ANDs with --tag scope: scope first, then regex."""
+    # Only d2 carries the 'senate' tag, and its chunk contains GAMMA.
+    _run(scan_corpus, [MARKER, "--tag", "senate", "--body-matches", "/GAMMA/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert all(m["document_id"] == f"document:{scan_corpus['d2']}" for m in out["matches"])
+    assert out["filters"]["tags"] == ["senate"]
+    assert out["body_matches"] == "/GAMMA/"
+
+
+def test_scan_body_matches_composes_with_file_like(scan_corpus, capsys):
+    """--body-matches composes with --file-like."""
+    _run(scan_corpus, [MARKER, "--file-like", "filing_b%", "--body-matches", "/GAMMA/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 1
+    assert out["matches"][0]["file_name"] == "filing_b.txt"
+
+
+def test_scan_body_matches_composes_with_extract(scan_corpus, capsys):
+    """--body-matches as the locator, --extract as the projector."""
+    # Use body_matches to locate BETA/GAMMA chunks, extract the company name.
+    _run(scan_corpus, [MARKER, "--body-matches", "/(BETA|GAMMA)/",
+                       "--extract", r"/I will divest my interests in (?P<company>\S+)/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 2
+    companies = {r["company"] for r in out["rows"]}
+    assert "BETA" in companies
+    assert "GAMMA" in companies
+
+
+def test_scan_body_matches_invalid_regex_errors(scan_corpus, capsys):
+    """An invalid regex errors cleanly."""
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--body-matches", "/(/"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INVALID_FILTER_REGEX"
+
+
+def test_scan_body_matches_not_slash_delimited_errors(scan_corpus, capsys):
+    """A non-slash-delimited --body-matches value errors cleanly."""
+    with pytest.raises(SystemExit) as exc:
+        _run(scan_corpus, [MARKER, "--body-matches", "GAMMA"])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "INVALID_FILTER_REGEX"
+
+
+def test_scan_body_matches_echoed_in_envelope(scan_corpus, capsys):
+    """body_matches is echoed at envelope top-level, not inside filters."""
+    _run(scan_corpus, [MARKER, "--body-matches", "/GAMMA/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["body_matches"] == "/GAMMA/"
+    # filters is absent when no scope filter is active (only body_matches set).
+    assert "filters" not in out
+
+
+def test_scan_body_matches_no_fts_match_is_zero(scan_corpus, capsys):
+    """When FTS itself finds nothing, body_matches has nothing to filter — zero."""
+    _run(scan_corpus, ["phrase that appears nowhere", "--body-matches", "/GAMMA/"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["total"] == 0
+    assert out["matches"] == []

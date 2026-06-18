@@ -815,6 +815,39 @@ class CaptureSpec:
         }
 
 
+def _compile_slash_regex(value: str, *, flag: str, error_code: str) -> re.Pattern:
+    """Shared prologue: validate ``/regex/`` delimiters and compile.
+
+    Raises ``SkillError(error_code, ...)`` for a missing slash-delimiter or a
+    pattern that doesn't compile.  Both :func:`parse_filter_regex` and
+    :func:`parse_capture_regex` differ only in what they do *after* this step.
+    """
+    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
+        raise SkillError(
+            error_code,
+            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
+        )
+    try:
+        return re.compile(value[1:-1])
+    except re.error as exc:
+        raise SkillError(
+            error_code,
+            f"{flag} regex {value!r} does not compile: {exc}.",
+        )
+
+
+def parse_filter_regex(value: str, *, flag: str) -> re.Pattern:
+    """Parse a ``/regex/`` filter pattern into a compiled :class:`re.Pattern`.
+
+    The selector sibling of :func:`parse_capture_regex`: a ``/.../``-delimited
+    pattern with no capture-group requirement.  Used by ``scan --body-matches``
+    to post-filter FTS5 chunks by body text.  Raises (as the JSON error envelope):
+
+    - ``INVALID_FILTER_REGEX`` — not ``/.../``-delimited, or doesn't compile.
+    """
+    return _compile_slash_regex(value, flag=flag, error_code="INVALID_FILTER_REGEX")
+
+
 def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
     """Parse a ``/regex/`` capture pattern into a :class:`CaptureSpec`.
 
@@ -827,19 +860,7 @@ def parse_capture_regex(value: str, *, flag: str) -> CaptureSpec:
     - ``CAPTURE_NO_GROUP`` — compiles but carries no capture group (nothing to
       project into a column).
     """
-    if not (len(value) >= 2 and value.startswith("/") and value.endswith("/")):
-        raise SkillError(
-            "INVALID_CAPTURE_REGEX",
-            f"{flag} must be a /regex/ delimited by slashes; got {value!r}.",
-        )
-    pattern_src = value[1:-1]
-    try:
-        compiled = re.compile(pattern_src)
-    except re.error as exc:
-        raise SkillError(
-            "INVALID_CAPTURE_REGEX",
-            f"{flag} regex {value!r} does not compile: {exc}.",
-        )
+    compiled = _compile_slash_regex(value, flag=flag, error_code="INVALID_CAPTURE_REGEX")
     if compiled.groups < 1:
         raise SkillError(
             "CAPTURE_NO_GROUP",
