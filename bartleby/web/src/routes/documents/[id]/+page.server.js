@@ -4,7 +4,7 @@ import { getDocument, getDocumentFilePath } from '$lib/server/queries.js';
 import { parseIdParam } from '$lib/server/params.js';
 
 export function load({ params }) {
-  const documentId = parseIdParam(params.id);
+  const documentId = parseIdParam(params.id, 'document');
   const document = getDocument(documentId);
   if (!document) throw error(404, 'Not found');
 

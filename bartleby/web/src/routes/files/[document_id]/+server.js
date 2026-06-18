@@ -23,7 +23,7 @@ const MIME_BY_EXT = {
 };
 
 export function GET({ params }) {
-  const documentId = parseIdParam(params.document_id);
+  const documentId = parseIdParam(params.document_id, 'document');
 
   const filePath = getDocumentFilePath(documentId);
   if (!filePath || !fs.existsSync(filePath)) throw error(404, 'File missing');

@@ -1,5 +1,6 @@
 import { getDb } from './db.js';
 import { clampSnippet } from '$lib/format.js';
+import { bareId } from './ids.js';
 
 // A document's assigned tags as a JSON array, ordered by name. Correlates on the
 // outer `d.document_id`, so any SELECT using this must alias documents as `d`.
@@ -75,15 +76,21 @@ function resolveSources(items) {
          .map((it) => it.source_id)
   )];
 
-  // Run `buildSql(placeholders)` over `ids` and key the rows by `row.key`. For
-  // kinds with several rows per id (images), the first row wins — callers order
-  // the query so that's the intended pick.
-  const loadMap = (ids, buildSql) => {
+  // Run `buildSql(barePlaceholders)` over `origIds` and key the rows by the ORIGINAL
+  // (possibly-prefixed) id rather than the bare int the DB returns. This lets
+  // callers look up by `it.source_id` (prefixed from skill output) directly.
+  // For kinds with several rows per id (images), the first row wins — callers
+  // order the query so that's the intended pick.
+  const loadMap = (origIds, buildSql) => {
     const map = new Map();
-    if (ids.length === 0) return map;
-    const ph = ids.map(() => '?').join(',');
-    for (const row of db.prepare(buildSql(ph)).all(...ids)) {
-      if (!map.has(row.key)) map.set(row.key, row);
+    if (origIds.length === 0) return map;
+    // Build bare→original so we can re-key each DB row to the caller's key.
+    const bareToOrig = new Map(origIds.map((orig) => [bareId(orig), orig]));
+    const bares = [...bareToOrig.keys()];
+    const ph = bares.map(() => '?').join(',');
+    for (const row of db.prepare(buildSql(ph)).all(...bares)) {
+      const orig = bareToOrig.get(row.key) ?? row.key;
+      if (!map.has(orig)) map.set(orig, row);
     }
     return map;
   };
@@ -135,15 +142,26 @@ function resolveSource(kind, sourceId, pageNumber) {
 // enrich search/scan hits, which the skill returns with filenames/ids only —
 // the human-facing title/description live in `summaries` (by document_id) and
 // `findings` (by finding_id).
+// `ids` may be prefixed (`document:204`) or bare integers. The SQL binding uses
+// bare ints; the returned Map is keyed by the ORIGINAL id the caller passed in,
+// so callers doing `summaries.get(r.document_id)` hit correctly whether they
+// hold a prefixed or bare key.
 function titleMeta(db, table, keyCol, ids) {
-  const uniq = [...new Set(ids.filter((id) => id != null))];
+  const uniqOrig = [...new Set(ids.filter((id) => id != null))];
   const out = new Map();
-  if (uniq.length === 0) return out;
-  const ph = uniq.map(() => '?').join(',');
+  if (uniqOrig.length === 0) return out;
+
+  // Build a bare→original map so we can re-key each DB row back to what the
+  // caller holds (matching the pattern in tagsByDocument and resolveSources.loadMap).
+  const bareToOrig = new Map(uniqOrig.map((orig) => [bareId(orig), orig]));
+  const bareUniq = [...bareToOrig.keys()];
+
+  const ph = bareUniq.map(() => '?').join(',');
   for (const row of db.prepare(
     `SELECT ${keyCol}, title, description FROM ${table} WHERE ${keyCol} IN (${ph})`
-  ).all(...uniq)) {
-    out.set(row[keyCol], row);
+  ).all(...bareUniq)) {
+    const orig = bareToOrig.get(row[keyCol]) ?? row[keyCol];
+    out.set(orig, row);
   }
   return out;
 }
@@ -275,19 +293,26 @@ export function getChunk(chunkId) {
 // are simply absent from the map (callers default to []).
 export function tagsByDocument(documentIds) {
   const { db } = getDb();
-  const uniq = [...new Set(documentIds.filter((id) => id != null))];
+  const uniqOrig = [...new Set(documentIds.filter((id) => id != null))];
   const out = new Map();
-  if (uniq.length === 0) return out;
-  const ph = uniq.map(() => '?').join(',');
+  if (uniqOrig.length === 0) return out;
+
+  // Strip prefixes for the SQL binding; keep a bare→original map so we can key
+  // the returned Map by the original (possibly-prefixed) id — the caller looks
+  // up with `tagMap.get(d.id)` where d.id is still the prefixed skill value.
+  const bareToOrig = new Map(uniqOrig.map((orig) => [bareId(orig), orig]));
+  const bares = [...bareToOrig.keys()];
+  const ph = bares.map(() => '?').join(',');
   const rows = db.prepare(`
     SELECT dt.document_id, t.tag_id, t.name, t.description
     FROM document_tags dt JOIN tags t USING (tag_id)
     WHERE dt.document_id IN (${ph})
     ORDER BY t.name COLLATE NOCASE
-  `).all(...uniq);
+  `).all(...bares);
   for (const r of rows) {
-    if (!out.has(r.document_id)) out.set(r.document_id, []);
-    out.get(r.document_id).push({ tag_id: r.tag_id, name: r.name, description: r.description });
+    const orig = bareToOrig.get(r.document_id) ?? r.document_id;
+    if (!out.has(orig)) out.set(orig, []);
+    out.get(orig).push({ tag_id: r.tag_id, name: r.name, description: r.description });
   }
   return out;
 }
