@@ -218,6 +218,30 @@ Zero-result diagnosis:
     real matches — where ``total`` is still > 0 — carries no diagnosis: there
     are matches, just not on this page.
 
+``--body-matches '/regex/'`` adds a **regex filter** that selects only chunks
+whose body text matches the given ``/pattern/`` (Python ``re.search``). It
+acts as the locator: the FTS query narrows to the token-matching chunks, then
+``--body-matches`` post-filters to those where the regex holds. Use it when
+the target is literal punctuation (``5376``, ``$``, ``H.R. 815``) that FTS5's
+tokenizer treats as a boundary and cannot phrase-match. Pairs naturally with
+``--extract`` — filter to locate, extract to project. The regex must be
+``/.../'``-delimited but carries **no capture group** (it is a selector, not a
+projector — use ``--extract`` for captures). Composes with all scope flags.
+Performance: O(n) over FTS5 matches (not all chunks); acceptable for a filter
+primitive, but avoid very broad regexes on very large match sets.
+
+Output shape with ``--body-matches``:
+
+    {
+      "query": str,
+      "match_mode": "phrase" | "terms",
+      "body_matches": "/regex/",    # the pattern as passed
+      "offset": int, "limit": int, "total": int,
+      "preview": int,
+      "filters": {...},             # same as without; body_matches echoed above
+      ...
+    }
+
 Scope (both modes): ``--in-documents`` and ``--tag`` (repeatable, OR
 semantics) scope the match the same way they do in ``search``; combined they
 intersect. ``--file-like <pattern>`` (SQL ``LIKE``, repeatable for OR) keeps
@@ -245,7 +269,7 @@ from collections import Counter
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
-    apply_preview, nonneg_int, parse_capture_regex,
+    apply_preview, nonneg_int, parse_capture_regex, parse_filter_regex,
     positive_int, project_row, text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int_list
@@ -309,6 +333,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "pattern (%% = any run, _ = one char), e.g. '2023 Q%%'. Repeat for "
             "OR; the group ANDs with --tag / --in-documents / --file-like / "
             "date bounds. Chunks with no heading never match."
+        ),
+    )
+    p.add_argument(
+        "--body-matches",
+        default=None,
+        dest="body_matches",
+        metavar="/regex/",
+        help=(
+            "Post-filter: keep only chunks whose body text matches this regex "
+            "(/pattern/ delimited by slashes, Python re.search). Acts as the "
+            "locator when FTS phrase-matching is blocked by punctuation — e.g. "
+            "'--body-matches /5376/' or '--body-matches /H\\.R\\.\\s*815/'. "
+            "No capture group required (use --extract for captures). Composes "
+            "with all scope flags. Performance: O(n) over FTS5 matches, not all "
+            "chunks; acceptable for a filter primitive."
         ),
     )
     p.add_argument(
@@ -664,6 +703,9 @@ def work(*, conn, args, session_id) -> dict:
         raise SkillError("EMPTY_QUERY", "Query must be non-empty.")
 
     match_mode = "terms" if args.match_terms else "phrase"
+    body_filter = None
+    if args.body_matches is not None:
+        body_filter = parse_filter_regex(args.body_matches, flag="--body-matches")
     count_mode, count_regex = (None, None)
     if args.count_by is not None:
         count_mode, count_regex = _parse_count_by(args.count_by)
@@ -690,7 +732,10 @@ def work(*, conn, args, session_id) -> dict:
     restrict_sql, restrict_params = scope.restrict_in("c.source_id")
 
     def _envelope(extra: dict) -> dict:
-        env = scope.echo_into({"query": args.query, "match_mode": match_mode, **extra})
+        base = {"query": args.query, "match_mode": match_mode}
+        if body_filter is not None:
+            base["body_matches"] = args.body_matches
+        env = scope.echo_into({**base, **extra})
         if args.heading_like:
             # --heading-like is a chunk-level filter, so it lives outside Scope's
             # document-level echo; fold it into the same filters object (creating
@@ -743,23 +788,20 @@ def work(*, conn, args, session_id) -> dict:
                 "offset": args.offset, "limit": args.limit, "total": 0,
                 "columns": extract_columns, "rows": [],
             }))
-        total = _count_total(cur, where, params)
+        # Walk all FTS5 matches in memory (needed for the deadline guard anyway)
+        # and filter by body_filter when active; the list gives an honest total.
+        all_extract_rows = [
+            (chunk_id, source_id, file_name, text)
+            for chunk_id, source_id, file_name, text in _scan_chunk_texts(
+                cur, where, params, "--extract regex"
+            )
+            if body_filter is None or body_filter.search(text)
+        ]
+        total = len(all_extract_rows)
+        page = all_extract_rows[args.offset : args.offset + args.limit]
         rows_out = []
-        page_end = args.offset + args.limit
-        for i, (chunk_id, source_id, file_name, text) in enumerate(
-            _scan_chunk_texts(cur, where, params, "--extract regex")
-        ):
-            # Page in Python over the deterministic scan order — the spec walk is
-            # already a full read for the deadline; slicing here keeps one path.
-            if i < args.offset:
-                continue
-            if i >= page_end:
-                break
-            row = {
-                "chunk_id": chunk_id,
-                "document_id": source_id,
-                "file_name": file_name,
-            }
+        for chunk_id, source_id, file_name, text in page:
+            row = {"chunk_id": chunk_id, "document_id": source_id, "file_name": file_name}
             for spec in extract_specs:
                 row.update(spec.extract_first(text))
             rows_out.append(row)
@@ -843,34 +885,61 @@ def work(*, conn, args, session_id) -> dict:
     # Default mode: paginated per-chunk matches.
     validate_returning(args.returning, MATCH_FIELDS)
     preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
-    total = 0 if no_match else _count_total(cur, where, params)
+
+    if body_filter is not None and not no_match:
+        # --body-matches is a Python post-filter over FTS5 matches: we walk all
+        # FTS5-matching chunks in sort order, filter by regex, and page manually.
+        # This gives an honest total (the pre-pagination count of regex-matching
+        # chunks) without a second SQL pass. O(n) over FTS5 matches, not all
+        # chunks — FTS5 pre-narrows the set before the regex fires.
+        all_rows = list(cur.execute(
+            f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
+            f"       c.page_number, c.content_type, c.text, d.file_name, "
+            f"       s.authored_date "
+            f"FROM chunks_fts "
+            f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+            f"JOIN documents d ON d.document_id = c.source_id "
+            f"LEFT JOIN summaries s ON s.document_id = c.source_id "
+            f"WHERE {where} "
+            f"ORDER BY {_CHUNK_ORDER_BY[args.sort]}",
+            params,
+        ))
+        filtered = [row for row in all_rows if body_filter.search(row[6])]
+        total = len(filtered)
+        page_rows = filtered[args.offset : args.offset + args.limit]
+    else:
+        total = 0 if no_match else _count_total(cur, where, params)
+        page_rows = None  # signal to use SQL-paginated fetch below
+
     if total == 0:
         return _with_diagnosis(_envelope({
             "offset": args.offset, "limit": args.limit, "total": 0,
             "preview": preview, "matches": [],
         }))
 
-    # authored_date rides the summaries LEFT JOIN that --sort date already needs —
-    # the canonical summarizer-inferred date that list_documents and the date
-    # filters use — so it costs no extra query and is NULL for undated docs (no
-    # summary, or a summary with no inferred date).
-    rows = cur.execute(
-        f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
-        f"       c.page_number, c.content_type, c.text, d.file_name, "
-        f"       s.authored_date "
-        f"FROM chunks_fts "
-        f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
-        f"JOIN documents d ON d.document_id = c.source_id "
-        f"LEFT JOIN summaries s ON s.document_id = c.source_id "
-        f"WHERE {where} "
-        f"ORDER BY {_CHUNK_ORDER_BY[args.sort]} "
-        f"LIMIT ? OFFSET ?",
-        [*params, args.limit, args.offset],
-    )
+    if page_rows is None:
+        # Standard SQL-paginated fetch (no --body-matches active).
+        # authored_date rides the summaries LEFT JOIN that --sort date already needs —
+        # the canonical summarizer-inferred date that list_documents and the date
+        # filters use — so it costs no extra query and is NULL for undated docs (no
+        # summary, or a summary with no inferred date).
+        page_rows = list(cur.execute(
+            f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
+            f"       c.page_number, c.content_type, c.text, d.file_name, "
+            f"       s.authored_date "
+            f"FROM chunks_fts "
+            f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+            f"JOIN documents d ON d.document_id = c.source_id "
+            f"LEFT JOIN summaries s ON s.document_id = c.source_id "
+            f"WHERE {where} "
+            f"ORDER BY {_CHUNK_ORDER_BY[args.sort]} "
+            f"LIMIT ? OFFSET ?",
+            [*params, args.limit, args.offset],
+        ))
 
     matches = []
     for (chunk_id, source_id, chunk_index, section_heading,
-         page_number, content_type, text, file_name, authored_date) in rows:
+         page_number, content_type, text, file_name, authored_date) in page_rows:
         # The full whitelisted row, built once. --returning projects from it;
         # otherwise --brief / default shape it (and only then is text truncated).
         full = {
