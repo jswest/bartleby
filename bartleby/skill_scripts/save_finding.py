@@ -12,8 +12,9 @@ exclusive, both required to pick one); same for ``--description`` /
 Citations are derived from the body itself: every ``[^chunk:N]`` marker in the
 prose is a citation, where ``N`` is a chunk_id you were handed this session. The
 body is the single source of truth — there is no separate ``--citations``
-argument. Untyped (``[N]`` / ``[^N]``) and wrong-type (``[^document:N]`` /
-``[^finding:N]``) markers are rejected.
+argument. Untyped (``[N]`` / ``[^N]``) and wrong-type (``[^document:N]``) markers
+are rejected. ``[^finding:N]`` markers are valid finding-to-finding links (#654)
+and are accepted provided the referenced finding exists.
 
 Output (every id is type-tagged, e.g. ``"chunk:15837"``, ``"finding:204"``):
     {

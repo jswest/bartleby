@@ -12,7 +12,8 @@ At least one of ``--title``/``--title-file``, ``--description``/
 expansion — prefer them when the value may contain ``$``, backticks, or parens.
 When ``--body-file`` is provided, the new body must contain at least one
 ``[^chunk:N]`` citation marker and every marker must reference a real chunk_id —
-same rules as ``save_finding``.
+same rules as ``save_finding``. ``[^finding:N]`` finding-link markers are also
+accepted provided the referenced finding exists.
 
 Output mirrors ``save_finding`` (every id type-tagged; the echo-the-body
 contract still works after an edit):

@@ -20,12 +20,11 @@ import argparse
 # The fixed field-name → entity-type map for output formatting. ``source_id`` is
 # deliberately absent — its real type depends on the row's ``source_kind``, so it
 # is prefixed by kind explicitly at its emission sites, never through this map.
-# ``dangling_citations`` are chunk ids (the ``[^chunk:N]`` markers a finding
-# carries whose citation no longer resolves).
 _OUTPUT_FIELD_TYPES = {
     "chunk_id": "chunk",
     "chunk_ids": "chunk",
-    "dangling_citations": "chunk",
+    "dangling_citations": "chunk",       # [^chunk:N] markers whose citation no longer resolves
+    "dangling_finding_links": "finding", # [^finding:N] markers whose target no longer exists (#654)
     "document_id": "document",
     # The ``filters`` scope echo (search/scan/list_documents/describe_corpus)
     # carries the as-requested document ids under ``in_documents``.
