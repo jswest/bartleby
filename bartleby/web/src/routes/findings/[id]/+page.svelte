@@ -19,21 +19,21 @@
 
   // ===== R4 ledger treatment (#593) =================================
   // Citations leave the prose and move into a right-hand gutter as margin
-  // notes. Each marker in the body becomes an inline DAGGER anchor (†/‡ +
-  // ordinal); the matching note carries the same dagger+ordinal in the gutter.
+  // notes. Each marker in the body becomes an inline glyph anchor (¶/§/†/‡ +
+  // ordinal); the matching note carries the same glyph+ordinal in the gutter.
   // The ordinal is the tie-back — daggers repeat, the number disambiguates.
   //
   // One type-tagged marker grammar (issue #624): [^<scheme>:<ref>].
   //   [^chunk:N]         corpus-chunk citation. Resolves against byId →
-  //                        resolved  → † "source" note (amber, filename, jumps)
+  //                        resolved  → ¶ "source" note (amber, filename, jumps)
   //                        unresolved → ‡ "no longer available" note (danger)
-  //   [^finding:N]       finding-to-finding link (#654) → ¶ note with a link
+  //   [^finding:N]       finding-to-finding link (#654) → § note with a link
   //                        to /findings/N. No DB row — validated at save time,
   //                        rendered from body text on read.
-  //   [^url:…]/[^doc:…]   external citation → § "source" note (link / ref)
-  // Glyphs follow the traditional footnote sequence * † ‡ § ¶: † is a corpus
-  // chunk, ‡ a chunk whose source is gone, § an external url/doc, ¶ a finding
-  // link — the glyph alone tells the kind apart; the ordinal stays the tie-back.
+  //   [^url:…]/[^doc:…]   external citation → † "source" note (link / ref)
+  // Glyph mapping (supersedes GH-0654): ¶ corpus chunk (resolved), ‡ chunk
+  // gone, § finding-to-finding link, † external url/doc — the glyph alone
+  // tells the kind apart; the ordinal stays the tie-back.
   // Mirrors the backend grammar in skill_scripts/_common.py: `chunk` and
   // `finding` are internal schemes; `url`/`doc` are external; any other scheme
   // (incl. `document`) is dropped, not rendered as a citation.
@@ -117,7 +117,7 @@
     ].filter(Boolean).join(" · ");
     return {
       n,
-      dagger: "†",
+      dagger: "¶",
       gone: false,
       chunkId: c.chunk_id,
       active: isActive,
@@ -146,7 +146,7 @@
   function findingNote(n, findingId) {
     return {
       n,
-      dagger: "¶",
+      dagger: "§",
       gone: false,
       finding: true,
       findingId,
@@ -161,10 +161,10 @@
   // scheme a muted ref. Unknown schemes return null (dropped upstream).
   function externalNote(n, scheme, ref) {
     if (scheme === "url") {
-      return { n, dagger: "§", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
+      return { n, dagger: "†", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
     }
     if (scheme === "doc") {
-      return { n, dagger: "§", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
+      return { n, dagger: "†", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
     }
     return null;
   }
