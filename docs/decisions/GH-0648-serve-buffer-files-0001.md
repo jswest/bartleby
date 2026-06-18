@@ -12,8 +12,9 @@ to `.close()` an already-closed stream, throwing unhandled → process exit.
 ## Decision
 
 Replace `fs.statSync` + `fs.createReadStream` with a single `fs.readFileSync` into
-a `Buffer`, and drop the manual `Content-Length` header (the `Response` constructor
-derives it from the buffer automatically). All other logic is unchanged: MIME
+a `Buffer`, and drop the manual `Content-Length` header (SvelteKit drains the
+buffered body as a chunked response, so no Content-Length is sent — correct for
+browsers and the iframe). All other logic is unchanged: MIME
 lookup, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, and the
 `Content-Security-Policy: sandbox` branch for HTML files.
 

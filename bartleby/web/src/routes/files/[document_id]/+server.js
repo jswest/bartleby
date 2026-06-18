@@ -31,12 +31,12 @@ export function GET({ params }) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_BY_EXT[ext] ?? 'application/octet-stream';
 
-  // Buffer the file rather than streaming it. A streamed Response throws an
-  // unhandled ERR_INVALID_STATE (ReadableStream already closed) when a client
-  // aborts mid-flight — iframe reloads, early-closing probes — which takes down
-  // the entire Vite dev server. These are small local evidence docs, so reading
-  // into memory is simpler and bulletproof. Response derives Content-Length from
-  // the buffer automatically.
+  // Buffer rather than stream: a streamed Response throws an unhandled
+  // ERR_INVALID_STATE (ReadableStream already closed) when a client aborts
+  // mid-flight — iframe reloads, early-closing probes — crashing the whole Vite
+  // dev server. These are small local evidence docs, so buffering is simpler and
+  // bulletproof. The manual Content-Length is dropped; SvelteKit drains the
+  // buffer as a chunked response, which browsers and the iframe handle fine.
   const data = fs.readFileSync(filePath);
   const headers = {
     'Content-Type': contentType,
