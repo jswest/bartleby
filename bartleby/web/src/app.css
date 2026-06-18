@@ -669,12 +669,16 @@ input[type="number"] {
         danger-toned "no longer available".
 
    Citation markup (stable for R3/#592 to splice a pixel icon into):
-     inline   <sup class="cite-ref cite-ref--source|--gone" data-note="N">†N</sup>
-     gutter   <div class="margin-note margin-note--source|--gone" data-note="N">
+     Modifier classes: cite-ref--{source,gone,finding}
+                       margin-note--{source,gone,finding}
+     inline   <sup class="cite-ref cite-ref--{kind}" data-note="N">†N</sup>
+     gutter   <div class="margin-note margin-note--{kind}" data-note="N">
                 <p class="margin-note__head"><span class="margin-note__dagger">†N</span> source</p>
                 <… class="margin-note__body">label</…>
               </div>
    The dagger glyph + ordinal is the tie-back; data-note pairs them for JS.
+   Glyph legend: † corpus chunk (resolved), ‡ chunk gone, § external url/doc,
+   ¶ finding-to-finding link (#654).
    ========================================================================= */
 
 /* The ledger needs room for prose + gutter, so widen its report column and
@@ -846,6 +850,10 @@ input[type="number"] {
   color: var(--color-danger-text);
   font-style: italic;
 }
+/* Finding link = accent tone (distinct from corpus-chunk amber). */
+.margin-note--finding .margin-note__head {
+  color: var(--color-accent-text, var(--color-token-text));
+}
 
 /* --- Inline dagger anchors in the prose --- */
 .cite-ref {
@@ -861,6 +869,9 @@ input[type="number"] {
 }
 .cite-ref--gone {
   color: var(--color-danger-text);
+}
+.cite-ref--finding {
+  color: var(--color-accent-text, var(--color-token-text));
 }
 .cite-ref:hover {
   text-decoration: underline;

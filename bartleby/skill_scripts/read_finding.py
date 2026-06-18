@@ -21,6 +21,10 @@ claim was once cited is itself signal. The cited source can't be recovered
 here (only the id survives), so phrase it as "cited source no longer
 available," never "deleted."
 
+``dangling_finding_links`` are finding ids appearing in ``[^finding:N]`` markers
+in the body that no longer resolve — the referenced finding has been deleted. The
+marker is left verbatim (same provenance rationale as dangling chunk citations).
+
 Output (every id is type-tagged, e.g. ``"chunk:15837"``, ``"finding:204"``):
     {
       "finding_id": "finding:<id>",
@@ -37,7 +41,8 @@ Output (every id is type-tagged, e.g. ``"chunk:15837"``, ``"finding:204"``):
         "page_number": int|null,
       }, ...],
       "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
-      "dangling_citations": ["chunk:<id>", ...]   # [^chunk:N] markers with no resolved citation
+      "dangling_citations": ["chunk:<id>", ...],    # [^chunk:N] markers with no resolved citation
+      "dangling_finding_links": ["finding:<id>", ...] # [^finding:N] markers whose target is gone
     }
 
 ``external_citations`` are the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in the
@@ -62,6 +67,7 @@ from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     extract_citations,
     extract_external_citations,
+    extract_finding_citations,
     finding_chunk_and_citation_ids,
     resolve_citations,
     session_provenance,
@@ -99,12 +105,26 @@ def work(*, conn, args, session_id) -> dict:
     chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, args.finding_id)
 
     citations = resolve_citations(conn, citation_ids)
-    # A [^N] marker dangles when its chunk id is absent from the *resolved*
+    # A [^chunk:N] marker dangles when its chunk id is absent from the *resolved*
     # citations — resolve_citations drops chunks that vanished, so the resolved
     # set is the right thing to diff against. Derived at read time; covers
     # markers orphaned by any cause (delete, edit/merge rebuild, legacy data).
     resolved_ids = {c["chunk_id"] for c in citations}
     dangling = [cid for cid in extract_citations(body) if cid not in resolved_ids]
+
+    # A [^finding:N] marker dangles when the referenced finding no longer exists.
+    # Computed at read time from the body — no DB row backs these links (#654).
+    linked_ids = extract_finding_citations(body)
+    dangling_finding_links: list[int] = []
+    if linked_ids:
+        fph = ",".join("?" * len(linked_ids))
+        alive = {
+            row[0] for row in cur.execute(
+                f"SELECT finding_id FROM findings WHERE finding_id IN ({fph})",
+                linked_ids,
+            )
+        }
+        dangling_finding_links = [fid for fid in linked_ids if fid not in alive]
 
     return format_output_ids({
         "finding_id": args.finding_id,
@@ -118,6 +138,7 @@ def work(*, conn, args, session_id) -> dict:
         "citations": citations,
         "external_citations": extract_external_citations(body),
         "dangling_citations": dangling,
+        "dangling_finding_links": dangling_finding_links,
     })
 
 
