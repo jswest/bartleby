@@ -11,8 +11,10 @@ path. The reason is that they diverge in what they return:
   Export only needs resolved citations; it never needs dangling ids or external
   citations (both pass through to the artifact verbatim as-is).
 - `_read_finding_for_display` — adds `session_name / model / created_at` (the
-  metadata subtitle), `dangling` chunk ids, and `external` citation list.  `read`
-  needs all of these to build the footnote block.
+  metadata subtitle) and `dangling` chunk ids, which `read` needs for the subtitle
+  and to mark removed sources `‡`.  External `[^url:…]`/`[^doc:…]` citations are
+  *not* carried in this dict — the single-pass renderer derives them directly from
+  the body as it scans.
 
 Merging them into one function with flags would add a return-value conditional on
 every caller just to carry optional fields; separate helpers are cheaper and honest
