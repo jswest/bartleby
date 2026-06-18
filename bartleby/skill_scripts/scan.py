@@ -148,6 +148,38 @@ Count-by capture (``--count-by '/regex/'``):
       ]
     }
 
+Count-by field (``--count-by 'file_name:/regex/'``):
+    Histogram the corpus by a document-level field instead of chunk body text.
+    Pass ``file_name:/regex/`` to apply the capture regex to every document's
+    ``file_name`` column — useful on corpora with structured filenames
+    (member prefixes, date stamps, doc-type codes) where a "docs per prefix"
+    tally is the answer:
+
+        scan "bill" --count-by 'file_name:/^([A-Za-z]+)_/'
+        → buckets: [{"value": "smith", "count": 14}, ...]
+
+    Counting is **per document** (first capture only) — a filename that matches
+    the regex twice still counts once. Buckets sort by count desc then value asc,
+    paginated by ``--limit``/``--offset``; ``--sort`` has no effect. Cannot
+    combine with ``--preview``/``--brief``. Only ``file_name`` is supported as
+    a field name; other fields raise ``INVALID_COUNT_BY_FIELD``.
+
+    Output differs from the body-text bucket envelope to avoid ambiguity:
+
+    {
+      "query": str, "match_mode": "phrase" | "terms",
+      "count_by_field": "file_name",    # the field name
+      "count_by_regex": "/regex/",      # the capture pattern
+      "offset": int, "limit": int,
+      "distinct_value_count": int,
+      "total_match_count": int,
+      "truncated": bool,
+      "buckets": [
+        {"value": str, "count": int}, ...
+      ]
+    }
+
+
 Extract capture table (``--extract '/regex/'``, repeatable):
     The tidy-table sibling of ``--count-by '/regex/'``: instead of folding
     captures into a histogram, return **one row per matching chunk** carrying
@@ -269,7 +301,7 @@ from collections import Counter
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
     CaptureSpec, add_date_filter_args, add_file_like_arg, add_returning_arg,
-    apply_preview, nonneg_int, parse_capture_regex, parse_filter_regex,
+    apply_preview, nonneg_int, parse_capture_regex, parse_field_capture, parse_filter_regex,
     positive_int, project_row, text_qualified_fts, validate_returning,
 )
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int_list
@@ -352,12 +384,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--count-by",
         default=None,
         dest="count_by",
-        metavar="document|/regex/",
+        metavar="document|/regex/|field_name:/regex/",
         help="Aggregate mode. 'document' returns a per-document hit histogram "
              "(distinct_document_count + total_chunk_count). A /regex/ with a "
              "capture group instead buckets matches by the captured substring "
-             "(distinct_value_count + total_match_count). Cannot be combined "
-             "with --preview/--brief.",
+             "(distinct_value_count + total_match_count). 'file_name:/regex/' "
+             "applies the capture regex to the document's file_name column "
+             "(per-document: first capture per doc, no double-counting). "
+             "Cannot be combined with --preview/--brief.",
     )
     p.add_argument(
         "--extract",
@@ -453,24 +487,35 @@ def _build_fts_query(query: str, match_mode: str) -> str:
     return " ".join(pieces)
 
 
-def _parse_count_by(value: str) -> tuple[str, CaptureSpec | None]:
+def _parse_count_by(
+    value: str,
+) -> tuple[str, CaptureSpec | None, str | None]:
     """Classify a --count-by value.
 
-    Returns ('document', None) for the literal keyword, or ('regex', spec) for a
-    /pattern/ that carries at least one capture group — parsed through the shared
-    capture machinery (:func:`parse_capture_regex`), so --count-by '/regex/' is
-    extract-then-group-and-count over the *same* primitive --extract uses. A
-    capture spec may carry several groups; --count-by buckets on the first one.
-    Raises SkillError on a malformed value, an uncompilable pattern, or a
+    Returns a ``(mode, spec, field)`` triple:
+
+    - ``('document', None, None)`` for the literal keyword.
+    - ``('regex', spec, None)`` for a ``/pattern/`` — extract-then-group-and-count
+      over chunk body text; same primitive ``--extract`` uses.
+    - ``('field', spec, 'file_name')`` for a ``file_name:/pattern/`` — apply the
+      capture regex to the document's ``file_name`` column (per-document, first
+      capture only, no double-counting).
+
+    Raises ``SkillError`` on a malformed value, an uncompilable pattern, or a
     capture-less regex.
     """
     if value == "document":
-        return "document", None
+        return "document", None, None
+    field_result = parse_field_capture(value, flag="--count-by")
+    if field_result is not None:
+        field_name, spec = field_result
+        return "field", spec, field_name
     if value.startswith("/"):
-        return "regex", parse_capture_regex(value, flag="--count-by")
+        return "regex", parse_capture_regex(value, flag="--count-by"), None
     raise SkillError(
         "INVALID_COUNT_BY",
-        f"--count-by must be 'document' or a /regex/ with a capture group; "
+        f"--count-by must be 'document', a /regex/ with a capture group, or "
+        f"'file_name:/regex/' to histogram by document field; "
         f"got {value!r}.",
     )
 
@@ -565,6 +610,38 @@ def _count_by_regex(cur, where: str, params: list, spec: CaptureSpec) -> tuple[C
             total += 1
             if total >= CAPTURE_MAX_MATCHES:
                 return counter, True  # match cap hit → partial counts
+    return counter, False
+
+
+def _count_by_field(cur, spec: CaptureSpec) -> tuple[Counter, bool]:
+    """Tally spec's first capture group across all documents' file_name values.
+
+    Per-document counting: take only the FIRST match per document to avoid
+    double-counting when a filename matches the regex more than once. Returns the
+    histogram and whether the match cap truncated it.
+
+    Each project is its own SQLite DB, so querying all documents gives the full
+    project corpus — no project_id needed. The FTS scope filters (in_documents /
+    tag / file_like / date bounds) are intentionally **not** applied here — this
+    mode histograms the filename space of the whole project, not chunk hits.
+    The FTS query is required by ``scan``'s interface but the filename histogram
+    is query-independent.
+    """
+    counter: Counter = Counter()
+    total = 0
+    for (file_name,) in cur.execute("SELECT file_name FROM documents"):
+        if file_name is None:
+            continue
+        match = spec.pattern.search(file_name)
+        if match is None:
+            continue
+        value = match.group(1)
+        if value is None:
+            continue
+        counter[value] += 1
+        total += 1
+        if total >= CAPTURE_MAX_MATCHES:
+            return counter, True
     return counter, False
 
 
@@ -704,9 +781,9 @@ def work(*, conn, args, session_id) -> dict:
     body_filter = None
     if args.body_matches is not None:
         body_filter = parse_filter_regex(args.body_matches, flag="--body-matches")
-    count_mode, count_regex = (None, None)
+    count_mode, count_regex, count_field = (None, None, None)
     if args.count_by is not None:
-        count_mode, count_regex = _parse_count_by(args.count_by)
+        count_mode, count_regex, count_field = _parse_count_by(args.count_by)
     extract_specs = None
     if args.extract is not None:
         extract_specs = [
@@ -808,6 +885,31 @@ def work(*, conn, args, session_id) -> dict:
             "columns": extract_columns, "rows": rows_out,
         })
         return _with_diagnosis(env) if total == 0 else env
+
+    if count_mode == "field":
+        if args.returning is not None:
+            raise SkillError(
+                "RETURNING_NOT_APPLICABLE",
+                "--returning has no effect on --count-by 'field_name:/regex/' "
+                "output: filename buckets carry no citable id to project.",
+            )
+        # Deliberately corpus-wide: the field histogram answers "what's in the
+        # corpus", so it does NOT take the FTS `where`/`params` the other count
+        # modes do — scoping it would silently produce a partial histogram.
+        counter, truncated = _count_by_field(cur, count_regex)
+        ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        page = ordered[args.offset : args.offset + args.limit]
+        env = _envelope({
+            "count_by_field": count_field,
+            "count_by_regex": count_regex.raw,
+            "offset": args.offset,
+            "limit": args.limit,
+            "distinct_value_count": len(counter),
+            "total_match_count": sum(counter.values()),
+            "truncated": truncated,
+            "buckets": [{"value": value, "count": count} for value, count in page],
+        })
+        return env
 
     if count_mode == "regex":
         if args.returning is not None:
