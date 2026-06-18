@@ -60,7 +60,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     new.add_argument(
         "--no-memory", action="store_true", dest="no_memory",
-        help="Start the run with memory off (blind eval isolation).",
+        help=(
+            "Start the run with memory off (blind eval isolation). "
+            "Note: this also hides findings saved earlier in THIS session — "
+            "a just-saved finding will not appear in search until memory is enabled."
+        ),
     )
     return p.parse_args(argv)
 
