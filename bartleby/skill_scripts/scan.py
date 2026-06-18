@@ -238,7 +238,7 @@ Output shape with ``--body-matches``:
       "body_matches": "/regex/",    # the pattern as passed
       "offset": int, "limit": int, "total": int,
       "preview": int,
-      "filters": {...},             # same as without; body_matches echoed above
+      "filters": {...},             # scope filters only; body_matches is top-level
       ...
     }
 
@@ -341,13 +341,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         dest="body_matches",
         metavar="/regex/",
         help=(
-            "Post-filter: keep only chunks whose body text matches this regex "
-            "(/pattern/ delimited by slashes, Python re.search). Acts as the "
-            "locator when FTS phrase-matching is blocked by punctuation — e.g. "
-            "'--body-matches /5376/' or '--body-matches /H\\.R\\.\\s*815/'. "
-            "No capture group required (use --extract for captures). Composes "
-            "with all scope flags. Performance: O(n) over FTS5 matches, not all "
-            "chunks; acceptable for a filter primitive."
+            "Post-filter: keep only chunks whose body text matches this /regex/ "
+            "(slash-delimited, Python re.search). Acts as the locator when FTS "
+            "phrase-matching is blocked by punctuation — e.g. '--body-matches "
+            "/5376/' or '--body-matches /H\\.R\\.\\s*815/'. No capture group "
+            "required (use --extract for captures). Composes with all scope flags."
         ),
     )
     p.add_argument(
@@ -886,56 +884,41 @@ def work(*, conn, args, session_id) -> dict:
     validate_returning(args.returning, MATCH_FIELDS)
     preview = args.preview if args.preview is not None else DEFAULT_PREVIEW
 
+    # The page query is shared; --body-matches only changes how we paginate it.
+    # authored_date rides the summaries LEFT JOIN that --sort date already needs —
+    # the canonical summarizer-inferred date that list_documents and the date
+    # filters use — so it costs no extra query and is NULL for undated docs.
+    base_sql = (
+        f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
+        f"       c.page_number, c.content_type, c.text, d.file_name, "
+        f"       s.authored_date "
+        f"FROM chunks_fts "
+        f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
+        f"JOIN documents d ON d.document_id = c.source_id "
+        f"LEFT JOIN summaries s ON s.document_id = c.source_id "
+        f"WHERE {where} "
+        f"ORDER BY {_CHUNK_ORDER_BY[args.sort]}"
+    )
+
     if body_filter is not None and not no_match:
-        # --body-matches is a Python post-filter over FTS5 matches: we walk all
-        # FTS5-matching chunks in sort order, filter by regex, and page manually.
-        # This gives an honest total (the pre-pagination count of regex-matching
-        # chunks) without a second SQL pass. O(n) over FTS5 matches, not all
-        # chunks — FTS5 pre-narrows the set before the regex fires.
-        all_rows = list(cur.execute(
-            f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
-            f"       c.page_number, c.content_type, c.text, d.file_name, "
-            f"       s.authored_date "
-            f"FROM chunks_fts "
-            f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
-            f"JOIN documents d ON d.document_id = c.source_id "
-            f"LEFT JOIN summaries s ON s.document_id = c.source_id "
-            f"WHERE {where} "
-            f"ORDER BY {_CHUNK_ORDER_BY[args.sort]}",
-            params,
-        ))
-        filtered = [row for row in all_rows if body_filter.search(row[6])]
+        # --body-matches is a Python post-filter over FTS5 matches: walk every
+        # FTS5-matching chunk in sort order, filter by regex, page manually. This
+        # gives an honest total (the pre-pagination count of regex-matching chunks)
+        # with no second SQL pass. O(n) over FTS5 matches — FTS5 narrows first.
+        filtered = [r for r in cur.execute(base_sql, params) if body_filter.search(r[6])]
         total = len(filtered)
         page_rows = filtered[args.offset : args.offset + args.limit]
     else:
         total = 0 if no_match else _count_total(cur, where, params)
-        page_rows = None  # signal to use SQL-paginated fetch below
+        page_rows = [] if total == 0 else list(cur.execute(
+            base_sql + " LIMIT ? OFFSET ?", [*params, args.limit, args.offset]
+        ))
 
     if total == 0:
         return _with_diagnosis(_envelope({
             "offset": args.offset, "limit": args.limit, "total": 0,
             "preview": preview, "matches": [],
         }))
-
-    if page_rows is None:
-        # Standard SQL-paginated fetch (no --body-matches active).
-        # authored_date rides the summaries LEFT JOIN that --sort date already needs —
-        # the canonical summarizer-inferred date that list_documents and the date
-        # filters use — so it costs no extra query and is NULL for undated docs (no
-        # summary, or a summary with no inferred date).
-        page_rows = list(cur.execute(
-            f"SELECT c.chunk_id, c.source_id, c.chunk_index, c.section_heading, "
-            f"       c.page_number, c.content_type, c.text, d.file_name, "
-            f"       s.authored_date "
-            f"FROM chunks_fts "
-            f"JOIN chunks c ON c.chunk_id = chunks_fts.rowid "
-            f"JOIN documents d ON d.document_id = c.source_id "
-            f"LEFT JOIN summaries s ON s.document_id = c.source_id "
-            f"WHERE {where} "
-            f"ORDER BY {_CHUNK_ORDER_BY[args.sort]} "
-            f"LIMIT ? OFFSET ?",
-            [*params, args.limit, args.offset],
-        ))
 
     matches = []
     for (chunk_id, source_id, chunk_index, section_heading,
