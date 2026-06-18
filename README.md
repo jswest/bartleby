@@ -240,9 +240,12 @@ Spins up a local SvelteKit UI for the active project — a corpus overview, docu
 ### 6. Share a single finding out of band
 
 ```
+bartleby finding read <finding-id>              # render to stdout as Markdown (--json, --render)
 bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 ```
+
+`finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with its citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs) — so you can pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print it in place; `--json` emits the raw finding instead. Unlike `export`, it resolves against the live corpus rather than baking inert markers, so it's for reading here, not sharing elsewhere.
 
 `finding export` writes a self-describing Markdown artifact: a YAML front-matter block (title, description, and baked-in provenance — the source corpus, the original finding id, and the export date) followed by the body. The body's corpus citations are rewritten inline as inert `[corpus: <file> · p.<N>]` markers so the artifact stands alone on a machine that doesn't have the corpus. `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line to the body (there's no author/origin column, so origin lives in the text). Imported corpus citations stay inert markers — they are *not* re-resolved to local chunk ids — and the finding then renders like any other local finding. This is the lightweight, no-S3 alternative to `bartleby project publish` / `import` when you just want to hand one finding to someone.
 

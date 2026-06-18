@@ -106,9 +106,23 @@ def main():
     )
 
     finding_parser = subparsers.add_parser(
-        "finding", help="Export / import a single finding as a self-describing .md"
+        "finding", help="Read, export, or import a single finding"
     )
     finding_sub = finding_parser.add_subparsers(dest="finding_command")
+    frd = finding_sub.add_parser(
+        "read",
+        help="Emit a finding as human-readable Markdown to stdout (pipe to glow/less/bat)",
+    )
+    frd.add_argument("finding_id", type=int, metavar="finding-id")
+    frd.add_argument("--project", type=str, default=None)
+    frd.add_argument(
+        "--json", action="store_true", dest="json_out",
+        help="Emit the raw read_finding JSON instead of Markdown (scripting path).",
+    )
+    frd.add_argument(
+        "--render", action="store_true",
+        help="Pretty-print Markdown in-terminal via rich instead of emitting raw text.",
+    )
     fex = finding_sub.add_parser(
         "export",
         help="Write a self-describing .md (front-matter + provenance) for a finding",
@@ -503,7 +517,12 @@ def _finding(args, parser):
         parser.print_help()
         sys.exit(1)
 
-    if args.finding_command == "export":
+    if args.finding_command == "read":
+        finding_cmd.read(
+            finding_id=args.finding_id, project=args.project,
+            json_out=args.json_out, render=args.render,
+        )
+    elif args.finding_command == "export":
         finding_cmd.export(
             finding_id=args.finding_id, project=args.project, out=args.out,
         )
