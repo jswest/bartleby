@@ -664,8 +664,8 @@ input[type="number"] {
      2. Iosevka Term hed (.ledger-hed) + dek (.ledger-dek), replacing the
         serif-italic dek.
      3. A two-column ledger: ~62–66ch prose measure + a right-hand gutter of
-        margin-note citations. Inline daggers (†/‡ + ordinal) in the prose tie
-        back to matching gutter notes. Resolved = amber "source"; missing =
+        margin-note citations. Inline glyphs (¶/§/†/‡ + ordinal) in the prose
+        tie back to matching gutter notes. Resolved = amber "source"; missing =
         danger-toned "no longer available".
 
    Citation markup (stable for R3/#592 to splice a pixel icon into):
@@ -677,8 +677,8 @@ input[type="number"] {
                 <… class="margin-note__body">label</…>
               </div>
    The dagger glyph + ordinal is the tie-back; data-note pairs them for JS.
-   Glyph legend: † corpus chunk (resolved), ‡ chunk gone, § external url/doc,
-   ¶ finding-to-finding link (#654).
+   Glyph legend: ¶ corpus chunk (resolved), ‡ chunk gone, § finding-to-finding
+   link (#654), † external url/doc (supersedes GH-0654 mapping).
    ========================================================================= */
 
 /* The ledger needs room for prose + gutter, so widen its report column and
@@ -767,8 +767,6 @@ input[type="number"] {
    to normal flow (see the @media block below). */
 .cite-notes {
   position: relative;
-  /* Sits beside the prose; on the dark-ledger paper it reads as a quiet rail. */
-  border-left: 1px solid var(--color-rule);
   padding-left: var(--space-xl);
 }
 /* left/right are invariant — set once here so they're final before JS measures
@@ -819,11 +817,13 @@ input[type="number"] {
   text-align: left;
   cursor: pointer;
   color: var(--color-token-text); /* amber-as-text, tuned for paper */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--color-token-text) 35%, transparent);
 }
 .margin-note__link:hover,
 .margin-note__link.active {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-color: var(--color-token-text);
 }
 /* Secondary affordance: opens the chunk page. Visually minor — the CHUNK_ICON
    pixel glyph at --text-2xs, amber-toned, no underline by default. */
@@ -903,7 +903,6 @@ input[type="number"] {
     flex-direction: column;
     gap: var(--space-lg);
     /* swap the rail from left edge to top */
-    border-left: 0;
     border-top: 1px solid var(--color-rule);
     padding-left: 0;
     padding-top: var(--space-lg);
