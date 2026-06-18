@@ -69,6 +69,7 @@ from bartleby.skill_scripts._common import (
     extract_external_citations,
     extract_finding_citations,
     finding_chunk_and_citation_ids,
+    live_finding_ids,
     resolve_citations,
     session_provenance,
 )
@@ -115,16 +116,8 @@ def work(*, conn, args, session_id) -> dict:
     # A [^finding:N] marker dangles when the referenced finding no longer exists.
     # Computed at read time from the body — no DB row backs these links (#654).
     linked_ids = extract_finding_citations(body)
-    dangling_finding_links: list[int] = []
-    if linked_ids:
-        fph = ",".join("?" * len(linked_ids))
-        alive = {
-            row[0] for row in cur.execute(
-                f"SELECT finding_id FROM findings WHERE finding_id IN ({fph})",
-                linked_ids,
-            )
-        }
-        dangling_finding_links = [fid for fid in linked_ids if fid not in alive]
+    alive = live_finding_ids(conn, linked_ids)
+    dangling_finding_links = [fid for fid in linked_ids if fid not in alive]
 
     return format_output_ids({
         "finding_id": args.finding_id,

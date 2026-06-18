@@ -357,20 +357,23 @@ def validate_chunk_ids_exist(conn, chunk_ids: list[int]) -> None:
         )
 
 
-def validate_finding_ids_exist(conn, finding_ids: list[int]) -> None:
-    """Raise ``UNKNOWN_FINDING_LINKS`` if any finding_id in ``[^finding:N]``
-    markers is missing from ``findings``."""
+def live_finding_ids(conn, finding_ids: list[int]) -> set[int]:
+    """Return the subset of ``finding_ids`` that exist in ``findings``."""
     if not finding_ids:
-        return
+        return set()
     ph = ",".join("?" * len(finding_ids))
-    cur = conn.cursor()
-    seen = {
-        row[0] for row in cur.execute(
+    return {
+        row[0] for row in conn.cursor().execute(
             f"SELECT finding_id FROM findings WHERE finding_id IN ({ph})",
             finding_ids,
         )
     }
-    missing = sorted(set(finding_ids) - seen)
+
+
+def validate_finding_ids_exist(conn, finding_ids: list[int]) -> None:
+    """Raise ``UNKNOWN_FINDING_LINKS`` if any finding_id in ``[^finding:N]``
+    markers is missing from ``findings``."""
+    missing = sorted(set(finding_ids) - live_finding_ids(conn, finding_ids))
     if missing:
         raise SkillError(
             "UNKNOWN_FINDING_LINKS",
