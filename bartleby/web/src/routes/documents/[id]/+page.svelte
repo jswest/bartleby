@@ -14,7 +14,10 @@
     const n = parseInt($page.url.searchParams.get("page"), 10);
     return Number.isInteger(n) && n > 0 ? n : null;
   })();
-  $: viewerSrc = `/files/${doc.document_id}${pageNum ? `#page=${pageNum}&navpanes=0` : "#navpanes=0"}`;
+  // #navpanes=0/#page= are native PDF viewer fragments; non-PDF sources render
+  // through SourceViewer's own sandboxed iframe and shouldn't carry them.
+  $: isPdf = /\.pdf$/i.test(doc.file_name ?? "");
+  $: viewerSrc = `/files/${doc.document_id}${isPdf ? (pageNum ? `#page=${pageNum}&navpanes=0` : "#navpanes=0") : ""}`;
 </script>
 
 <div class="split">
@@ -46,7 +49,7 @@
   </article>
 
   <aside class="viewer">
-    <SourceViewer fileName={doc.file_name} src={viewerSrc} markdown={data.sourceMarkdown} />
+    <SourceViewer fileName={doc.file_name} src={viewerSrc} sourceText={data.sourceText} />
   </aside>
 </div>
 

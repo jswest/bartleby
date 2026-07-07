@@ -3,35 +3,44 @@
 
   // The right-hand source pane, shared by /findings/[id] and /documents/[id].
   // Dispatches on file type: markdown renders to a sandboxed iframe (below),
-  // PDFs keep the browser's native viewer, everything else is a sandboxed
-  // raw-file iframe. `src` is the /files URL; `markdown` is pre-loaded source
-  // text (SSR path) — when absent for a markdown file, the text is fetched from
-  // `src`. With no `src` (and no markdown) the empty placeholder shows.
+  // plain text renders literally into the same sandboxed iframe (never through
+  // `marked` — see docs/decisions/GH-0680), PDFs keep the browser's native
+  // viewer, everything else is a sandboxed raw-file iframe. `src` is the /files
+  // URL; `sourceText` is pre-loaded source text (SSR path) — when absent for a
+  // markdown/text file, the text is fetched from `src`. With no `src` (and no
+  // sourceText) the empty placeholder shows.
   export let fileName = null;
   export let src = null;
-  export let markdown = null;
+  export let sourceText = null;
 
   $: isMarkdown = /\.(md|markdown)$/i.test(fileName ?? "");
+  // Plain text stays literal — never routed through marked. marked runs with
+  // breaks: false (see +layout.svelte), so single newlines would collapse into
+  // run-on paragraphs and stray #/*/_ chars would be misread as markdown.
+  $: isText = /\.(txt|text|log)$/i.test(fileName ?? "");
   // PDFs need the native viewer (and #page= jumps), which a sandbox would hobble;
   // every other raw file is sandboxed so an ingested HTML doc can't run scripts.
   $: isPdf = /\.pdf$/i.test(fileName ?? "");
+  // Markdown and plain text both render inline (into the iframe below);
+  // everything else falls through to the raw-file iframe branch.
+  $: isInline = isMarkdown || isText;
 
   let text = null;
   let errorMsg = null;
   let loading = false;
 
-  // Resolve the markdown text: use the pre-loaded prop, else fetch `src`. Only
+  // Resolve the source text: use the pre-loaded prop, else fetch `src`. Only
   // the inputs are referenced, so this never re-runs on its own writes to `text`.
-  $: resolveMarkdown(isMarkdown, markdown, src);
+  $: resolveText(isInline, sourceText, src);
 
-  async function resolveMarkdown(active, md, url) {
+  async function resolveText(active, preloaded, url) {
     errorMsg = null;
-    if (!active || (md == null && !url)) {
+    if (!active || (preloaded == null && !url)) {
       text = null;
       return;
     }
-    if (md != null) {
-      text = md;
+    if (preloaded != null) {
+      text = preloaded;
       return;
     }
     loading = true;
@@ -55,9 +64,18 @@
   // which DOMPurify keeps, would otherwise beacon the host's IP on view.
   // `default-src 'none'` ⇒ zero outbound requests; `style-src 'unsafe-inline'`
   // only enables the inlined stylesheet below.
-  $: srcdoc = text == null ? null : wrapMarkdown(marked.parse(text));
+  $: srcdoc =
+    text == null
+      ? null
+      : isMarkdown
+        ? wrapDocument(marked.parse(text))
+        : wrapDocument(`<pre>${escapeHtml(text)}</pre>`);
 
-  function wrapMarkdown(inner) {
+  function escapeHtml(raw) {
+    return raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function wrapDocument(inner) {
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -79,7 +97,7 @@
     p, ul, ol, blockquote, table, pre { margin: 0 0 1em; }
     a { color: #0645ad; }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; background: #f2f2f2; padding: 0.1em 0.3em; border-radius: 3px; }
-    pre { background: #f6f6f6; padding: 0.8em 1em; border-radius: 4px; overflow-x: auto; }
+    pre { background: #f6f6f6; padding: 0.8em 1em; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
     pre code { background: none; padding: 0; }
     blockquote { border-left: 3px solid #ddd; padding-left: 1em; color: #555; }
     table { border-collapse: collapse; width: 100%; }
@@ -90,7 +108,7 @@
   `;
 </script>
 
-{#if isMarkdown}
+{#if isInline}
   {#if errorMsg}
     <div class="placeholder placeholder--error">
       <span class="placeholder__icon" aria-hidden="true">⚠</span>
@@ -102,7 +120,7 @@
       <p class="placeholder__msg">Loading source…</p>
     </div>
   {:else if srcdoc}
-    <iframe title="Rendered markdown source" {srcdoc} sandbox=""></iframe>
+    <iframe title={isMarkdown ? "Rendered markdown source" : "Plain text source"} {srcdoc} sandbox=""></iframe>
   {/if}
 {:else if src}
   {#key src}
