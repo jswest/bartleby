@@ -36,10 +36,6 @@ from bartleby.providers.prompt import (
 # install can silently resolve an incompatible version.
 _PYDANTIC_AI_MIN = (0, 3)
 _PYDANTIC_AI_MAX_EXCLUSIVE = (2, 0)
-_WSJPT_REINSTALL_CMD = (
-    "uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' "
-    "--with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force"
-)
 
 
 def _check_pydantic_ai_version() -> None:
@@ -65,7 +61,8 @@ def _check_pydantic_ai_version() -> None:
             "wsjpt's Vertex AI/ADC auth path calls GoogleProvider(vertexai=...), "
             "a kwarg that only exists in pydantic-ai [0.3.0, 2.0.0) — pydantic-ai "
             "2.0 removed it and pydantic-ai <0.3 never had it. Reinstall with: "
-            f"{_WSJPT_REINSTALL_CMD}"
+            "uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' "
+            "--with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force"
         )
 
 
