@@ -1,5 +1,6 @@
 <script>
   import { marked } from "marked";
+  import { escapeHtml } from "$lib/format.js";
 
   // The right-hand source pane, shared by /findings/[id] and /documents/[id].
   // Dispatches on file type: markdown renders to a sandboxed iframe (below),
@@ -70,10 +71,6 @@
       : isMarkdown
         ? wrapDocument(marked.parse(text))
         : wrapDocument(`<pre>${escapeHtml(text)}</pre>`);
-
-  function escapeHtml(raw) {
-    return raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
 
   function wrapDocument(inner) {
     return `<!doctype html>

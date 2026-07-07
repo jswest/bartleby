@@ -3,7 +3,7 @@
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
-  import { stripExt } from "$lib/format.js";
+  import { escapeHtml, stripExt } from "$lib/format.js";
   import { CHUNK_ICON } from "$lib/icons.js";
 
   export let data;
@@ -57,7 +57,7 @@
         if (s === "chunk") {
           const id = Number(ref.trim());
           // A non-numeric chunk ref can't resolve; leave the marker verbatim.
-          if (!Number.isInteger(id)) return esc(match);
+          if (!Number.isInteger(id)) return escapeHtml(match);
           const c = byId.get(id);
           const note = c
             ? sourceNote(++n, c, c === active)
@@ -68,7 +68,7 @@
         if (s === "finding") {
           const id = Number(ref.trim());
           // A non-numeric finding ref can't resolve; leave the marker verbatim.
-          if (!Number.isInteger(id)) return esc(match);
+          if (!Number.isInteger(id)) return escapeHtml(match);
           const note = findingNote(++n, id);
           collected.push(note);
           return marker(note);
@@ -76,7 +76,7 @@
         const note = externalNote(++n, s, ref.trim());
         if (!note) {
           n--; // unknown scheme: drop, don't burn an ordinal
-          return esc(match);
+          return escapeHtml(match);
         }
         collected.push(note);
         return marker(note);
@@ -100,7 +100,7 @@
       : note.finding
         ? `${note.dagger} finding · ${note.title}`
         : `${note.dagger} source · ${note.title}`;
-    return `<sup class="cite-ref ${kindCls}" data-note="${note.n}" title="${esc(title)}">${note.dagger}${note.n}</sup>`;
+    return `<sup class="cite-ref ${kindCls}" data-note="${note.n}" title="${escapeHtml(title)}">${note.dagger}${note.n}</sup>`;
   }
 
   function sourceNote(n, c, isActive) {
@@ -167,12 +167,6 @@
       return { n, dagger: "†", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
     }
     return null;
-  }
-
-  function esc(s) {
-    return s.replace(/[&<>"]/g, (c) => (
-      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
-    ));
   }
 
   let active = null;
