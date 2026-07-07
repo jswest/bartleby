@@ -67,10 +67,10 @@ uv tool install '.[sec2md]'
 
 You can combine extras: `uv tool install '.[docling,sec2md]'`.
 
-The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** in the locked dependency set — its git source is unreachable outside WSJ, which would break `uv lock`/`uv sync` for everyone. Inject it into the **tool's** environment with `--with` — extras and out-of-band packages have to go there, not a separate `uv pip install` (which lands somewhere the running tool can't see). `--force` re-applies to an already-installed tool:
+The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** in the locked dependency set — its git source is unreachable outside WSJ, which would break `uv lock`/`uv sync` for everyone. Inject it into the **tool's** environment with `--with` — extras and out-of-band packages have to go there, not a separate `uv pip install` (which lands somewhere the running tool can't see). `--force` re-applies to an already-installed tool. Also pin `pydantic-ai>=1,<2`: wsjpt's keyless Vertex/ADC path passes `vertexai=`/`project=`/`location=` to `GoogleProvider`, and pydantic-ai 2.0 dropped those kwargs, so an unpinned install resolves to 2.x and crashes:
 
 ```
-uv tool install '.[docling,sec2md]' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
+uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
 ```
 
 For development:

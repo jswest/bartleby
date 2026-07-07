@@ -186,6 +186,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "sentence-transformers" },
+    { name = "shapely" },
     { name = "sqlite-vec" },
     { name = "tiktoken" },
 ]
@@ -226,6 +227,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.2.0" },
     { name = "sec2md", marker = "extra == 'sec2md'", specifier = "==0.1.22" },
     { name = "sentence-transformers", specifier = ">=5.1.2" },
+    { name = "shapely", specifier = ">=2.0.0" },
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "tiktoken", specifier = ">=0.12.0" },
 ]
