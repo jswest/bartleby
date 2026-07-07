@@ -23,7 +23,7 @@ are the set, assembled on an omnibus branch, then promoted.
 
 | Role | Owns | Where | Tier |
 |---|---|---|---|
-| **director** | plan, dispatch, triage, assemble, promote | the session (you) | strong |
+| **director** | plan, dispatch, triage, assemble, promote | the session (you) — but omnibus work runs in its own **director worktree**, never the shared checkout | strong |
 | **players** | implement one issue — code, test, self-tidy, commit, PR | subagents, in parallel, each its own sibling worktree | cheap |
 | **critics** | review the work — a **correctness critic** and a **simplicity critic** | subagents the director spools | strong (per-unit simplicity: cheap) |
 
@@ -31,6 +31,16 @@ The director runs the show — plan, dispatch, triage, assemble, promote — and
 never grinds: the implementation churn (big reads, test loops, edits) lives in
 players' throwaway contexts, so the session stays lean. Players and critics are
 subagents the director launches.
+
+**Worktree isolation covers the director too — not just players.** Each player
+gets its own sibling worktree (§The players), but so does the director on the
+omnibus path: the merge-train checks out the omnibus branch and merges sub-PRs
+into it, and doing that in the shared main checkout means two concurrent omnibus
+directors fight over one HEAD — the working tree's branch appears to move "on its
+own." So the omnibus director runs in its own **director worktree** (§3.1) and
+never touches the main checkout. A **leaf** director stays in the main checkout:
+its operations are brief (no long-lived branch checkout) — but it must hold the
+main checkout's branch steady, never switching it out from under a concurrent run.
 
 ## Invocation
 
@@ -155,6 +165,9 @@ an **attended** verb, so honor the stamp before doing anything:
   (`signet press ship --into <repo>`) before shipping.
 - **If the drawer path in `.stamp` doesn't exist** on this machine → **skip
   silently** (a clone, CI, or a teammate without the drawer is never penalized).
+- **If no `.stamp` file is present at all** (a fresh clone — the stamp is
+  gitignored, so it never travels with the repo) → **skip silently and proceed**.
+  The self-check is a maintainer-side convenience, never a gate.
 - **`--no-signet-check`** bypasses the check.
 
 ## Model tiering
@@ -169,11 +182,14 @@ Two tiers, resolved **flag > config > default**:
 - **`--strong`** lifts everything to strong; **`--thrifty`** drops everything to
   cheap.
 
-Pass each subagent's resolved model through the **Agent tool's `model`
-parameter**; a player left to inherit the session model runs expensive and
-defeats the tiering. As of this writing **Opus** is the strong tier and
-**Sonnet** a solid cheap tier — don't hard-code a model id; prefer a better one
-when it ships.
+**Always pass each subagent's resolved model through the Agent tool's `model`
+parameter — it is mandatory, never optional.** There is **no "default to cheap"
+fallback**: an Agent call that omits `model` inherits the director's session
+model (strong), so a player launched without an explicit `model` silently runs
+on the strong tier — slower and far more expensive — even though `player_tier`
+is cheap. Leaving `model` unset is never acceptable. As of this writing **Opus**
+is the strong tier and **Sonnet** a solid cheap tier — don't hard-code a model
+id; prefer a better one when it ships, but always pass *some* resolved model.
 
 ---
 
@@ -224,7 +240,10 @@ proceed.
 ## 2. Player path (leaf issue)
 1. Create a sibling worktree off the target (`worktree_pattern`, never nested).
 2. Dispatch **one player** with: the issue + fleshed-out spec, the target branch,
-   `guardrails`, and the resolved tier (Agent `model` param).
+   `guardrails`, and the resolved tier (Agent `model` param). The dispatch payload
+   carries the **comment-derived corrections** the director read in §1 (scope
+   changes, "actually don't do X") — explicitly, never left implicit in the spec,
+   so they reach the player even when the plan gate was skipped.
 3. The player runs its loop (§The players) → pushes its branch → opens the
    **issue → target** PR.
 4. On the player's branch, in parallel: the **simplicity critic** and the
@@ -239,7 +258,15 @@ proceed.
 1. Ensure the **omnibus branch** exists (`branch_prefix` stem, off `base_branch`).
    Creating a new long-lived branch is a remote mutation — confirm, then
    `git branch <omnibus-branch> origin/<base_branch> && git push -u origin
-   <omnibus-branch>`; never create it silently.
+   <omnibus-branch>`; never create it silently. Then create a dedicated
+   **director worktree** checked out on the omnibus branch — a sibling via
+   `worktree_pattern` keyed by the *omnibus* issue (`{n}` = omnibus number,
+   `{slug}` = omnibus slug), so it never collides with a player's sub-issue
+   worktree. Run **everything below — merge-train, assemble, promote — in that
+   worktree**, never checking out the omnibus branch in the shared main checkout.
+   This extends the player worktree discipline to the director: two concurrent
+   omnibus directors each own a private HEAD and never stomp the main checkout
+   or each other.
 2. Compute the **wave plan** from the sub-issues — topological by declared
    dependencies, then by file-overlap so a wave never has two players colliding.
    Post the wave plan (and the resolved player tier) as an omnibus comment, and
@@ -247,8 +274,10 @@ proceed.
    landing status is visible on GitHub from the start.
 3. **Pause before fan-out** (see the gate above), then for each wave:
    dispatch its sub-issues to **players in parallel**, each in its own sibling
-   worktree off the **current** omnibus HEAD. Each player lands its sub-issue and
-   opens a **"Part of #<omnibus>"** sub-PR onto the omnibus branch (no `Closes`).
+   worktree off the **current** omnibus HEAD, each carrying its sub-issue's
+   **comment-derived corrections** in the dispatch payload (as in §2.2). Each
+   player lands its sub-issue and opens a **"Part of #<omnibus>"** sub-PR onto the
+   omnibus branch (no `Closes`).
 4. **Merge-train** (serial, never N-way): for each sub-PR, the **simplicity
    critic** reviews its diff before integrating; apply accepted fixes to the
    sub-PR branch. Then integrate and run the integration `test_cmd` on the
@@ -288,7 +317,9 @@ A player is an isolated subagent (Agent tool, `isolation: worktree`) in its own
 sibling worktree. It runs under your login, so it needs no separate auth and
 inherits the session's permission posture. Its loop:
 
-1. Implement the issue in logical units.
+1. **Read the issue and its GH comments first** — the corrections in the
+   dispatch payload are your spec, but read the live thread too (scope changes
+   and "actually don't do X" land there). Then implement in logical units.
 2. For **every** code-producing commit, in order:
    a. `test_cmd` — must pass. Skipped when `--skip-tests`, or the diff is wholly
       within `auto_skip_globs`, or `test_cmd` is `""`. Note once when skipped.
@@ -427,6 +458,7 @@ and the full text of any parked questions. Always pair the light with its word
 (🔴 CHECK / 🟡 FYI / 🟢 OK) so it survives where color alone doesn't.
 
 ## Cleanup
-After the user confirms the merge, remove the worktree(s) you created and
-fast-forward the base. On restart, adopt or clean **only** your own orphaned
-worktrees — never one you didn't create.
+After the user confirms the merge, remove the worktree(s) you created — the
+player worktrees **and the omnibus director worktree** — and fast-forward the
+base. On restart, adopt or clean **only** your own orphaned worktrees — never one
+you didn't create.
