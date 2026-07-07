@@ -49,6 +49,16 @@ export function stripExt(name) {
   return name ? name.replace(/\.[^.]+$/, '') : name;
 }
 
+// Escape the HTML metacharacters so untrusted text renders literally when
+// interpolated into an HTML string — the source viewer's plain-text `<pre>` and
+// the findings citation renderer both drop text into markup. `&` is replaced
+// first (via the single character-class pass) so the others aren't re-escaped.
+export function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+  ));
+}
+
 // Render `<count> <noun>` with naive English pluralization and a comma-grouped
 // count (1234 → "1,234"). Pass `plural` when the noun isn't just `singular + 's'`
 // (e.g. pluralize(n, 'match', 'matches')).
