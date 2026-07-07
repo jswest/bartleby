@@ -22,8 +22,8 @@ So `SourceViewer.svelte` gained a dedicated `isText` predicate
 (pre-loaded SSR text if present, else `fetch(src)`) and the *same* sandboxed
 `srcdoc` wrapper (`wrapDocument`, CSP `default-src 'none'`) already in place for
 markdown (see GH-0567) — but the `srcdoc` body branches on `isMarkdown`: markdown
-still goes through `marked.parse`, while text is HTML-escaped (`&`, `<`, `>`)
-and dropped verbatim into a `<pre>`. The shared `pre` CSS rule picked up
+still goes through `marked.parse`, while text is HTML-escaped (via the shared
+`escapeHtml` in `format.js`) and dropped verbatim into a `<pre>`. The shared `pre` CSS rule picked up
 `white-space: pre-wrap; overflow-wrap: anywhere;` so long unbroken lines (e.g.
 YAML-ish dumps) wrap inside the pane instead of relying on `overflow-x: auto`
 alone. The SSR preload in `documents/[id]/+page.server.js` widened past `\.md$`
