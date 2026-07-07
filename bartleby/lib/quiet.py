@@ -101,6 +101,10 @@ def setup_quiet_third_party(
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    # huggingface_hub re-reads this at import and resets its root logger
+    # level, clobbering the setLevel(ERROR) below — the env knob is what
+    # actually silences it.
+    os.environ.setdefault("HF_HUB_VERBOSITY", "error")
     os.environ.setdefault("TQDM_DISABLE", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ["BARTLEBY_VERBOSE"] = "0"
