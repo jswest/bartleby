@@ -19,6 +19,7 @@ Without it, wsjpt falls back to Vertex AI via Application Default Credentials.
 from __future__ import annotations
 
 import os
+import re
 
 from pydantic import BaseModel
 
@@ -27,6 +28,45 @@ from bartleby.providers.prompt import (
     IMAGE_DESCRIPTION_INSTRUCTIONS,
     SUMMARY_INSTRUCTIONS,
 )
+
+# wsjpt's Vertex AI/ADC auth path calls GoogleProvider(vertexai=..., project=...,
+# location=...). Those kwargs only exist in pydantic-ai [0.3.0, 2.0.0) — earlier
+# releases lack the unified google module, 2.0+ dropped the vertexai kwarg. wsjpt
+# itself declares pydantic-ai>=0.0.45 with no upper bound, so an unconstrained
+# install can silently resolve an incompatible version.
+_PYDANTIC_AI_MIN = (0, 3)
+_PYDANTIC_AI_MAX_EXCLUSIVE = (2, 0)
+_WSJPT_REINSTALL_CMD = (
+    "uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' "
+    "--with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force"
+)
+
+
+def _check_pydantic_ai_version() -> None:
+    """Raise if the installed pydantic-ai is outside wsjpt's compatible window.
+
+    Fails open (returns silently) whenever the version can't be determined —
+    pydantic_ai isn't a bartleby dependency, so a missing import or an
+    unparseable __version__ means "can't introspect," not "incompatible."
+    """
+    try:
+        import pydantic_ai
+
+        version = pydantic_ai.__version__
+        major, minor = (
+            int(re.match(r"\d+", part).group()) for part in version.split(".")[:2]
+        )
+    except Exception:
+        return
+
+    if not (_PYDANTIC_AI_MIN <= (major, minor) < _PYDANTIC_AI_MAX_EXCLUSIVE):
+        raise RuntimeError(
+            f"The wsjpt provider requires pydantic-ai>=1,<2 (found {version}). "
+            "wsjpt's Vertex AI/ADC auth path calls GoogleProvider(vertexai=...), "
+            "a kwarg that only exists in pydantic-ai [0.3.0, 2.0.0) — pydantic-ai "
+            "2.0 removed it and pydantic-ai <0.3 never had it. Reinstall with: "
+            f"{_WSJPT_REINSTALL_CMD}"
+        )
 
 
 class WsjptProvider:
@@ -42,6 +82,7 @@ class WsjptProvider:
                 "set). Install with: "
                 "uv pip install 'git+ssh://git@github.dowjones.net/data/wsjpt.git'"
             ) from e
+        _check_pydantic_ai_version()
         self._Jpt = Jpt
         self._ModelConfig = ModelConfig
         self._api_key = os.environ.get("GEMINI_API_KEY") or None

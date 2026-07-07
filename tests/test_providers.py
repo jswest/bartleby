@@ -522,3 +522,60 @@ def test_wsjpt_classify_routes_schema_and_prompt(monkeypatch):
     assert calls["input_text"] == "the self-contained prompt"
     assert calls["custom_instructions"] is None
     assert calls["model_config"].model == "fast"
+
+
+# ---------- wsjpt: pydantic-ai version guard (#683) ----------
+#
+# wsjpt's Vertex AI/ADC auth path calls GoogleProvider(vertexai=...), which
+# only exists in pydantic-ai [0.3.0, 2.0.0). WsjptProvider.__init__ preflights
+# this and must fail open (no raise) whenever the version can't be determined,
+# since pydantic_ai isn't a bartleby dependency.
+
+
+def _install_pydantic_ai(monkeypatch, version):
+    """Inject a fake `pydantic_ai` module reporting the given __version__."""
+    monkeypatch.setitem(
+        sys.modules, "pydantic_ai", SimpleNamespace(__version__=version)
+    )
+
+
+@pytest.mark.parametrize("version", ["2.5.1", "2.0.0", "0.0.55", "0.2.0"])
+def test_wsjpt_rejects_incompatible_pydantic_ai(monkeypatch, version):
+    _install_wsjpt(monkeypatch, None)
+    _install_pydantic_ai(monkeypatch, version)
+
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    with pytest.raises(RuntimeError, match="pydantic-ai>=1,<2"):
+        WsjptProvider()
+
+
+@pytest.mark.parametrize("version", ["1.107.0", "0.3.0"])
+def test_wsjpt_accepts_compatible_pydantic_ai(monkeypatch, version):
+    _install_wsjpt(monkeypatch, None)
+    _install_pydantic_ai(monkeypatch, version)
+
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    WsjptProvider()  # must not raise
+
+
+def test_wsjpt_fails_open_on_unparseable_pydantic_ai_version(monkeypatch):
+    _install_wsjpt(monkeypatch, None)
+    _install_pydantic_ai(monkeypatch, "weird")
+
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    WsjptProvider()  # must not raise
+
+
+def test_wsjpt_fails_open_when_pydantic_ai_missing(monkeypatch):
+    # The existing _install_wsjpt helper injects fake `wsjpt` but no
+    # `pydantic_ai` module — this is the real-world CI/dev-venv shape, and
+    # the guard must not block construction.
+    monkeypatch.delitem(sys.modules, "pydantic_ai", raising=False)
+    _install_wsjpt(monkeypatch, None)
+
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    WsjptProvider()  # must not raise
