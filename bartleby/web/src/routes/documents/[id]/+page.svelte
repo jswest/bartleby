@@ -14,7 +14,7 @@
     const n = parseInt($page.url.searchParams.get("page"), 10);
     return Number.isInteger(n) && n > 0 ? n : null;
   })();
-  $: viewerSrc = `/files/${doc.document_id}${pageNum ? `#page=${pageNum}` : ""}`;
+  $: viewerSrc = `/files/${doc.document_id}${pageNum ? `#page=${pageNum}&navpanes=0` : "#navpanes=0"}`;
 </script>
 
 <div class="split">

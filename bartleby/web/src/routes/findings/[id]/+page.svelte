@@ -180,7 +180,7 @@
 
   function citationUrl(c) {
     if (c.document_id == null) return null;
-    const page = c.page_number ? `#page=${c.page_number}` : "";
+    const page = c.page_number ? `#page=${c.page_number}&navpanes=0` : "#navpanes=0";
     return `/files/${c.document_id}${page}`;
   }
 
