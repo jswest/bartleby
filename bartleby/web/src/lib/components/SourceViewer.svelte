@@ -1,6 +1,7 @@
 <script>
   import { marked } from "marked";
   import { escapeHtml } from "$lib/format.js";
+  import { wrapViewerDocument, RE_MARKDOWN, RE_TEXT, RE_PDF } from "$lib/viewerDoc.js";
 
   // The right-hand source pane, shared by /findings/[id] and /documents/[id].
   // Dispatches on file type: markdown renders to a sandboxed iframe (below),
@@ -14,14 +15,14 @@
   export let src = null;
   export let sourceText = null;
 
-  $: isMarkdown = /\.(md|markdown)$/i.test(fileName ?? "");
+  $: isMarkdown = RE_MARKDOWN.test(fileName ?? "");
   // Plain text stays literal — never routed through marked. marked runs with
   // breaks: false (see +layout.svelte), so single newlines would collapse into
   // run-on paragraphs and stray #/*/_ chars would be misread as markdown.
-  $: isText = /\.(txt|text|log)$/i.test(fileName ?? "");
+  $: isText = RE_TEXT.test(fileName ?? "");
   // PDFs need the native viewer (and #page= jumps), which a sandbox would hobble;
   // every other raw file is sandboxed so an ingested HTML doc can't run scripts.
-  $: isPdf = /\.pdf$/i.test(fileName ?? "");
+  $: isPdf = RE_PDF.test(fileName ?? "");
   // Markdown and plain text both render inline (into the iframe below);
   // everything else falls through to the raw-file iframe branch.
   $: isInline = isMarkdown || isText;
@@ -59,50 +60,17 @@
 
   // marked.parse flows through the global DOMPurify hook (+layout.svelte), so the
   // HTML is already script-free. We still render it inside a sandboxed iframe
-  // carrying `default-src 'none'`: the sandbox blocks scripts as defense in
-  // depth, and the CSP is the *only* control that stops passive remote
-  // subresource loads — a tracking-pixel `<img>` in untrusted source markdown,
-  // which DOMPurify keeps, would otherwise beacon the host's IP on view.
-  // `default-src 'none'` ⇒ zero outbound requests; `style-src 'unsafe-inline'`
-  // only enables the inlined stylesheet below.
+  // via wrapViewerDocument ($lib/viewerDoc.js, shared with the GH-0690 HTML
+  // export): the sandbox blocks scripts as defense in depth, and its CSP is the
+  // *only* control that stops passive remote subresource loads — a
+  // tracking-pixel <img> in untrusted source markdown, which DOMPurify keeps,
+  // would otherwise beacon the host's IP on view.
   $: srcdoc =
     text == null
       ? null
       : isMarkdown
-        ? wrapDocument(marked.parse(text))
-        : wrapDocument(`<pre>${escapeHtml(text)}</pre>`);
-
-  function wrapDocument(inner) {
-    return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'" />
-<style>${VIEWER_CSS}</style>
-</head>
-<body>${inner}</body>
-</html>`;
-  }
-
-  // The iframe is its own document and can't reach app.css or its CSS variables,
-  // so the source styling is inlined. Neutral and compact — readable evidence,
-  // not a pixel-match to the prose pane.
-  const VIEWER_CSS = `
-    body { margin: 0; padding: 1.25rem 1.5rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 0.9rem; line-height: 1.6; color: #1a1a1a; background: #fff; overflow-wrap: anywhere; }
-    h1, h2, h3, h4 { line-height: 1.25; margin: 1.4em 0 0.5em; }
-    h1 { font-size: 1.5rem; } h2 { font-size: 1.25rem; } h3 { font-size: 1.05rem; }
-    p, ul, ol, blockquote, table, pre { margin: 0 0 1em; }
-    a { color: #0645ad; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; background: #f2f2f2; padding: 0.1em 0.3em; border-radius: 3px; }
-    pre { background: #f6f6f6; padding: 0.8em 1em; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-    pre code { background: none; padding: 0; }
-    blockquote { border-left: 3px solid #ddd; padding-left: 1em; color: #555; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 0.4em 0.6em; text-align: left; }
-    th { background: #f6f6f6; }
-    img { max-width: 100%; }
-    hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
-  `;
+        ? wrapViewerDocument(marked.parse(text))
+        : wrapViewerDocument(`<pre>${escapeHtml(text)}</pre>`);
 </script>
 
 {#if isInline}

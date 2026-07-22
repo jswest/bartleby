@@ -42,6 +42,15 @@ export function formatDateRange(a, b) {
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
+// Filename slug: lowercase, non-alphanumerics collapsed to a single '-', with
+// leading/trailing '-' trimmed. Mirrors `_slug()` in bartleby/commands/finding.py
+// so a finding's exported filename is stable across the CLI and both web
+// export paths (Download .md, Save as HTML).
+export function slugify(title) {
+  const s = (title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return s || "finding";
+}
+
 // Strip a trailing extension (e.g. .pdf) so a file name reads as a title when
 // no summary-derived title exists. Returns falsy input unchanged so callers can
 // chain a further `?? fallback`. Shared by the list, detail, and search views.

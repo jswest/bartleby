@@ -44,6 +44,10 @@ export function getFinding(findingId) {
 // can render a link straight to the archived PDF at the right page.
 // Image chunks pull their page from document_images (image can appear on
 // different pages in different documents — take the lowest-doc, lowest-page).
+// source_kind/source_id ride along unchanged from `chunks` — the live finding
+// view ignores them, but the HTML export (GH-0690) needs source_kind to
+// dispatch embedding (PDF/text/markdown/image) and source_id as the image_id
+// for image-kind citations (getImageFilePath).
 function getCitations(findingId) {
   const { db } = getDb();
   const rows = db.prepare(`
@@ -57,6 +61,8 @@ function getCitations(findingId) {
   const resolved = resolveSources(rows);
   return rows.map((r, i) => ({
     chunk_id: r.chunk_id,
+    source_kind: r.source_kind,
+    source_id: r.source_id,
     ...resolved[i]
   }));
 }
@@ -233,6 +239,17 @@ export function getDocumentFilePath(documentId) {
   const row = db.prepare(
     'SELECT file_path FROM documents WHERE document_id = ?'
   ).get(documentId);
+  return row ? row.file_path : null;
+}
+
+// The archived original of one extracted image (source_kind='image' chunks
+// cite an image_id, not a document_id) — used by the HTML export (GH-0690) to
+// embed the actual cited .jpg rather than its parent document's PDF.
+export function getImageFilePath(imageId) {
+  const { db } = getDb();
+  const row = db.prepare(
+    'SELECT file_path FROM images WHERE image_id = ?'
+  ).get(imageId);
   return row ? row.file_path : null;
 }
 

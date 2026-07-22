@@ -3,8 +3,9 @@
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
-  import { escapeHtml, stripExt } from "$lib/format.js";
+  import { substituteCitations } from "$lib/citations.js";
   import { CHUNK_ICON } from "$lib/icons.js";
+  import { slugify } from "$lib/format.js";
 
   export let data;
 
@@ -48,125 +49,13 @@
   $: bodyHtml = rendered.html;
   $: notes = rendered.notes;
 
+  // Marker substitution + note-building is shared with the HTML export
+  // (GH-0690) via $lib/citations.js; only the final marked.parse() pass (this
+  // app's global, DOMPurify-hooked `marked` singleton — see +layout.svelte)
+  // stays here.
   function renderBody(body, byId, active) {
-    const collected = [];
-    let n = 0;
-    const html = marked.parse(
-      body.replace(/\[\^([A-Za-z]+):([^\]]+)\]/g, (match, scheme, ref) => {
-        const s = scheme.toLowerCase();
-        if (s === "chunk") {
-          const id = Number(ref.trim());
-          // A non-numeric chunk ref can't resolve; leave the marker verbatim.
-          if (!Number.isInteger(id)) return escapeHtml(match);
-          const c = byId.get(id);
-          const note = c
-            ? sourceNote(++n, c, c === active)
-            : goneNote(++n, id);
-          collected.push(note);
-          return marker(note);
-        }
-        if (s === "finding") {
-          const id = Number(ref.trim());
-          // A non-numeric finding ref can't resolve; leave the marker verbatim.
-          if (!Number.isInteger(id)) return escapeHtml(match);
-          const note = findingNote(++n, id);
-          collected.push(note);
-          return marker(note);
-        }
-        const note = externalNote(++n, s, ref.trim());
-        if (!note) {
-          n--; // unknown scheme: drop, don't burn an ordinal
-          return escapeHtml(match);
-        }
-        collected.push(note);
-        return marker(note);
-      }),
-    );
-    return { html, notes: collected };
-  }
-
-  // The inline dagger anchor that sits at the cited point in the prose. A
-  // superscript <sup> with the dagger glyph + ordinal; the ordinal ties it to
-  // its gutter note. Stable class hooks (`cite-ref`, kind modifier) so R3 (#592)
-  // can splice a pixel icon in without touching this code.
-  function marker(note) {
-    const kindCls = note.gone
-      ? "cite-ref--gone"
-      : note.finding
-        ? "cite-ref--finding"
-        : "cite-ref--source";
-    const title = note.gone
-      ? `${note.dagger} cited source no longer available`
-      : note.finding
-        ? `${note.dagger} finding · ${note.title}`
-        : `${note.dagger} source · ${note.title}`;
-    return `<sup class="cite-ref ${kindCls}" data-note="${note.n}" title="${escapeHtml(title)}">${note.dagger}${note.n}</sup>`;
-  }
-
-  function sourceNote(n, c, isActive) {
-    const name = stripExt(c.file_name);
-    const label =
-      name && c.page_number ? `${name} p.${c.page_number}`
-      : name ? name
-      : c.page_number ? `p.${c.page_number}`
-      : `chunk ${c.chunk_id}`;
-    const title = [
-      c.file_name,
-      c.page_number && `page ${c.page_number}`,
-      `chunk ${c.chunk_id}`,
-    ].filter(Boolean).join(" · ");
-    return {
-      n,
-      dagger: "¶",
-      gone: false,
-      chunkId: c.chunk_id,
-      active: isActive,
-      label,
-      title,
-    };
-  }
-
-  // An unresolved [^chunk:N]: the cited source has been removed (deleted, or
-  // rebuilt under new chunk ids by an edit/merge), so only the id survives.
-  // Danger-toned gutter note rather than leaking raw [^N] text.
-  function goneNote(n, chunkId) {
-    return {
-      n,
-      dagger: "‡",
-      gone: true,
-      chunkId,
-      label: "no longer available",
-      title: `chunk ${chunkId} · cited source no longer available`,
-    };
-  }
-
-  // A [^finding:N] link — a unidirectional reference to another finding (#654).
-  // Rendered as a ¶-daggered gutter note with a link to /findings/N. No DB row
-  // backs this link; it is validated at save time and stored only in the body.
-  function findingNote(n, findingId) {
-    return {
-      n,
-      dagger: "§",
-      gone: false,
-      finding: true,
-      findingId,
-      href: `/findings/${findingId}`,
-      label: `finding #${findingId}`,
-      title: `finding #${findingId}`,
-    };
-  }
-
-  // An external (URL / external-dataset doc) citation parsed straight from the
-  // body marker — no DB row backs it. A url scheme becomes a real link, a doc
-  // scheme a muted ref. Unknown schemes return null (dropped upstream).
-  function externalNote(n, scheme, ref) {
-    if (scheme === "url") {
-      return { n, dagger: "†", gone: false, external: "url", href: ref, label: ref, title: `external source · ${ref}` };
-    }
-    if (scheme === "doc") {
-      return { n, dagger: "†", gone: false, external: "doc", label: ref, title: `external dataset doc · ${ref}` };
-    }
-    return null;
+    const { markdown, notes } = substituteCitations(body, byId, active);
+    return { html: marked.parse(markdown), notes };
   }
 
   let active = null;
@@ -292,11 +181,17 @@
 
   function downloadMarkdown() {
     const blob = new Blob([data.finding.body], { type: "text/markdown" });
-    const name = data.finding.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${name}.md`;
+    a.download = `${slugify(data.finding.title)}.md`;
     a.click();
+  }
+
+  // GH-0690: the export route sets Content-Disposition: attachment, so a plain
+  // navigation triggers the browser's normal download flow rather than
+  // replacing the page.
+  function downloadHtml() {
+    window.location.href = `/findings/${data.finding.finding_id}/export.html`;
   }
 </script>
 
@@ -313,6 +208,7 @@
         {copied ? "Copied" : "Copy as Markdown"}
       </Button>
       <Button size="sm" type="button" on:click={downloadMarkdown}>Download .md</Button>
+      <Button size="sm" type="button" on:click={downloadHtml}>Save as HTML</Button>
     </div>
 
     <!-- Ledger column: drop-capped prose + a margin-note gutter. The body
