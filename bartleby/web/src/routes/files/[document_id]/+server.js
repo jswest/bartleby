@@ -3,24 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDocumentFilePath } from '$lib/server/queries.js';
 import { parseIdParam } from '$lib/server/params.js';
-
-// Extensions that the ingest pipeline accepts (see bartleby/ingest/chunk.py).
-// Anything else falls back to octet-stream — the browser will offer download.
-const MIME_BY_EXT = {
-  '.pdf': 'application/pdf',
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  // Browsers download text/markdown — serve as plain text so the iframe shows it.
-  '.md': 'text/plain; charset=utf-8',
-  '.txt': 'text/plain; charset=utf-8',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.tiff': 'image/tiff',
-  '.tif': 'image/tiff'
-};
+import { MIME_BY_EXT } from '$lib/server/mime.js';
 
 export function GET({ params }) {
   const documentId = parseIdParam(params.document_id, 'document');
