@@ -18,3 +18,13 @@ export const MIME_BY_EXT = {
   '.tiff': 'image/tiff',
   '.tif': 'image/tiff'
 };
+
+// Extensions MIME_BY_EXT maps to an image/* type — derived, not re-enumerated,
+// so the two can't drift apart. Used by the HTML export (GH-0690) to classify
+// an image-typed *document* citation (a .jpg ingested as a whole document,
+// distinct from an extracted image chunk) for embedding.
+export const IMAGE_EXTS = new Set(
+  Object.entries(MIME_BY_EXT)
+    .filter(([, mime]) => mime.startsWith('image/'))
+    .map(([ext]) => ext)
+);

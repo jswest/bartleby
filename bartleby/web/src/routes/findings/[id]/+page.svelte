@@ -5,6 +5,7 @@
   import SourceViewer from "$lib/components/SourceViewer.svelte";
   import { substituteCitations } from "$lib/citations.js";
   import { CHUNK_ICON } from "$lib/icons.js";
+  import { slugify } from "$lib/format.js";
 
   export let data;
 
@@ -180,10 +181,9 @@
 
   function downloadMarkdown() {
     const blob = new Blob([data.finding.body], { type: "text/markdown" });
-    const name = data.finding.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${name}.md`;
+    a.download = `${slugify(data.finding.title)}.md`;
     a.click();
   }
 

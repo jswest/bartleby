@@ -130,3 +130,29 @@ not the parent PDF), the literal (unmangled) `.txt` content including its
 `/chunks/` or cross-finding `/findings/999` links, and balanced `<script>`
 tags. `uv run pytest` (untouched — no Python changed) and `npm run build`
 both pass.
+
+**Post-review hardening (fused-critic pass on PR #692).** Two correctness
+fixes landed after the initial cut, both export-only:
+
+- A `[^url:…]` note's `href` is now only emitted when the ref matches
+  `/^https?:\/\//i`; anything else (a `javascript:` URL being the obvious
+  case) renders as inert text instead of a clickable link. This export is
+  explicitly meant to be emailed or archived and opened by third parties, so
+  an inert-in-the-live-app-but-still-a-real-`<a href>`-in-the-export citation
+  was a real hole — the live page (`externalNote()` in `+page.svelte`) has the
+  same pre-existing gap and was deliberately left alone; this guard is
+  export-only.
+- A resolved `[^chunk:N]` citation whose archived file is missing on disk at
+  export time (`buildEmbedPayload` returns `null`) used to still render as a
+  normal, clickable ¶ "source" note — clicking it did nothing (the runtime's
+  `CITATIONS` map never got an entry for it), silently. It now renders inert
+  — no button, no `CITATIONS` wiring — with the note's usual label plus a
+  visible "— source file missing at export time" suffix, styled the same
+  muted-italic way an external `[^doc:…]` reference already is. The dagger
+  glyph and "source" head stay ¶/amber (unchanged): the citation *did*
+  resolve against the DB; only the archived bytes are absent, which is a
+  different fact from a chunk that no longer exists at all (‡). Font files
+  missing at export time are deliberately NOT given the same soft-fail
+  treatment — `buildFontFaceCss()` still throws (a loud 500) rather than
+  silently shipping a file with wrong fonts, since "exactly as is, including
+  the fonts" is the point of the feature.

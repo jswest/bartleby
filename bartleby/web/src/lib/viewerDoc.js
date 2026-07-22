@@ -3,7 +3,13 @@
 // standalone HTML export (routes/findings/[id]/export.html/+server.js —
 // GH-0690), so the exported file's embedded sources are styled identically to
 // the live app without a second copy of this CSS to drift out of sync.
-//
+
+// File-type dispatch by extension — also shared by both, so a cited file
+// renders through the same branch live and in the export.
+export const RE_MARKDOWN = /\.(md|markdown)$/i;
+export const RE_TEXT = /\.(txt|text|log)$/i;
+export const RE_PDF = /\.pdf$/i;
+
 // The iframe is its own document and can't reach app.css or its CSS variables,
 // so the source styling is inlined. Neutral and compact — readable evidence,
 // not a pixel-match to the prose pane.

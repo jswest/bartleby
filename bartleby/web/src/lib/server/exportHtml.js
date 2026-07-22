@@ -13,10 +13,10 @@ import path from 'node:path';
 import { Marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
 import { getFinding, getDocumentFilePath, getImageFilePath } from './queries.js';
-import { MIME_BY_EXT } from './mime.js';
+import { MIME_BY_EXT, IMAGE_EXTS } from './mime.js';
 import { substituteCitations } from '../citations.js';
-import { escapeHtml } from '../format.js';
-import { wrapViewerDocument } from '../viewerDoc.js';
+import { escapeHtml, slugify } from '../format.js';
+import { wrapViewerDocument, RE_MARKDOWN, RE_TEXT, RE_PDF } from '../viewerDoc.js';
 
 // ---------------------------------------------------------------------------
 // Markdown rendering — an ISOLATED Marked instance, not the app's global
@@ -34,10 +34,6 @@ exportMarked.use({
       DOMPurify.sanitize(html).replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ')
   }
 });
-
-function renderMarkdown(text) {
-  return exportMarked.parse(text);
-}
 
 // ---------------------------------------------------------------------------
 // Fonts. `bartleby serve` always runs the vite DEV server out of
@@ -244,13 +240,10 @@ p.meta, .meta { font-family: var(--font-sans); font-size: var(--text-xs); font-w
 `;
 
 // ---------------------------------------------------------------------------
-// Source classification + embedding. Mirrors SourceViewer.svelte's own
-// isMarkdown/isText/isPdf dispatch regexes exactly, so a cited file renders
-// through the same branch live and in the export.
-const RE_MARKDOWN = /\.(md|markdown)$/i;
-const RE_TEXT = /\.(txt|text|log)$/i;
-const RE_PDF = /\.pdf$/i;
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif']);
+// Source classification + embedding. RE_MARKDOWN/RE_TEXT/RE_PDF/IMAGE_EXTS are
+// shared with SourceViewer.svelte's own dispatch ($lib/viewerDoc.js,
+// $lib/server/mime.js), so a cited file renders through the same branch live
+// and in the export.
 
 // One citation → one embed key + page. `key` dedupes: several citations
 // against the same document (at different pages) share one embedded payload,
@@ -285,8 +278,6 @@ function buildEmbedPayload(classified, c) {
   // the live citationUrl/label — see its comment); the archived jpg on disk
   // has its own name, which is what's actually being embedded here.
   const fileName = isImageChunk ? path.basename(filePath) : (c.file_name ?? path.basename(filePath));
-  const ext = path.extname(filePath).toLowerCase();
-  const mime = MIME_BY_EXT[ext] ?? 'application/octet-stream';
   const data = fs.readFileSync(filePath);
 
   if (classified.embedKind === 'pdf') {
@@ -296,8 +287,9 @@ function buildEmbedPayload(classified, c) {
     return { kind: 'inline', srcdoc: wrapViewerDocument(`<pre>${escapeHtml(data.toString('utf-8'))}</pre>`), fileName };
   }
   if (classified.embedKind === 'markdown') {
-    return { kind: 'inline', srcdoc: wrapViewerDocument(renderMarkdown(data.toString('utf-8'))), fileName };
+    return { kind: 'inline', srcdoc: wrapViewerDocument(exportMarked.parse(data.toString('utf-8'))), fileName };
   }
+  const mime = MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
   if (classified.embedKind === 'image') {
     return { kind: 'image', dataUri: `data:${mime};base64,${data.toString('base64')}`, fileName };
   }
@@ -307,14 +299,25 @@ function buildEmbedPayload(classified, c) {
   return { kind: 'raw', dataUri: `data:${mime};base64,${data.toString('base64')}`, fileName };
 }
 
+// Only an http(s) URL becomes a real, clickable href — this file is meant to
+// be emailed/archived and opened by third parties, so a note carrying e.g.
+// `[^url:javascript:alert(1)]` must not become an active link. (The live page
+// has this same pre-existing gap in its own externalNote() rendering; left
+// alone there — this export-only guard doesn't change live behavior.)
+const RE_HTTP_URL = /^https?:\/\//i;
+
 // ---------------------------------------------------------------------------
 // Margin-note HTML. Head label is always "source" / "missing source" — the
 // live template (+page.svelte) uses that generic label regardless of dagger
-// kind, so this matches. Two deliberate departures from the live markup
-// (GH-0690 resolved questions): a [^finding:N] note renders inert (no link —
-// the other finding isn't in this file) and a resolved chunk note drops the
-// "open chunk" icon link (/chunks/N doesn't exist standalone either).
-function renderMarginNoteHtml(note) {
+// kind, so this matches. Deliberate departures from the live markup (GH-0690
+// resolved questions): a [^finding:N] note renders inert (no link — the other
+// finding isn't in this file); a resolved chunk note drops the "open chunk"
+// icon link (/chunks/N doesn't exist standalone either); a resolved chunk
+// note whose archived file was missing at export time (`embeddedChunkIds`
+// doesn't have it) renders inert with a visible hint instead of a dead,
+// still-clickable button — same ¶/"source" glyph and head (it did resolve
+// against the DB; only the file embed failed), just non-interactive body text.
+function renderMarginNoteHtml(note, embeddedChunkIds) {
   const headLabel = note.gone ? 'missing source' : 'source';
   const kindClass = note.gone ? 'gone' : note.finding ? 'finding' : 'source';
   let bodyHtml;
@@ -323,11 +326,15 @@ function renderMarginNoteHtml(note) {
   } else if (note.finding) {
     bodyHtml = `<p class="margin-note__body">${escapeHtml(note.label)}</p>`;
   } else if (note.external === 'url') {
-    bodyHtml = `<p class="margin-note__body"><a href="${escapeHtml(note.href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}</a></p>`;
+    bodyHtml = RE_HTTP_URL.test(note.href)
+      ? `<p class="margin-note__body"><a href="${escapeHtml(note.href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}</a></p>`
+      : `<p class="margin-note__body">${escapeHtml(note.label)}</p>`;
   } else if (note.external === 'doc') {
     bodyHtml = `<p class="margin-note__body margin-note__body--doc" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}</p>`;
-  } else {
+  } else if (embeddedChunkIds.has(note.chunkId)) {
     bodyHtml = `<span class="margin-note__body margin-note__source-row"><button type="button" class="margin-note__link" data-chunk-id="${note.chunkId}" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}</button></span>`;
+  } else {
+    bodyHtml = `<p class="margin-note__body margin-note__body--doc" title="${escapeHtml(note.title)}">${escapeHtml(note.label)} — source file missing at export time</p>`;
   }
   return `<div class="margin-note margin-note--${kindClass}" data-note="${note.n}">
     <p class="margin-note__head"><span class="margin-note__dagger">${note.dagger}${note.n}</span> ${headLabel}</p>
@@ -343,13 +350,6 @@ function buildMetaLine(finding) {
     : null;
   const bits = [finding.session_name, modelMeta, finding.created_at].filter(Boolean);
   return `<span class="finding-id">#${finding.finding_id}</span> · ${escapeHtml(bits.join(' · '))}`;
-}
-
-// Filename slug — mirrors _slug() in bartleby/commands/finding.py and the web
-// viewer's downloadMarkdown().
-function slug(title) {
-  const s = (title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return s || 'finding';
 }
 
 // Escapes `<` out of a JSON payload before it goes inside a <script> tag, so a
@@ -559,9 +559,17 @@ export function buildFindingExportHtml(findingId) {
 
   const byId = new Map(finding.citations.map((c) => [c.chunk_id, c]));
   const { markdown, notes } = substituteCitations(finding.body, byId, null);
-  const bodyHtml = renderMarkdown(markdown);
+  const bodyHtml = exportMarked.parse(markdown);
 
+  // One embed payload per unique document/image id — `sources` is set
+  // unconditionally (including `null`, when the archived file is missing),
+  // so a repeat citation against the same key is a single lookup rather than
+  // a re-stat-and-retry. `embeddedChunkIds` (only the chunks whose payload
+  // came back non-null) gates both the runtime's CITATIONS wiring and the
+  // margin note's clickability — a chunk that resolved in the DB but whose
+  // file is gone renders inert, not a dead-but-clickable button.
   const sources = new Map();
+  const embeddedChunkIds = new Set();
   const citationMeta = {};
   for (const note of notes) {
     if (note.gone || note.finding || note.external) continue;
@@ -569,10 +577,10 @@ export function buildFindingExportHtml(findingId) {
     const classified = c && classifyCitation(c);
     if (!classified) continue;
     if (!sources.has(classified.key)) {
-      const payload = buildEmbedPayload(classified, c);
-      if (payload) sources.set(classified.key, payload);
+      sources.set(classified.key, buildEmbedPayload(classified, c));
     }
-    if (sources.has(classified.key)) {
+    if (sources.get(classified.key)) {
+      embeddedChunkIds.add(note.chunkId);
       citationMeta[note.chunkId] = { key: classified.key, page: classified.page ?? null };
     }
   }
@@ -582,10 +590,12 @@ export function buildFindingExportHtml(findingId) {
     metaLine: buildMetaLine(finding),
     description: finding.description,
     bodyHtml,
-    notesHtml: notes.map(renderMarginNoteHtml).join('\n'),
+    notesHtml: notes.map((note) => renderMarginNoteHtml(note, embeddedChunkIds)).join('\n'),
     citationMetaJson: jsonScriptSafe(citationMeta),
-    sourcesJson: jsonScriptSafe(Object.fromEntries(sources))
+    sourcesJson: jsonScriptSafe(
+      Object.fromEntries([...sources].filter(([, payload]) => payload != null))
+    )
   });
 
-  return { html, filename: `${slug(finding.title)}.html` };
+  return { html, filename: `${slugify(finding.title)}.html` };
 }

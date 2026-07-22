@@ -1,7 +1,7 @@
 <script>
   import { marked } from "marked";
   import { escapeHtml } from "$lib/format.js";
-  import { wrapViewerDocument } from "$lib/viewerDoc.js";
+  import { wrapViewerDocument, RE_MARKDOWN, RE_TEXT, RE_PDF } from "$lib/viewerDoc.js";
 
   // The right-hand source pane, shared by /findings/[id] and /documents/[id].
   // Dispatches on file type: markdown renders to a sandboxed iframe (below),
@@ -15,14 +15,14 @@
   export let src = null;
   export let sourceText = null;
 
-  $: isMarkdown = /\.(md|markdown)$/i.test(fileName ?? "");
+  $: isMarkdown = RE_MARKDOWN.test(fileName ?? "");
   // Plain text stays literal — never routed through marked. marked runs with
   // breaks: false (see +layout.svelte), so single newlines would collapse into
   // run-on paragraphs and stray #/*/_ chars would be misread as markdown.
-  $: isText = /\.(txt|text|log)$/i.test(fileName ?? "");
+  $: isText = RE_TEXT.test(fileName ?? "");
   // PDFs need the native viewer (and #page= jumps), which a sandbox would hobble;
   // every other raw file is sandboxed so an ingested HTML doc can't run scripts.
-  $: isPdf = /\.pdf$/i.test(fileName ?? "");
+  $: isPdf = RE_PDF.test(fileName ?? "");
   // Markdown and plain text both render inline (into the iframe below);
   // everything else falls through to the raw-file iframe branch.
   $: isInline = isMarkdown || isText;
