@@ -25,7 +25,7 @@ are the set, assembled on an omnibus branch, then promoted.
 |---|---|---|---|
 | **director** | plan, dispatch, triage, assemble, promote | the session (you) — but omnibus work runs in its own **director worktree**, never the shared checkout | strong |
 | **players** | implement one issue — code, test, self-tidy, commit, PR | subagents, in parallel, each its own sibling worktree | cheap |
-| **critics** | review the work — a **correctness critic** and a **simplicity critic** | subagents the director spools | strong (per-unit simplicity: cheap) |
+| **critics** | review the work — one fused **leaf critic** (both briefs) for a leaf; a **correctness critic** and a **cross-cutting simplicity critic** for an assembled omnibus | subagents the director spools | strong |
 
 The director runs the show — plan, dispatch, triage, assemble, promote — and
 never grinds: the implementation churn (big reads, test loops, edits) lives in
@@ -177,8 +177,7 @@ Two tiers, resolved **flag > config > default**:
 - **director** — strong.
 - **players** — cheap by default (`player_tier`); there are many of them, and
   that's where token spend concentrates.
-- **critics** — strong, except the simplicity critic's **per-unit** pass (a
-  focused review of one small diff), which is cheap.
+- **critics** — strong.
 - **`--strong`** lifts everything to strong; **`--thrifty`** drops everything to
   cheap.
 
@@ -200,6 +199,12 @@ Config loaded (detect+persist on first run; see *Detection & first run*). Signet
 self-check honored. `gh` authed. Working tree of the base is clean. Honor
 `guardrails` verbatim throughout. `guard_hook`, if set, is informational — the
 worktree discipline below is what keeps work off the base.
+
+**Test-output discipline:** whenever the director runs `test_cmd` in-session
+(merge-train, triage re-runs, a docs sweep that touched source), redirect the
+output to a file and surface only the one-line summary on green, or the failing
+tail on red — never the full scroll. Players run the suite inside their own
+throwaway contexts; this rule keeps the director's session lean.
 
 ## 1. Resolve target and argument
 Target = `--onto <branch>` if given, else `base_branch`. Fetch the issue **and
@@ -246,9 +251,10 @@ proceed.
    so they reach the player even when the plan gate was skipped.
 3. The player runs its loop (§The players) → pushes its branch → opens the
    **issue → target** PR.
-4. On the player's branch, in parallel: the **simplicity critic** and the
-   **correctness critic** review it (§The critics). Then the triage loop
-   (§Triage). (No cross-cutting pass — a leaf is a set of one.)
+4. On the player's branch, the **fused leaf critic** reviews it — one subagent
+   carrying both briefs, reporting correctness and simplicity findings
+   separately (§The critics). Then the triage loop (§Triage). (No cross-cutting
+   pass — a leaf is a set of one.)
 5. **Docs sweep** (§Docs sweep) on the player's branch.
 6. **Stop.** The PR is the deliverable; the human merges. (Target is `main` in
    the common case → no promotion. Target is an omnibus branch → that omnibus's
@@ -278,10 +284,11 @@ proceed.
    **comment-derived corrections** in the dispatch payload (as in §2.2). Each
    player lands its sub-issue and opens a **"Part of #<omnibus>"** sub-PR onto the
    omnibus branch (no `Closes`).
-4. **Merge-train** (serial, never N-way): for each sub-PR, the **simplicity
-   critic** reviews its diff before integrating; apply accepted fixes to the
-   sub-PR branch. Then integrate and run the integration `test_cmd` on the
-   post-merge omnibus branch — green + clean → `gh pr merge`, then **tick this
+4. **Merge-train** (serial, never N-way): for each sub-PR, integrate and run the
+   integration `test_cmd` on the post-merge omnibus branch — no per-unit critic
+   here; the player's self-tidy (§The players 2b) is the per-unit backstop, and
+   the cross-cutting pass (§3.5) re-covers the assembled result. Green + clean
+   → `gh pr merge`, then **tick this
    sub-issue's checklist line** `[ ]→[x]` with its sub-PR number (see *Live
    progress*); conflict or red → **park** (leave the sub-PR open, record it). No
    unattended conflict resolution.
@@ -325,8 +332,9 @@ inherits the session's permission posture. Its loop:
       within `auto_skip_globs`, or `test_cmd` is `""`. Note once when skipped.
    b. **Self-tidy** — reread your own diff and remove the obvious: dead code,
       needless abstraction, a thing you just wrote that the codebase already had.
-      (The simplicity critic reviews independently once you open your PR — just
-      don't leave obvious mess.)
+      (A critic still reviews downstream — the fused leaf critic on a leaf, the
+      cross-cutting pass on an assembled omnibus — but a sub-PR gets no per-unit
+      review of its own, so your self-tidy is the only tidy pass it sees.)
    c. Commit (in the worktree; never on the base branch).
 3. If `decisions_dir` is set, record any decision as its own additive **file**,
    `<decisions_dir>/GH-<issue:0000>-<slug>-0001.md` (issue number four-zero-padded;
@@ -344,30 +352,37 @@ inherits the session's permission posture. Its loop:
 ## The critics
 The director spools the critics as subagents, independent of the authors. Their
 findings are **advisory** — the director triages them (§Triage); critics never
-commit. Two of them:
+commit. Two briefs, spooled differently per path:
 
-### The correctness critic
+- **Leaf** — one **fused leaf critic**: a single subagent carrying both briefs
+  over the leaf branch, reporting correctness and simplicity findings
+  separately. One spool, one diff read — a leaf diff is small enough that
+  neither lens loses focus.
+- **Omnibus, after assembly** — the **correctness critic** and the
+  **cross-cutting simplicity critic**, in parallel: the assembled diff is big
+  enough that each brief warrants its own context. Sub-PRs get no critic of
+  their own in the merge-train — the player's self-tidy is the per-unit
+  backstop, and the cross-cutting pass re-covers the assembled result.
+
+### The correctness brief
 Hunts bugs, especially at integration seams. Risk-ranked, plain-language
-findings. Reviews the leaf branch, or the assembled omnibus.
+findings. Reads the leaf branch, or the assembled omnibus.
 
-### The simplicity critic
-Reviews for needless complexity, at two moments:
+### The simplicity brief
+Reviews for needless complexity. On a leaf it reads the one diff. Cross-cutting
+— after omnibus assembly — it hunts what only a wide view shows: **cross-issue
+and cross-codebase duplication** (two sub-issues built the same helper; a player
+reinvented an existing util) and seam-level over-engineering — overlaps, not the
+per-diff nits self-tidy already handled.
 
-- **Per-unit** (cheap) — reviews each leaf branch, and each sub-PR as it lands in
-  the merge-train, before it's integrated.
-- **Cross-cutting** (strong) — after assembly, reviews the whole omnibus for what
-  only a wide view shows: **cross-issue and cross-codebase duplication** (two
-  sub-issues built the same helper; a player reinvented an existing util) and
-  seam-level over-engineering. It hunts overlaps, not the per-diff nits the
-  per-unit pass already covered.
-
-Its brief, over the given diff:
+The brief, over the given diff:
 
 > You are a refactoring specialist with one conviction: the best code is the
 > least code that clearly expresses intent. Every line must earn its place — you
 > *remove* complexity, you do not add cleverness. Review in three passes, macro
 > to micro, and report **only what you're confident about** — never taste, style,
-> or bikeshedding, and **never bugs** (the correctness critic owns those).
+> or bikeshedding, and **never bugs under this lens** (the correctness brief
+> owns those; a fused leaf critic reports them there, separately).
 >
 > 1. **Architectural.** Does this component need to exist, or can its
 >    responsibility be absorbed elsewhere? Unnecessary layers of indirection,
@@ -399,9 +414,9 @@ Its brief, over the given diff:
 > Output: per finding, 1–2 sentences on what you found and why it's a problem,
 > then the simpler form.
 
-Either critic may be **skipped for a trivial or docs-only diff** (same spirit as
-the test auto-skip) — say so when you do. A leaf has no cross-issue dimension, so
-its per-unit simplicity pass plus the correctness critic are the whole review.
+A critic may be **skipped for a trivial or docs-only diff** (same spirit as
+the test auto-skip) — say so when you do. A leaf has no cross-issue dimension,
+so the fused leaf critic is the whole review.
 
 ## Triage (the loop)
 Union the critics' findings and dedupe. Then, up to `max_critic_passes`:
