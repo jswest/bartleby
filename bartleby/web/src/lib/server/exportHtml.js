@@ -317,7 +317,11 @@ const RE_HTTP_URL = /^https?:\/\//i;
 // doesn't have it) renders inert with a visible hint instead of a dead,
 // still-clickable button — same ¶/"source" glyph and head (it did resolve
 // against the DB; only the file embed failed), just non-interactive body text.
-function renderMarginNoteHtml(note, embeddedChunkIds) {
+// The hint only appears for citations that *had* a file to lose
+// (`fileBackedChunkIds`); a file-less kind (memory chunk, image whose
+// document_images row is gone) renders inert with the bare label, matching
+// the live page's neutral placeholder.
+function renderMarginNoteHtml(note, embeddedChunkIds, fileBackedChunkIds) {
   const headLabel = note.gone ? 'missing source' : 'source';
   const kindClass = note.gone ? 'gone' : note.finding ? 'finding' : 'source';
   let bodyHtml;
@@ -334,7 +338,8 @@ function renderMarginNoteHtml(note, embeddedChunkIds) {
   } else if (embeddedChunkIds.has(note.chunkId)) {
     bodyHtml = `<span class="margin-note__body margin-note__source-row"><button type="button" class="margin-note__link" data-chunk-id="${note.chunkId}" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}</button></span>`;
   } else {
-    bodyHtml = `<p class="margin-note__body margin-note__body--doc" title="${escapeHtml(note.title)}">${escapeHtml(note.label)} — source file missing at export time</p>`;
+    const hint = fileBackedChunkIds.has(note.chunkId) ? ' — source file missing at export time' : '';
+    bodyHtml = `<p class="margin-note__body margin-note__body--doc" title="${escapeHtml(note.title)}">${escapeHtml(note.label)}${hint}</p>`;
   }
   return `<div class="margin-note margin-note--${kindClass}" data-note="${note.n}">
     <p class="margin-note__head"><span class="margin-note__dagger">${note.dagger}${note.n}</span> ${headLabel}</p>
@@ -570,12 +575,14 @@ export function buildFindingExportHtml(findingId) {
   // file is gone renders inert, not a dead-but-clickable button.
   const sources = new Map();
   const embeddedChunkIds = new Set();
+  const fileBackedChunkIds = new Set();
   const citationMeta = {};
   for (const note of notes) {
     if (note.gone || note.finding || note.external) continue;
     const c = byId.get(note.chunkId);
     const classified = c && classifyCitation(c);
     if (!classified) continue;
+    fileBackedChunkIds.add(note.chunkId);
     if (!sources.has(classified.key)) {
       sources.set(classified.key, buildEmbedPayload(classified, c));
     }
@@ -590,7 +597,7 @@ export function buildFindingExportHtml(findingId) {
     metaLine: buildMetaLine(finding),
     description: finding.description,
     bodyHtml,
-    notesHtml: notes.map((note) => renderMarginNoteHtml(note, embeddedChunkIds)).join('\n'),
+    notesHtml: notes.map((note) => renderMarginNoteHtml(note, embeddedChunkIds, fileBackedChunkIds)).join('\n'),
     citationMetaJson: jsonScriptSafe(citationMeta),
     sourcesJson: jsonScriptSafe(
       Object.fromEntries([...sources].filter(([, payload]) => payload != null))
