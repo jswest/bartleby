@@ -73,6 +73,29 @@ The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) i
 uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
 ```
 
+If you'd rather sidestep SSH entirely, swap the wsjpt source for HTTPS — git then authenticates through the normal credential helper (a PAT, usually already cached in the macOS keychain from prior HTTPS clones):
+
+```
+--with 'git+https://github.dowjones.net/data/wsjpt.git'
+```
+
+Sticking with SSH: if the install hangs indefinitely at `resolving dependencies...`, a passphrase-protected SSH key is the likely cause — `uv` runs git non-interactively, so the key can't prompt for its passphrase and the fetch silently blocks rather than erroring. Fix by loading the key into `ssh-agent`:
+
+```
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+```
+
+On macOS, persist it across reboots with `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` and this `~/.ssh/config` stanza:
+
+```
+Host github.dowjones.net
+  AddKeysToAgent yes
+  UseKeychain yes
+```
+
+With a local wsjpt checkout, `--with '/abs/path/to/wsjpt'` avoids the network fetch entirely.
+
 For development:
 
 ```
