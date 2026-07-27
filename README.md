@@ -90,7 +90,7 @@ On macOS, persist it across reboots with `ssh-add --apple-use-keychain ~/.ssh/id
 
 ```
 Host github.dowjones.net
-  AddKeysToKeychain yes
+  AddKeysToAgent yes
   UseKeychain yes
 ```
 
