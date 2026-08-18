@@ -1,3 +1,5 @@
 # Findings are facts, not diary entries
 
+> Source: [#700](https://github.com/jswest/bartleby/issues/700)
+
 a finding is one fact about the documents, addressed to a reader with zero session context — one claim per finding. No correction narratives for errors that were never saved (save the corrected fact plainly instead), no retrieval methodology, no session-internal tier or step references, no "earlier in this session." Findings feed the web UI and future sessions' memory search, so a diary entry saved as a finding pollutes both surfaces. Process observations, tooling lessons, and self-corrections belong in the agent's reply to the human, not the findings table. Enforced in `SKILL.md` prose only — no schema change.
