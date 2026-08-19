@@ -92,6 +92,7 @@ def test_read_tags_empty(seeded_project, capsys):
     read_tags.main(["--project", seeded_project["project"]])
     out = json.loads(capsys.readouterr().out)
     assert out.pop("run")["session_id"]  # every result echoes the run (#547)
+    assert out.pop("project") == seeded_project["project"]  # #696
     assert out == {"tags": []}
 
 
@@ -257,6 +258,7 @@ def test_rename_tag_renames_and_preserves_assignment(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out.pop("run")["session_id"]  # every result echoes the run (#547)
+    assert out.pop("project") == seeded_project["project"]  # #696
     assert out == {
         "status": "renamed",
         "tag_id": f"tag:{tag_id}",
@@ -977,6 +979,7 @@ def test_assign_tag_creates_assignment(seeded_project, capsys):
     ])
     out = json.loads(capsys.readouterr().out)
     assert out.pop("run")["session_id"]  # every result echoes the run (#547)
+    assert out.pop("project") == seeded_project["project"]  # #696
     assert out == {
         "tag_id": f"tag:{tag_id}", "tag": "bad_ocr",
         "value": None, "chunk_id": None,

@@ -148,6 +148,7 @@ def run(
     result: dict | None = None
     error_envelope: dict | None = None
     args_dict: dict[str, Any] = {}
+    project: str | None = None
 
     # Only the argparse call gets the USAGE_ERROR treatment: a non-zero
     # SystemExit from parse_args (argparse's usage error) becomes the JSON
@@ -176,6 +177,12 @@ def run(
                 "NO_ACTIVE_PROJECT",
                 "No active project. Run `bartleby project create <name>`.",
             )
+        # Echo the *resolved* name back onto args (issue #696): most calls omit
+        # --project and ride the active-project pointer, so args.project alone
+        # is usually None even once a project has resolved. A work() callback
+        # that needs to name the project it's reading — e.g. read_chunks'
+        # 100%-miss warning — reads it from here rather than re-resolving.
+        args.project = project
 
         conn = open_db(project)
         # A non-agent caller (the web UI) sets BARTLEBY_SESSION_NAME to pin its
@@ -269,7 +276,12 @@ def run(
         # envelope; the run row is committed by now (a mutating work's
         # `with conn:` has exited), so the read sees it.
         if error_envelope is None and isinstance(result, dict) and session_id is not None:
-            result = {**result, "run": run_echo(conn, session_id)}
+            # Also echo the resolved project name (issue #696): the active
+            # project is shared global state another process can repoint, so
+            # every result names which corpus it actually ran against — the
+            # one place to add it so all ~two-dozen skill scripts get it
+            # uniformly, rather than each script threading it through itself.
+            result = {**result, "run": run_echo(conn, session_id), "project": project}
         # log_call needs a resolved session_id (its FK target); close must run
         # on every opened path regardless, or the conn leaks. See module docstring.
         if session_id is not None:

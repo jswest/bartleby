@@ -448,3 +448,36 @@ def test_run_echo_present_on_every_result(project_env, capsys):
     assert set(out["run"]) >= {
         "run_key", "session_id", "session_name", "model", "model_set_by_llm",
     }
+
+
+# --- resolved-project echo, every result (issue #696) ------------------------
+
+
+def test_project_echoed_on_every_result(project_env, capsys):
+    """Every successful result names the project it actually resolved — added
+    once in the shared envelope (not per-script) so a repointed
+    ``active_project`` is visible on any skill call, not just reads that hit a
+    100%-miss warning."""
+    project = project_env
+
+    def work(*, conn, args, session_id) -> dict:
+        return {"ok": True}
+
+    run(tool_name="probe", parse_args=_parse_args, work=work,
+        argv=["--project", project])
+    out = json.loads(capsys.readouterr().out)
+    assert out["project"] == project
+
+
+def test_project_echoed_when_resolved_from_active_pointer(project_env, capsys):
+    """The echoed ``project`` is the *resolved* name even when the caller
+    omitted ``--project`` and rode the active-project pointer — the common
+    case, and the one the wrong-project incident (#696) actually hinges on."""
+    project = project_env
+
+    def work(*, conn, args, session_id) -> dict:
+        return {"ok": True}
+
+    run(tool_name="probe", parse_args=_parse_args, work=work, argv=[])
+    out = json.loads(capsys.readouterr().out)
+    assert out["project"] == project

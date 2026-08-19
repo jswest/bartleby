@@ -27,6 +27,13 @@ other modes are silently ignored (e.g. ``--window`` is read only in
 ``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document-id``
 mode).
 
+A ``--chunks`` lookup where every requested id comes back missing sets
+``warning`` naming the resolved project, and only then — a partial miss
+never sets it. A 100% miss on ids you just read is the tell for a wrong
+active project (shared global state another process can repoint), not a bad
+id; every successful call also echoes ``project`` (the resolved project
+name) in the top-level envelope regardless of mode. Exit stays 0 either way.
+
 In a memory-off session the finding wall (see ``read_finding``) extends here:
 finding-kind chunks authored by *another* session are walled off so an
 evaluation run can't read prior conclusions by chunk_id. ``--chunks`` drops
@@ -76,6 +83,7 @@ Direct-lookup output:
       "requested": ["chunk:<id>", ...],
       "missing": ["chunk:<id>", ...],
       "hints": {"chunk:<id>": str, ...},   # present only when a missing id is a live document_id
+      "warning": str,   # present only when EVERY requested id came back missing — see below
       "preview": int|null,
       "chunks": [{
         "chunk_id": "chunk:<id>",
@@ -208,7 +216,7 @@ def _chunks_from_rows(
 
 def _read_by_chunk_ids(
     conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int,
-    returning=None,
+    returning=None, project: str | None = None,
 ) -> dict:
     ordered = list(dict.fromkeys(chunk_ids))  # dedup, preserve order
 
@@ -305,6 +313,20 @@ def _read_by_chunk_ids(
     }
     if hints:
         out["hints"] = hints
+    # A 100%-miss read is almost never a batch of bad ids — it's the tell for
+    # a wrong active project (issue #696): the active project is shared global
+    # state another process can repoint mid-session, so a total miss on ids
+    # that read fine minutes earlier means "check the project", not "check the
+    # ids". A partial miss stays a quiet, ordinary result. Exit stays 0 either
+    # way (a genuinely stale/typo'd id set is a legitimate result too) — this
+    # is a warning in the envelope, not an error.
+    if ordered and len(missing) == len(ordered):
+        out["warning"] = (
+            f"All {len(ordered)} requested chunk id(s) came back missing in "
+            f"project '{project}' — if that's not the project you meant, "
+            "check the active project (`bartleby project use <name>`) before "
+            "assuming the ids are wrong."
+        )
     return format_output_ids(out)
 
 
@@ -465,7 +487,7 @@ def work(*, conn, args, session_id) -> dict:
     if args.chunk_ids is not None:
         return _read_by_chunk_ids(
             conn, args.chunk_ids, args.preview, mem=mem, session_id=session_id,
-            returning=args.returning,
+            returning=args.returning, project=args.project,
         )
     if args.around_chunk is not None:
         return _read_around_chunk(conn, args, session_id=session_id)
