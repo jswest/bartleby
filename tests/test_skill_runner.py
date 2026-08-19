@@ -319,6 +319,38 @@ def test_error_is_echoed_to_stderr_without_changing_stdout_envelope(
     assert captured.err.strip() == "INTERNAL_ERROR: RuntimeError: boom in work"
 
 
+def test_module_not_found_in_work_becomes_actionable_stale_install_error(
+    seeded_project, capsys
+):
+    """A ``ModuleNotFoundError`` raised inside ``work()`` — the shape you get
+    from a stale ``uv tool install --editable`` that hasn't picked up a
+    dependency added since install (issue #697) — is special-cased ahead of
+    the generic ``INTERNAL_ERROR`` catch-all. The envelope stays
+    ``{"error", "code"}`` with a non-zero exit, but the code is the distinct
+    ``STALE_INSTALL`` and the message names the fix instead of just echoing
+    the bare exception."""
+    project = seeded_project["project"]
+
+    def work(*, conn, args, session_id) -> dict:
+        # A real failed import (rather than a hand-built exception) so
+        # ``e.name`` is populated the same way it would be from the actual
+        # ``resolve_extension()`` -> ``import filetype`` failure (#697).
+        import bartleby_test_dependency_that_does_not_exist  # noqa: F401
+
+    with pytest.raises(SystemExit) as exc:
+        run(
+            tool_name="stale_install_probe",
+            parse_args=_parse_args,
+            work=work,
+            argv=["--project", project],
+        )
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["code"] == "STALE_INSTALL"
+    assert "bartleby_test_dependency_that_does_not_exist" in out["error"]
+    assert "uv tool install --reinstall" in out["error"]
+
+
 def test_usage_error_is_echoed_to_stderr(capsys):
     """The USAGE_ERROR path shares the same dual-channel emission: stdout keeps
     the envelope, stderr gets the ``code: message`` echo (issue #421)."""
