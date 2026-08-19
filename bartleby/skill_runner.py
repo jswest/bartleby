@@ -227,6 +227,30 @@ def run(
             result = work(conn=conn, args=args, session_id=session_id)
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
+    except ModuleNotFoundError as e:
+        # A dependency the installed code now imports isn't in the running
+        # environment. The common cause (issue #697) is a stale
+        # `uv tool install --editable` install: pulling new code picks it up
+        # immediately (it's just the source tree), but a newly added
+        # dependency does NOT get installed until the tool env is re-synced.
+        # That left users hitting a bare "ModuleNotFoundError: No module
+        # named 'filetype'" wrapped as an opaque INTERNAL_ERROR. Name the
+        # likely cause and the fix instead of guessing at the missing
+        # package or probing imports at startup — see
+        # docs/decisions/GH-0697-modulenotfound-stale-install-0001.md.
+        module = e.name or str(e)
+        error_envelope = {
+            "error": (
+                f"Missing dependency: {module}. The running environment doesn't "
+                "have a module the installed code now imports — most likely a "
+                "stale `uv tool install --editable` that hasn't picked up a "
+                "dependency added since you installed. Run "
+                "`uv tool install --reinstall <path-or-package>` (or otherwise "
+                "re-sync your environment) and retry. Original error: "
+                f"{type(e).__name__}: {e}"
+            ),
+            "code": "STALE_INSTALL",
+        }
     except Exception as e:  # noqa: BLE001 — catch-all by design
         error_envelope = {
             "error": f"{type(e).__name__}: {e}",

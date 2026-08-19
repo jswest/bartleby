@@ -191,7 +191,7 @@ uv tool install '.[docling,sec2md]' --force
 bartleby ready
 ```
 
-Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it.)
+Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1 *for a plain code change*; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it. **A new dependency is not a plain code change** — an editable/tool install just references your source tree, so it won't install anything newly added to `pyproject.toml` on its own. If a `git pull` bumped a dependency and you skipped the reinstall, the symptom is a stray `ModuleNotFoundError: No module named '<package>'` from a command that used to work fine ([#697](https://github.com/jswest/bartleby/issues/697)); fix it with `uv tool install --reinstall '.[docling,sec2md]'` — same as step 1, plus `--reinstall` to force the dependency resync.)
 
 **If the database schema changed**, existing projects won't open until they're brought up to date — a command will fail with a clear `schema version mismatch` message. Bring a project up to date with:
 
