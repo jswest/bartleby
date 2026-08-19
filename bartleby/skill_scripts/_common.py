@@ -29,8 +29,18 @@ _FINDING_CITATION_MARKER = re.compile(r"\[\^finding:(\d+)\]")
 # Citation-shaped but untyped: caret-less ``[N]`` and the now-obsolete bare
 # ``[^N]`` chunk form. Both render as bracketed prose but are silently dropped by
 # the typed extractor, so both are rejected loudly — see
-# :func:`reject_malformed_citations`.
+# :func:`reject_malformed_citations`. Exception: a caret-less exactly-4-digit
+# bracket (``[1998]``) is exempted there — that's the neutral case-citation
+# year shape (#698), not a chunk-id marker in practice.
 _MALFORMED_MARKER = re.compile(r"\[\^?(\d+)\]")
+# A caret-less, exactly-4-digit bracket — ``[1998]`` — matching neutral case
+# citations (``[1998] HKLRD 771``), which are bracketed-year by construction.
+# Never a valid chunk-id marker in practice, so exempt from the untyped-marker
+# guard below (#698). The careted form (``[^1998]``) is deliberately NOT
+# exempted: case citations never carry a caret, and ``[^N]`` is still the
+# obsolete bare-chunk-citation shape the guard exists to catch — exempting it
+# too would silently swallow a real malformed citation.
+_BRACKETED_YEAR = re.compile(r"^\[\d{4}\]$")
 # Typed citation marker: ``[^<scheme>:<ref>]``. The scheme is an alpha word.
 # ``chunk`` is the internal corpus-chunk scheme (matched by ``_CITATION_MARKER``
 # above); ``finding`` is the finding-link scheme (#654); ``url`` / ``doc`` are
@@ -235,9 +245,16 @@ def reject_malformed_citations(body: str) -> None:
     is also the marker's — so scan a copy with typed markers masked out, else a
     valid ``[^chunk:N]`` / ``[^url:…]`` marker false-trips this guard. (Refs may not
     themselves contain ``]``; that terminates the marker — percent-encode it.)
+
+    A caret-less exactly-4-digit bracket (``[1998]``) is exempted — see
+    ``_BRACKETED_YEAR`` — so ordinary prose citing a neutral case citation
+    (``[1998] HKLRD 771``) doesn't trip the guard.
     """
     scrubbed = _EXTERNAL_MARKER.sub(" ", body)
-    bad = [m.group(0) for m in _MALFORMED_MARKER.finditer(scrubbed)]
+    bad = [
+        m.group(0) for m in _MALFORMED_MARKER.finditer(scrubbed)
+        if not _BRACKETED_YEAR.match(m.group(0))
+    ]
     if not bad:
         return
     deduped = list(dict.fromkeys(bad))
