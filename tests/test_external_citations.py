@@ -90,6 +90,34 @@ def test_malformed_check_ignores_bracketed_digits_inside_external_ref():
     assert exc.value.code == "MALFORMED_CITATION"
 
 
+def test_malformed_check_exempts_bracketed_year_neutral_citation():
+    """A caret-less ``[YYYY]``-shaped neutral case citation (e.g.
+    ``Re Estate of Example [1998] HKLRD 771``) is ordinary prose, not a
+    citation-shaped marker — must not trip MALFORMED_CITATION. Regression
+    for #698."""
+    body = "Corpus claim[^chunk:42]. See Re Estate of Example [1998] HKLRD 771."
+    reject_malformed_citations(body)  # must not raise
+
+
+def test_malformed_check_still_rejects_non_four_digit_bracket():
+    """The exemption is narrowly the 4-digit year shape — a genuinely
+    malformed short marker like ``[12]`` is still rejected."""
+    with pytest.raises(SkillError) as exc:
+        reject_malformed_citations("Corpus claim[^chunk:42]. Bad cite [12] here.")
+    assert exc.value.code == "MALFORMED_CITATION"
+    assert "[12]" in exc.value.extra["malformed_markers"]
+
+
+def test_malformed_check_still_rejects_careted_four_digit_bracket():
+    """The 4-digit exemption is caret-less only: ``[^1998]`` is still the
+    obsolete bare-chunk-citation shape, not a case citation (those never
+    carry a caret) — still rejected."""
+    with pytest.raises(SkillError) as exc:
+        reject_malformed_citations("Corpus claim[^chunk:42]. Bad cite [^1998] here.")
+    assert exc.value.code == "MALFORMED_CITATION"
+    assert "[^1998]" in exc.value.extra["malformed_markers"]
+
+
 # --- integration: save / read ------------------------------------------------
 
 def _first_chunk_id(seeded_project) -> int:
