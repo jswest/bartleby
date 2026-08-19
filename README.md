@@ -201,6 +201,8 @@ bartleby project upgrade <name>
 
 Most updates upgrade in place. When a change isn't backward-compatible, `upgrade` tells you to **re-ingest** instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
 
+**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)), check them: an old-style citation marker doesn't error, it just silently stops being recognized, so that finding's `finding_citations` can quietly go stale with no signal that anything broke. A one-time backfill already fixed every corpus present on a given machine when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere, or one that predates that fix, can still carry unrecognized markers. `bartleby project upgrade` won't touch this — it's a data issue, not a schema one. Fix a stale finding by rewriting its body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)) — it re-extracts citations from the body and rebuilds `finding_citations` under the current grammar.
+
 ### Gotchas
 
 - Don't keep the repo (or its `.venv`) in a synced folder like Dropbox, iCloud, or OneDrive — syncing rewrites file paths and quietly breaks the install.
