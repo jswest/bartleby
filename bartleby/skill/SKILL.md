@@ -160,6 +160,8 @@ Read the `verdict`, then act:
 
 The diagnosis is a hint, not a guarantee: a purely-semantic presence (the chunk is *about* the term but never spells it) is invisible to these COUNTs — only `search` confirms that. An empty query carries no diagnosis. **Not** a substitute for `search`: scan stays a strict body-text grep by design (every returned snippet contains the query); the diagnosis only *reports* where the signal is.
 
+**FTS5 has no stemming.** `scan` and `search`'s FTS leg match the literal token — singular and plural are different queries (`grant` won't match `grants`), and so are other inflections (`file` / `filed` / `filing`). A zero or a low count can mean "wrong word form," not "absent." Before recording an absence, try the plausible inflections, or confirm with `search`'s semantic leg, which isn't sensitive to this.
+
 ### Undated corpus, temporal task: verify before you prompt
 
 When your task needs dates (filtering, ordering, "what happened before X") and `describe_corpus` shows a high `undated_document_count`, the dates may still be recoverable from the filenames in bulk — but **don't prompt the human blindly**. Verify a candidate regex first with `probe_dates` (read-only — it writes nothing):
@@ -188,6 +190,8 @@ Default search returns no context — the hit text alone. Reach for `--add-conte
 - **Citing chunks you haven't read in full.** A chunk_id you saw in a search result is a *candidate*. Before citing it in a finding — especially for claims that carry weight or anything quoted verbatim — run `read_chunks --chunks chunk:<id>` and confirm the chunk says what you're attributing to it.
 
 A useful heuristic: if a `chunk_id` appears in a finding you're about to save and it never showed up earlier in your conversation as something you read in full, you're guessing. Stop and fetch.
+
+**A claim can straddle a chunk boundary.** Chunking splits on length, not on where a sentence or a fact happens to end — the text you need may finish in the next chunk, or start in the one before. One chunk's silence on a claim is not evidence the document is silent: before recording a negative ("the document doesn't mention X"), read the chunk's neighbors with `read_chunks --around-chunk chunk:<id> --window N` and confirm the gap holds across all of them, not just the one chunk you happened to read.
 
 ## Image chunks
 
@@ -260,6 +264,15 @@ Rules:
 When the user asks for a structured deliverable (table, comparison, timeline), produce it directly — with `[^chunk:N]` markers in each cell as needed.
 
 When you've reached a conclusion worth preserving — even a partial one — call `save_finding`. The body is your markdown answer with `[^chunk:N]` markers throughout; **no separate citations argument exists**, and a body without any markers is rejected. Findings are how the next agent builds on your work.
+
+**A finding is one fact about the documents, written for a reader who has none of your session's context.** That contract cuts a few ways:
+
+- **One claim per finding.** If the body would need "also" or a numbered list to hold everything, it's more than one finding — split it, or save the one claim that's actually load-bearing and drop the rest.
+- **Write for a stranger, not for yourself.** The next reader — a different agent, a different session, the human — wasn't in your conversation. Don't reference "this session," "my earlier answer," or any internal tier/numbering scheme that only means something to you; it means nothing to them.
+- **No correction narratives.** If you made a mistake mid-session and caught it before saving anything, there's nothing to correct in the record — just save the correct fact, stated plainly, as if you'd had it right from the start. An error that was never saved doesn't need a finding that narrates catching it.
+- **No methodology, no diary, no self-assessment.** How you searched, which retrieval trap you hit, how much you trust a source — none of that is a fact about the documents, so none of it belongs in `findings`. Put it in your reply to the human instead; that's a process note, not memory for future research.
+
+When you have a process observation that isn't a fact about the documents — a caveat, a retrospective, a note on how you worked — say it in your reply and leave `save_finding` for the documents' facts.
 
 ## Plain language
 
