@@ -37,7 +37,7 @@ predates the #642 fix on its machine. Omitting that context would have made
 the README claim *all* old findings are currently stale, which is false for
 already-backfilled corpora and would be needless alarm.
 
-## Why not `bartleby/skill/SKILL.md` or `README.md`
+## Why not `bartleby/skill/SKILL.md`
 
 The skill docs already describe `edit_finding` as the tool to "fix malformed
 citations or revise" — that's the *mechanism*, aimed at an agent mid-session.

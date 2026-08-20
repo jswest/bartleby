@@ -45,7 +45,15 @@ the code and message differ from the `INTERNAL_ERROR` catch-all.
 Deliberately **not** done: no attempt to catch this earlier (e.g. at CLI
 startup) or to special-case which specific packages are "core" — a stale
 install can be missing *any* dependency, and the wrap site is the one place
-every skill script's failure already funnels through. The README's
+every skill script's *runtime* failure already funnels through. One
+amendment from the omnibus critic pass: an *import-time*
+`ModuleNotFoundError` (a stale install missing `apsw`/`sqlite_vec`/anything
+the script's import chain pulls at module load) fails at the dispatcher's
+`importlib.import_module`, before `run()` exists to catch it — previously a
+raw traceback with nothing on stdout. `bartleby/commands/skill.py` now
+carries a mirror arm emitting the same `STALE_INSTALL` envelope, built
+inline rather than imported from `skill_runner`, since importing a shared
+helper would walk the same broken import chain. The README's
 "After updating Bartleby" section also got a note (no code change) since the
 existing editable-install callout was actively misleading: it told users
 they could "skip step 1" without qualifying that skipping only holds for

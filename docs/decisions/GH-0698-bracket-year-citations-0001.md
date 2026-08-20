@@ -15,12 +15,14 @@ escape by quoting the bare form trips the same check again on the next save.
 ## Fix
 
 Exempt the caret-less, exactly-4-digit bracket shape — `[1998]` — from the
-guard. That shape is never a valid chunk-id marker in practice (chunk ids
-climb well past 4 digits in any real corpus, and the untyped-marker convention
-this guard polices is `[N]` for an arbitrary-length id, not specifically
-4-digit ids). Implemented as a second regex, `_BRACKETED_YEAR = r"^\[\d{4}\]$"`,
-checked against each `_MALFORMED_MARKER` match before it's added to the `bad`
-list.
+guard. A 4-digit chunk id is perfectly possible, but post-#624 the valid
+citation syntax is `[^chunk:N]` — a bare `[NNNN]` in prose is far more likely
+a case-citation year than an attempted citation, so the guard should read it
+as prose. (The residual cost: an agent hand-typing caret-less `[2041]` for
+chunk 2041 loses that one link silently — bounded, since `save_finding` still
+requires at least one valid `[^chunk:N]` marker.) Implemented as a second
+regex, `_BRACKETED_YEAR = r"^\[\d{4}\]$"`, checked against each
+`_MALFORMED_MARKER` match before it's added to the `bad` list.
 
 ## Design choice: the exemption is caret-less only
 

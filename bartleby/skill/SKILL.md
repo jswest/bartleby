@@ -25,7 +25,7 @@ bartleby skill describe_corpus --run 3f9c…   # carry the run_key you were give
 bartleby skill search "…" --run 3f9c…
 ```
 
-One conversation is one run. Do this once, at the start — a *new* conversation means a *new* `session new`. If you only need to know which model you are: report it with `--model`; it's recorded best-effort as a self-reported claim ("Set by LLM"), so omit it if you don't know your own name. Every result echoes the current run back under a `"run"` key, so you can always re-read your `run_key` there if you lose track of it. (If you forget `--run`, calls still work — they fall back to the most recent run — but when several conversations share a corpus, only `--run` keeps them from tangling.)
+One conversation is one run. Do this once, at the start — a *new* conversation means a *new* `session new`. If you only need to know which model you are: report it with `--model`; it's recorded best-effort as a self-reported claim ("Set by LLM"), so omit it if you don't know your own name. Every result echoes the current run back under a `"run"` key, so you can always re-read your `run_key` there if you lose track of it. Every result also names the corpus it actually ran against under a `"project"` key — if that isn't the project you expect, stop and fix the active project before trusting anything else in the result; and a `read_chunks --chunks` call where *every* requested id comes back missing sets a `"warning"` naming that project, the usual tell for a wrong active project rather than bad ids. (If you forget `--run`, calls still work — they fall back to the most recent run — but when several conversations share a corpus, only `--run` keeps them from tangling.)
 
 ## How to invoke your tools
 
@@ -271,8 +271,6 @@ When you've reached a conclusion worth preserving — even a partial one — cal
 - **Write for a stranger, not for yourself.** The next reader — a different agent, a different session, the human — wasn't in your conversation. Don't reference "this session," "my earlier answer," or any internal tier/numbering scheme that only means something to you; it means nothing to them.
 - **No correction narratives.** If you made a mistake mid-session and caught it before saving anything, there's nothing to correct in the record — just save the correct fact, stated plainly, as if you'd had it right from the start. An error that was never saved doesn't need a finding that narrates catching it.
 - **No methodology, no diary, no self-assessment.** How you searched, which retrieval trap you hit, how much you trust a source — none of that is a fact about the documents, so none of it belongs in `findings`. Put it in your reply to the human instead; that's a process note, not memory for future research.
-
-When you have a process observation that isn't a fact about the documents — a caveat, a retrospective, a note on how you worked — say it in your reply and leave `save_finding` for the documents' facts.
 
 ## Plain language
 
