@@ -116,4 +116,6 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         conn.close()
 
-    _print_json({"created": True, "run": echo})
+    # Echo the resolved project like every run()-managed script (#696) —
+    # session.py hand-rolls its lifecycle, so it must add the key itself.
+    _print_json({"created": True, "project": project, "run": echo})

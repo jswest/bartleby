@@ -29,9 +29,8 @@ _FINDING_CITATION_MARKER = re.compile(r"\[\^finding:(\d+)\]")
 # Citation-shaped but untyped: caret-less ``[N]`` and the now-obsolete bare
 # ``[^N]`` chunk form. Both render as bracketed prose but are silently dropped by
 # the typed extractor, so both are rejected loudly — see
-# :func:`reject_malformed_citations`. Exception: a caret-less exactly-4-digit
-# bracket (``[1998]``) is exempted there — that's the neutral case-citation
-# year shape (#698), not a chunk-id marker in practice.
+# :func:`reject_malformed_citations`. Exception: caret-less ``[NNNN]`` — see
+# ``_BRACKETED_YEAR`` below (#698).
 _MALFORMED_MARKER = re.compile(r"\[\^?(\d+)\]")
 # A caret-less, exactly-4-digit bracket — ``[1998]`` — matching neutral case
 # citations (``[1998] HKLRD 771``), which are bracketed-year by construction.
@@ -246,9 +245,7 @@ def reject_malformed_citations(body: str) -> None:
     valid ``[^chunk:N]`` / ``[^url:…]`` marker false-trips this guard. (Refs may not
     themselves contain ``]``; that terminates the marker — percent-encode it.)
 
-    A caret-less exactly-4-digit bracket (``[1998]``) is exempted — see
-    ``_BRACKETED_YEAR`` — so ordinary prose citing a neutral case citation
-    (``[1998] HKLRD 771``) doesn't trip the guard.
+    Caret-less ``[NNNN]`` is exempt — see ``_BRACKETED_YEAR``.
     """
     scrubbed = _EXTERNAL_MARKER.sub(" ", body)
     bad = [

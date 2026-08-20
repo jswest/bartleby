@@ -28,11 +28,8 @@ other modes are silently ignored (e.g. ``--window`` is read only in
 mode).
 
 A ``--chunks`` lookup where every requested id comes back missing sets
-``warning`` naming the resolved project, and only then — a partial miss
-never sets it. A 100% miss on ids you just read is the tell for a wrong
-active project (shared global state another process can repoint), not a bad
-id; every successful call also echoes ``project`` (the resolved project
-name) in the top-level envelope regardless of mode. Exit stays 0 either way.
+``warning`` naming the resolved project — the tell for a wrong active
+project (#696); a partial miss never sets it. Exit stays 0 either way.
 
 In a memory-off session the finding wall (see ``read_finding``) extends here:
 finding-kind chunks authored by *another* session are walled off so an
@@ -314,12 +311,13 @@ def _read_by_chunk_ids(
     if hints:
         out["hints"] = hints
     # A 100%-miss read is almost never a batch of bad ids — it's the tell for
-    # a wrong active project (issue #696): the active project is shared global
-    # state another process can repoint mid-session, so a total miss on ids
-    # that read fine minutes earlier means "check the project", not "check the
-    # ids". A partial miss stays a quiet, ordinary result. Exit stays 0 either
-    # way (a genuinely stale/typo'd id set is a legitimate result too) — this
-    # is a warning in the envelope, not an error.
+    # a wrong active project (#696; full rationale in
+    # docs/decisions/GH-0696-wrong-project-guardrails-0001.md). A partial miss
+    # stays a quiet, ordinary result, and exit stays 0 either way — this is a
+    # warning in the envelope, not an error. Memory-walled ids also count as
+    # missing here, so an all-walled request fires this warning even when the
+    # project is right; excluding them would hint that the walled chunks
+    # exist, which the wall must not do.
     if ordered and len(missing) == len(ordered):
         out["warning"] = (
             f"All {len(ordered)} requested chunk id(s) came back missing in "

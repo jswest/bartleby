@@ -276,11 +276,11 @@ def run(
         # envelope; the run row is committed by now (a mutating work's
         # `with conn:` has exited), so the read sees it.
         if error_envelope is None and isinstance(result, dict) and session_id is not None:
-            # Also echo the resolved project name (issue #696): the active
-            # project is shared global state another process can repoint, so
-            # every result names which corpus it actually ran against — the
+            # Also echo the resolved project name (#696; rationale in
+            # docs/decisions/GH-0696-wrong-project-guardrails-0001.md) — the
             # one place to add it so all ~two-dozen skill scripts get it
-            # uniformly, rather than each script threading it through itself.
+            # uniformly. session.py hand-rolls its lifecycle and adds the
+            # key itself.
             result = {**result, "run": run_echo(conn, session_id), "project": project}
         # log_call needs a resolved session_id (its FK target); close must run
         # on every opened path regardless, or the conn leaks. See module docstring.
