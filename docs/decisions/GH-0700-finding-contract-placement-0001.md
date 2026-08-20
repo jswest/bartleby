@@ -17,8 +17,8 @@ argument mechanics; it's the wrong place for a five-bullet "what counts as a
 finding" contract. The `## Output` section's closing paragraph — "When
 you've reached a conclusion worth preserving... call `save_finding`" — is the
 one spot in the file that already answers *when/what*, so the new material
-(one claim per finding, write for a zero-context reader, no correction
-narratives, no methodology/diary/self-assessment) extends that paragraph in
+(don't staple unrelated records together, write for a zero-context reader,
+no correction narratives, no methodology/diary/self-assessment) extends that paragraph in
 place rather than opening a new heading.
 
 **FTS5-has-no-stemming → the end of "Zero-result diagnosis," not the `scan`
@@ -39,12 +39,17 @@ chunk-boundary caveat is the mirror case for *negative* claims ("the
 document doesn't say X"), so it reads as a third failure mode in the same
 list rather than a standalone note elsewhere.
 
-**Scope of "one claim per finding": not read as forbidding the existing
-"save interim findings when the work is long" guidance (`## Default research
-loop`, step 5).** That step tells agents to persist accumulated `chunk_id`s
-as the session gets long; nothing there implies bundling multiple unrelated
-claims into one finding, and the new contract doesn't touch that step. If a
-long session surfaces several distinct claims, the tightened contract means
-several `save_finding` calls, not a slimmer or fewer one — this was left
-implicit rather than spelled out at both sites, to avoid restating the same
-rule twice.
+**Amended on owner review: the unit rule was dropped in favor of naming the
+anti-pattern.** The contract as first drafted said "one claim per finding,"
+which collides with the guide's own structured-deliverable guidance (a table,
+comparison, or timeline *is* a multi-claim body) and with wide-ranging asks —
+"five to ten things this corpus says about X" should come back as *one*
+finding, not seven. The bullet now states what we don't want — unrelated
+records stapled together: separate concerns a future reader would never
+search for together — and explicitly lets the shape of the ask set the shape
+of the finding, keeping the model maximally responsive to user inputs that
+ask it to range widely. The #700 diary entry still fails the contract on
+every remaining rule: not about the documents, self-addressed, and a fusion
+of separate concerns. (This also moots the earlier question of whether "one
+claim per finding" conflicted with the "save interim findings when the work
+is long" loop step — there is no unit rule to conflict.)
