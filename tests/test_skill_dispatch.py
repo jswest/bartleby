@@ -80,5 +80,26 @@ def test_known_name_propagates_script_exit_code(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_import_time_module_not_found_becomes_stale_install(monkeypatch, capsys):
+    """A stale install missing a module the script's *import chain* needs fails
+    at ``import_module`` — before ``skill_runner.run()``'s own STALE_INSTALL arm
+    exists to catch it (issue #697). The dispatcher must keep the JSON contract:
+    the same actionable envelope on stdout, exit 1, no raw traceback."""
+    import bartleby.commands.skill as skill_cmd
+
+    def broken_import(name):
+        raise ModuleNotFoundError("No module named 'filetype'", name="filetype")
+
+    monkeypatch.setattr(skill_cmd.importlib, "import_module", broken_import)
+
+    with pytest.raises(SystemExit) as exc:
+        dispatch(["search"])
+    assert exc.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["code"] == "STALE_INSTALL"
+    assert "filetype" in payload["error"]
+    assert "uv tool install --reinstall" in payload["error"]
+
+
 def test_scripts_tuple_nonempty():
     assert SCRIPTS, "the dispatcher must advertise at least one script"

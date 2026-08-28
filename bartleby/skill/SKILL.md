@@ -25,7 +25,7 @@ bartleby skill describe_corpus --run 3f9c…   # carry the run_key you were give
 bartleby skill search "…" --run 3f9c…
 ```
 
-One conversation is one run. Do this once, at the start — a *new* conversation means a *new* `session new`. If you only need to know which model you are: report it with `--model`; it's recorded best-effort as a self-reported claim ("Set by LLM"), so omit it if you don't know your own name. Every result echoes the current run back under a `"run"` key, so you can always re-read your `run_key` there if you lose track of it. (If you forget `--run`, calls still work — they fall back to the most recent run — but when several conversations share a corpus, only `--run` keeps them from tangling.)
+One conversation is one run. Do this once, at the start — a *new* conversation means a *new* `session new`. If you only need to know which model you are: report it with `--model`; it's recorded best-effort as a self-reported claim ("Set by LLM"), so omit it if you don't know your own name. Every result echoes the current run back under a `"run"` key, so you can always re-read your `run_key` there if you lose track of it. Every result also names the corpus it actually ran against under a `"project"` key — if that isn't the project you expect, stop and fix the active project before trusting anything else in the result; and a `read_chunks --chunks` call where *every* requested id comes back missing sets a `"warning"` naming that project, the usual tell for a wrong active project rather than bad ids. (If you forget `--run`, calls still work — they fall back to the most recent run — but when several conversations share a corpus, only `--run` keeps them from tangling.)
 
 ## How to invoke your tools
 
@@ -160,6 +160,8 @@ Read the `verdict`, then act:
 
 The diagnosis is a hint, not a guarantee: a purely-semantic presence (the chunk is *about* the term but never spells it) is invisible to these COUNTs — only `search` confirms that. An empty query carries no diagnosis. **Not** a substitute for `search`: scan stays a strict body-text grep by design (every returned snippet contains the query); the diagnosis only *reports* where the signal is.
 
+**FTS5 has no stemming.** `scan` and `search`'s FTS leg match the literal token — singular and plural are different queries (`grant` won't match `grants`), and so are other inflections (`file` / `filed` / `filing`). A zero or a low count can mean "wrong word form," not "absent." Before recording an absence, try the plausible inflections, or confirm with `search`'s semantic leg, which isn't sensitive to this.
+
 ### Undated corpus, temporal task: verify before you prompt
 
 When your task needs dates (filtering, ordering, "what happened before X") and `describe_corpus` shows a high `undated_document_count`, the dates may still be recoverable from the filenames in bulk — but **don't prompt the human blindly**. Verify a candidate regex first with `probe_dates` (read-only — it writes nothing):
@@ -188,6 +190,8 @@ Default search returns no context — the hit text alone. Reach for `--add-conte
 - **Citing chunks you haven't read in full.** A chunk_id you saw in a search result is a *candidate*. Before citing it in a finding — especially for claims that carry weight or anything quoted verbatim — run `read_chunks --chunks chunk:<id>` and confirm the chunk says what you're attributing to it.
 
 A useful heuristic: if a `chunk_id` appears in a finding you're about to save and it never showed up earlier in your conversation as something you read in full, you're guessing. Stop and fetch.
+
+**A claim can straddle a chunk boundary.** Chunking splits on length, not on where a sentence or a fact happens to end — the text you need may finish in the next chunk, or start in the one before. One chunk's silence on a claim is not evidence the document is silent: before recording a negative ("the document doesn't mention X"), read the chunk's neighbors with `read_chunks --around-chunk chunk:<id> --window N` and confirm the gap holds across all of them, not just the one chunk you happened to read.
 
 ## Image chunks
 
@@ -260,6 +264,12 @@ Rules:
 When the user asks for a structured deliverable (table, comparison, timeline), produce it directly — with `[^chunk:N]` markers in each cell as needed.
 
 When you've reached a conclusion worth preserving — even a partial one — call `save_finding`. The body is your markdown answer with `[^chunk:N]` markers throughout; **no separate citations argument exists**, and a body without any markers is rejected. Findings are how the next agent builds on your work.
+
+**A finding is a record of what the documents (and any cited external sources) say, written for a reader who has none of your session's context.** That contract cuts a few ways:
+
+- **Write for a stranger, not for yourself.** The next reader — a different agent, a different session, the human — wasn't in your conversation. Don't reference "this session," "my earlier answer," or any internal tier/numbering scheme that only means something to you; it means nothing to them.
+- **No correction narratives.** If you made a mistake mid-session and caught it before saving anything, there's nothing to correct in the record — just save the correct fact, stated plainly, as if you'd had it right from the start. An error that was never saved doesn't need a finding that narrates catching it. And an error you *did* save gets fixed in place with `edit_finding` — never narrated in a second finding.
+- **No methodology, no diary, no self-assessment.** How you searched, which retrieval trap you hit, how much you trust a source — none of that is a fact about the documents, so none of it belongs in `findings`. Put it in your reply to the human instead; that's a process note, not memory for future research. (A *documented* fact about a source — a mislabeled filename, an unsigned draft, a duplicated exhibit — is a fact about the documents, citable like any other; the line runs between what you can cite and what you merely suspect.)
 
 ## Plain language
 

@@ -27,6 +27,10 @@ other modes are silently ignored (e.g. ``--window`` is read only in
 ``--around-chunk`` mode, ``--offset``/``--limit`` only in ``--document-id``
 mode).
 
+A ``--chunks`` lookup where every requested id comes back missing sets
+``warning`` naming the resolved project — the tell for a wrong active
+project (#696); a partial miss never sets it. Exit stays 0 either way.
+
 In a memory-off session the finding wall (see ``read_finding``) extends here:
 finding-kind chunks authored by *another* session are walled off so an
 evaluation run can't read prior conclusions by chunk_id. ``--chunks`` drops
@@ -76,6 +80,7 @@ Direct-lookup output:
       "requested": ["chunk:<id>", ...],
       "missing": ["chunk:<id>", ...],
       "hints": {"chunk:<id>": str, ...},   # present only when a missing id is a live document_id
+      "warning": str,   # present only when EVERY requested id came back missing — see below
       "preview": int|null,
       "chunks": [{
         "chunk_id": "chunk:<id>",
@@ -208,7 +213,7 @@ def _chunks_from_rows(
 
 def _read_by_chunk_ids(
     conn, chunk_ids: list[int], preview: int | None, *, mem: bool, session_id: int,
-    returning=None,
+    returning=None, project: str | None = None,
 ) -> dict:
     ordered = list(dict.fromkeys(chunk_ids))  # dedup, preserve order
 
@@ -305,6 +310,21 @@ def _read_by_chunk_ids(
     }
     if hints:
         out["hints"] = hints
+    # A 100%-miss read is almost never a batch of bad ids — it's the tell for
+    # a wrong active project (#696; full rationale in
+    # docs/decisions/GH-0696-wrong-project-guardrails-0001.md). A partial miss
+    # stays a quiet, ordinary result, and exit stays 0 either way — this is a
+    # warning in the envelope, not an error. Memory-walled ids also count as
+    # missing here, so an all-walled request fires this warning even when the
+    # project is right; excluding them would hint that the walled chunks
+    # exist, which the wall must not do.
+    if ordered and len(missing) == len(ordered):
+        out["warning"] = (
+            f"All {len(ordered)} requested chunk id(s) came back missing in "
+            f"project '{project}' — if that's not the project you meant, "
+            "check the active project (`bartleby project use <name>`) before "
+            "assuming the ids are wrong."
+        )
     return format_output_ids(out)
 
 
@@ -465,7 +485,7 @@ def work(*, conn, args, session_id) -> dict:
     if args.chunk_ids is not None:
         return _read_by_chunk_ids(
             conn, args.chunk_ids, args.preview, mem=mem, session_id=session_id,
-            returning=args.returning,
+            returning=args.returning, project=args.project,
         )
     if args.around_chunk is not None:
         return _read_around_chunk(conn, args, session_id=session_id)

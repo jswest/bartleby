@@ -70,5 +70,27 @@ def dispatch(argv: list[str]) -> None:
         sys.stdout.write("\n")
         sys.exit(1)
 
-    module = importlib.import_module(f"bartleby.skill_scripts.{name}")
+    try:
+        module = importlib.import_module(f"bartleby.skill_scripts.{name}")
+    except ModuleNotFoundError as e:
+        # A stale editable/tool install can be missing a dependency the
+        # script's import chain pulls at module load (apsw, sqlite_vec, ...),
+        # which fails here — before skill_runner.run()'s STALE_INSTALL arm
+        # exists to catch it. Emit the same envelope inline; importing
+        # skill_runner for a shared helper would walk the same broken chain.
+        payload = {
+            "error": (
+                f"Missing dependency: {e.name or e}. The running environment "
+                "doesn't have a module the installed code now imports — most "
+                "likely a stale `uv tool install --editable` that hasn't "
+                "picked up a dependency added since you installed. Run "
+                "`uv tool install --reinstall <path-or-package>` (or "
+                "otherwise re-sync your environment) and retry. "
+                f"Original error: {type(e).__name__}: {e}"
+            ),
+            "code": "STALE_INSTALL",
+        }
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        sys.exit(1)
     module.main(rest)

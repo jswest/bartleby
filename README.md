@@ -191,7 +191,9 @@ uv tool install '.[docling,sec2md]' --force
 bartleby ready
 ```
 
-Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it.)
+Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1 *for a plain code change*; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it.)
+
+**If a `git pull` added or bumped a dependency**, reinstall even on an editable install — it just references your source tree, so it won't install anything newly added to `pyproject.toml` on its own. The symptom of skipping this is a stray `ModuleNotFoundError: No module named '<package>'` from a command that used to work fine ([#697](https://github.com/jswest/bartleby/issues/697)); fix it with `uv tool install --reinstall '.[docling,sec2md]'` — step 1's command with `--reinstall` in place of `--force`, which forces the dependency resync.
 
 **If the database schema changed**, existing projects won't open until they're brought up to date — a command will fail with a clear `schema version mismatch` message. Bring a project up to date with:
 
@@ -200,6 +202,8 @@ bartleby project upgrade <name>
 ```
 
 Most updates upgrade in place. When a change isn't backward-compatible, `upgrade` tells you to **re-ingest** instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
+
+**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)), check them: an old-style citation marker doesn't error, it just silently stops being recognized, so that finding's `finding_citations` can quietly go stale with no signal that anything broke. A one-time backfill already fixed every corpus present on a given machine when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere, or one that predates that fix, can still carry unrecognized markers. `bartleby project upgrade` won't touch this — it's a data issue, not a schema one. Fix a stale finding by rewriting its body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)) — it re-extracts citations from the body and rebuilds `finding_citations` under the current grammar.
 
 ### Gotchas
 

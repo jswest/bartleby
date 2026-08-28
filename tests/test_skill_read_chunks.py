@@ -244,6 +244,25 @@ def test_read_chunks_by_id_reports_missing(seeded_project, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["missing"] == ["chunk:999999"]
     assert [c["chunk_id"] for c in out["chunks"]] == [f"chunk:{chunk_ids[0]}"]
+    # A partial miss is a legitimate, quiet result — no wrong-project warning.
+    assert "warning" not in out
+
+
+def test_read_chunks_by_id_total_miss_warns_naming_project(seeded_project, capsys):
+    """A 100%-miss read is the tell for a wrong active project (issue #696):
+    every requested id missing sets ``warning``, naming the resolved project,
+    so the agent can catch a repointed ``active_project`` instead of assuming
+    the ids are wrong. Exit still stays 0 — this is a warning, not an error."""
+    read_chunks.main([
+        "--project", seeded_project["project"],
+        "--chunks", "chunk:999999,chunk:999998",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == ["chunk:999999", "chunk:999998"]
+    assert "warning" in out
+    assert seeded_project["project"] in out["warning"]
+    # Also present at the top-level envelope (issue #696), independent of mode.
+    assert out["project"] == seeded_project["project"]
 
 
 def test_read_chunks_requires_document_or_chunks(seeded_project, capsys):

@@ -148,6 +148,7 @@ def run(
     result: dict | None = None
     error_envelope: dict | None = None
     args_dict: dict[str, Any] = {}
+    project: str | None = None
 
     # Only the argparse call gets the USAGE_ERROR treatment: a non-zero
     # SystemExit from parse_args (argparse's usage error) becomes the JSON
@@ -176,6 +177,12 @@ def run(
                 "NO_ACTIVE_PROJECT",
                 "No active project. Run `bartleby project create <name>`.",
             )
+        # Echo the *resolved* name back onto args (issue #696): most calls omit
+        # --project and ride the active-project pointer, so args.project alone
+        # is usually None even once a project has resolved. A work() callback
+        # that needs to name the project it's reading — e.g. read_chunks'
+        # 100%-miss warning — reads it from here rather than re-resolving.
+        args.project = project
 
         conn = open_db(project)
         # A non-agent caller (the web UI) sets BARTLEBY_SESSION_NAME to pin its
@@ -227,6 +234,30 @@ def run(
             result = work(conn=conn, args=args, session_id=session_id)
     except SkillError as e:
         error_envelope = {"error": e.message, "code": e.code, **e.extra}
+    except ModuleNotFoundError as e:
+        # A dependency the installed code now imports isn't in the running
+        # environment. The common cause (issue #697) is a stale
+        # `uv tool install --editable` install: pulling new code picks it up
+        # immediately (it's just the source tree), but a newly added
+        # dependency does NOT get installed until the tool env is re-synced.
+        # That left users hitting a bare "ModuleNotFoundError: No module
+        # named 'filetype'" wrapped as an opaque INTERNAL_ERROR. Name the
+        # likely cause and the fix instead of guessing at the missing
+        # package or probing imports at startup — see
+        # docs/decisions/GH-0697-modulenotfound-stale-install-0001.md.
+        module = e.name or str(e)
+        error_envelope = {
+            "error": (
+                f"Missing dependency: {module}. The running environment doesn't "
+                "have a module the installed code now imports — most likely a "
+                "stale `uv tool install --editable` that hasn't picked up a "
+                "dependency added since you installed. Run "
+                "`uv tool install --reinstall <path-or-package>` (or otherwise "
+                "re-sync your environment) and retry. Original error: "
+                f"{type(e).__name__}: {e}"
+            ),
+            "code": "STALE_INSTALL",
+        }
     except Exception as e:  # noqa: BLE001 — catch-all by design
         error_envelope = {
             "error": f"{type(e).__name__}: {e}",
@@ -245,7 +276,12 @@ def run(
         # envelope; the run row is committed by now (a mutating work's
         # `with conn:` has exited), so the read sees it.
         if error_envelope is None and isinstance(result, dict) and session_id is not None:
-            result = {**result, "run": run_echo(conn, session_id)}
+            # Also echo the resolved project name (#696; rationale in
+            # docs/decisions/GH-0696-wrong-project-guardrails-0001.md) — the
+            # one place to add it so all ~two-dozen skill scripts get it
+            # uniformly. session.py hand-rolls its lifecycle and adds the
+            # key itself.
+            result = {**result, "run": run_echo(conn, session_id), "project": project}
         # log_call needs a resolved session_id (its FK target); close must run
         # on every opened path regardless, or the conn leaks. See module docstring.
         if session_id is not None:

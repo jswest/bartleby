@@ -15,6 +15,9 @@ def test_session_new_mints_run_and_returns_it(project_env, capsys):
     session_script.main(["new", "--project", project_env])
     out = json.loads(capsys.readouterr().out)
     assert out["created"] is True
+    # session.py hand-rolls its lifecycle, so it must echo the resolved
+    # project itself like every run()-managed script does (#696).
+    assert out["project"] == project_env
     assert out["run"]["run_key"]  # a non-empty UUID the agent will carry
     assert out["run"]["memory_enabled"] is True
     assert out["run"]["model"] is None
