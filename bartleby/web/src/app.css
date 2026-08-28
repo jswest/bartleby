@@ -224,6 +224,9 @@ p.meta,
   font-size: var(--text-2xs);
   color: var(--color-off);
   margin-top: var(--space-3xs);
+  /* Long unbroken file names would otherwise overflow the card, bleeding
+     into neighboring grid columns. */
+  overflow-wrap: break-word;
 }
 
 /* The finding_id, surfaced so users can match what the agent says in chat
