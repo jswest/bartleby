@@ -13,13 +13,13 @@ to tighten existing prose rather than bolt on a disconnected section.
 **Contract tightening → the "you've reached a conclusion worth preserving"
 paragraph in `## Output`, not the `save_finding` table row.** The Available
 Scripts table row for `save_finding` is already dense with shell-safety and
-argument mechanics; it's the wrong place for a five-bullet "what counts as a
-finding" contract. The `## Output` section's closing paragraph — "When
+argument mechanics; it's the wrong place for a multi-bullet "what counts as
+a finding" contract. The `## Output` section's closing paragraph — "When
 you've reached a conclusion worth preserving... call `save_finding`" — is the
 one spot in the file that already answers *when/what*, so the new material
-(don't staple unrelated records together, write for a zero-context reader,
-no correction narratives, no methodology/diary/self-assessment) extends that paragraph in
-place rather than opening a new heading.
+(write for a zero-context reader, no correction narratives, no
+methodology/diary/self-assessment) extends that paragraph in place rather
+than opening a new heading.
 
 **FTS5-has-no-stemming → the end of "Zero-result diagnosis," not the `scan`
 table row.** The fact belongs wherever an agent is deciding whether a zero
@@ -39,17 +39,20 @@ chunk-boundary caveat is the mirror case for *negative* claims ("the
 document doesn't say X"), so it reads as a third failure mode in the same
 list rather than a standalone note elsewhere.
 
-**Amended on owner review: the unit rule was dropped in favor of naming the
-anti-pattern.** The contract as first drafted said "one claim per finding,"
-which collides with the guide's own structured-deliverable guidance (a table,
-comparison, or timeline *is* a multi-claim body) and with wide-ranging asks —
-"five to ten things this corpus says about X" should come back as *one*
-finding, not seven. The bullet now states what we don't want — unrelated
-records stapled together: separate concerns a future reader would never
-search for together — and explicitly lets the shape of the ask set the shape
-of the finding, keeping the model maximally responsive to user inputs that
-ask it to range widely. The #700 diary entry still fails the contract on
-every remaining rule: not about the documents, self-addressed, and a fusion
-of separate concerns. (This also moots the earlier question of whether "one
-claim per finding" conflicted with the "save interim findings when the work
+**Amended on owner review: the finding-scope rule was extracted to
+[#709](https://github.com/jswest/bartleby/issues/709) — the contract is
+silent on scope.** Two drafts tried to legislate it: first "one claim per
+finding" (rejected: it collides with the guide's own structured-deliverable
+guidance and with wide-ranging asks — "five to ten things this corpus says
+about X" should come back as *one* finding, not seven), then a "don't staple
+unrelated records together" anti-pattern (rejected: it still presumes a
+single scoping norm). The owner's read is that there are two legitimate
+kinds of finding — omnibus-style answers to broad asks, and narrowly scoped
+records a future session retrieves individually — and that's a design
+question deserving its own conversation, not a bullet settled inside an
+omnibus review. So the contract here says nothing about scope; #709 holds
+the question. The #700 diary entry still fails the contract on every
+remaining rule: not about the documents, self-addressed, and a correction
+narrative for a never-saved error. (This also moots the earlier question of
+whether a unit rule conflicted with the "save interim findings when the work
 is long" loop step — there is no unit rule to conflict.)
