@@ -53,6 +53,11 @@ question deserving its own conversation, not a bullet settled inside an
 omnibus review. So the contract here says nothing about scope; #709 holds
 the question. The #700 diary entry still fails the contract on every
 remaining rule: not about the documents, self-addressed, and a correction
-narrative for a never-saved error. (This also moots the earlier question of
+narrative for a never-saved error. A second review pass tightened two edges
+the drafted bullets left open: an error already *saved* routes to
+`edit_finding` rather than a correction finding, and a documented source
+fact (a mislabeled filename, an unsigned draft) is distinguished from
+subjective confidence — the former is citable corpus knowledge, the latter
+a process note. (This also moots the earlier question of
 whether a unit rule conflicted with the "save interim findings when the work
 is long" loop step — there is no unit rule to conflict.)
