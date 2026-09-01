@@ -50,9 +50,10 @@ Install and update are the same three steps, from the project directory:
 ```
 git pull
 uv tool install '.[docling,sec2md]' --force
+bartleby ready
 ```
 
-(Fresh clone: `git clone` first; `git pull`/`--force` are no-ops there but harmless — one routine either way.)
+(Fresh clone: `git clone` first, then the same commands. `bartleby ready` stamps the agent skill; see [After updating Bartleby](#after-updating-bartleby) for the post-update details.)
 
 **WSJ-internal users** who want the wsjpt provider (routes Gemini through WSJ's parsing toolkit) add one flag to the same command:
 

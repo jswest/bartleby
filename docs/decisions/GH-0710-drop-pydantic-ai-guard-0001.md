@@ -41,7 +41,7 @@ install` lands where the running tool can't see it, which is exactly this
 issue's failure mode. It now names the correct `uv tool install
 '.[docling,sec2md]' --with 'git+ssh://...' --force` command.
 
-Provider and docs only — no `SCHEMA_VERSION` bump.
+Provider and docs only — no `SCHEMA_VERSION` bump (issue #710).
 
 **Residual risk:** nobody has yet seen `bartleby scribe` run end-to-end against
 the new wsjpt commit — the reporter's session (tf13, on #710) died at the old
