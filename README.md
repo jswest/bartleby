@@ -43,64 +43,51 @@ brew install uv tesseract
 
 Tesseract is used for cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed. [Docling](https://docling-project.github.io/docling/) is available as an opt-in alternative PDF converter (slower, but more structurally aware) and as the default converter for HTML/MD. [sec2md](https://github.com/alphanome-ai/sec2md) is an opt-in HTML converter specialized for iXBRL EDGAR filings.
 
-### Install Bartleby
+### Install (or update) Bartleby
 
-From the project directory:
-
-```
-uv tool install .
-```
-
-This installs `bartleby` as a command-line tool in an isolated environment.
-
-To opt into the Docling converter (slower, but layout-aware) — which you'll almost always want, since it's required to ingest `.md` and `.html` files:
+Install and update are the same three steps, from the project directory:
 
 ```
-uv tool install '.[docling]'
+git pull
+uv tool install '.[docling,sec2md]' --force
 ```
 
-To opt into [sec2md](https://github.com/alphanome-ai/sec2md) for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.). sec2md preserves SEC table structure and section headings that Docling tends to flatten. It only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head); everything else on the HTML branch still falls through to Docling.
+(Fresh clone: `git clone` first; `git pull`/`--force` are no-ops there but harmless — one routine either way.)
+
+**WSJ-internal users** who want the wsjpt provider (routes Gemini through WSJ's parsing toolkit) add one flag to the same command:
 
 ```
-uv tool install '.[sec2md]'
+uv tool install '.[docling,sec2md]' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
 ```
 
-You can combine extras: `uv tool install '.[docling,sec2md]'`.
+**Details and troubleshooting:**
 
-The wsjpt provider (routes Gemini through WSJ's parsing toolkit; WSJ-internal) is **not** in the locked dependency set — its git source is unreachable outside WSJ, which would break `uv lock`/`uv sync` for everyone. Inject it into the **tool's** environment with `--with` — extras and out-of-band packages have to go there, not a separate `uv pip install` (which lands somewhere the running tool can't see). `--force` re-applies to an already-installed tool. Also pin `pydantic-ai>=1,<2`: wsjpt's keyless Vertex/ADC path passes `vertexai=`/`project=`/`location=` to `GoogleProvider`, and pydantic-ai 2.0 dropped those kwargs, so an unpinned install resolves to 2.x and crashes:
+- **What the extras are.** [Docling](https://docling-project.github.io/docling/) is the layout-aware converter — required to ingest `.md` and `.html` files, so you almost always want it. [sec2md](https://github.com/alphanome-ai/sec2md) is a specialist for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.); it preserves SEC table structure and section headings that Docling tends to flatten, and only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head) — everything else on the HTML branch still falls through to Docling. A bare `uv tool install .` works but can't ingest those formats.
+- **Why wsjpt goes through `--with`.** Its git source is WSJ-internal and unreachable outside WSJ, so it can't live in the locked dependency set — that would break `uv lock`/`uv sync` for everyone else. `--with` injects it into the **tool's** isolated environment; a separate `uv pip install` lands somewhere the running tool can't see. `--force` re-applies over an existing install. wsjpt pins its own dependencies (including `pydantic-ai`), so no extra `--with` pins are needed.
+- **Sidestepping SSH.** Swap the wsjpt source for HTTPS and git authenticates through the normal credential helper (a PAT, usually already cached in the macOS keychain from prior HTTPS clones):
 
-```
-uv tool install '.[docling,sec2md]' --with 'pydantic-ai>=1,<2' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
-```
+  ```
+  --with 'git+https://github.dowjones.net/data/wsjpt.git'
+  ```
 
-If you'd rather sidestep SSH entirely, swap the wsjpt source for HTTPS — git then authenticates through the normal credential helper (a PAT, usually already cached in the macOS keychain from prior HTTPS clones):
+- **SSH hangs at `resolving dependencies...`.** A passphrase-protected SSH key is the likely cause — `uv` runs git non-interactively, so the key can't prompt for its passphrase and the fetch silently blocks rather than erroring. Fix by loading the key into `ssh-agent`:
 
-```
---with 'git+https://github.dowjones.net/data/wsjpt.git'
-```
+  ```
+  eval "$(ssh-agent -s)"
+  ssh-add ~/.ssh/id_ed25519
+  ```
 
-Sticking with SSH: if the install hangs indefinitely at `resolving dependencies...`, a passphrase-protected SSH key is the likely cause — `uv` runs git non-interactively, so the key can't prompt for its passphrase and the fetch silently blocks rather than erroring. Fix by loading the key into `ssh-agent`:
+  On macOS, persist it across reboots with `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` and this `~/.ssh/config` stanza:
 
-```
-eval "$(ssh-agent -s)"
-ssh-add ~/.ssh/id_ed25519
-```
+  ```
+  Host github.dowjones.net
+    AddKeysToAgent yes
+    UseKeychain yes
+  ```
 
-On macOS, persist it across reboots with `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` and this `~/.ssh/config` stanza:
-
-```
-Host github.dowjones.net
-  AddKeysToAgent yes
-  UseKeychain yes
-```
-
-With a local wsjpt checkout, `--with '/abs/path/to/wsjpt'` avoids the network fetch entirely.
-
-For development:
-
-```
-uv tool install --editable .
-```
+- **Local wsjpt checkout.** `--with '/abs/path/to/wsjpt'` avoids the network fetch entirely.
+- **Development.** `uv tool install --editable .`
+- **Check the version before updating** — see [Pinning to a release](#pinning-to-a-release) below for what a minor vs. patch bump means.
 
 ### Pinning to a release
 
@@ -519,7 +506,7 @@ stores, and provenance — lives in [`benchmarks/README.md`](benchmarks/README.m
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
 | Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative (see [Picking models for your hardware](#picking-models-for-your-hardware)). |
-| wsjpt | `fast` | `fast` | Out-of-band install (see [install section](#installation) above for the full `uv tool install --with` command; not in the locked deps — WSJ-internal git source). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install; authenticates to Gemini via **Vertex AI / Application Default Credentials, not an API key** — run `gcloud auth application-default login` (or equivalent) rather than setting `GEMINI_API_KEY`. Requires `pydantic-ai>=1,<2` (wsjpt's Vertex path calls `GoogleProvider(vertexai=...)`, a kwarg pydantic-ai 2.x removed); the provider preflight-checks this and raises a clear error with the reinstall command if it's out of range. |
+| wsjpt | `fast` | `fast` | Out-of-band install (see [install section](#installation) above for the full `uv tool install --with` command; not in the locked deps — WSJ-internal git source). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install; authenticates to Gemini via **Vertex AI / Application Default Credentials, not an API key** — run `gcloud auth application-default login` (or equivalent) rather than setting `GEMINI_API_KEY`. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
 
