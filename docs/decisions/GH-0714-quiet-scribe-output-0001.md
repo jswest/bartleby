@@ -52,7 +52,7 @@ reached only once `imap_unordered` is fully drained without exception) calls
 exception during the drain still hits `pool.terminate()` so a failing run
 tears down promptly rather than waiting on workers that may be stuck. The
 existing `finally` block (stopping the progress-drain thread and shutting
-down the `Manager`) is unchanged. `BaseException` (not `Exception`) is
+down the `Manager`) is unchanged. Amended on leaf-critic review: the `ctx.Pool(...)` call itself sits *inside* that outer `try`, as it did under the `with`, so a failed construction (spawn exhaustion, too many open files) still reaches the drain/`Manager` cleanup rather than leaking the `Manager` process. `BaseException` (not `Exception`) is
 deliberate: if the generator itself is abandoned mid-iteration (e.g. a caller
 stops consuming `parse_stream` early), Python throws `GeneratorExit` at the
 suspended `yield from`, and that path should terminate rather than block
