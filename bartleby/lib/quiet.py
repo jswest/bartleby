@@ -92,6 +92,15 @@ def setup_quiet_third_party(
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+    # Docling's chart-extraction preset registry logs an ERROR-level line
+    # whenever a preset id is (harmlessly) re-registered — observed once per
+    # worker warmup, apparently from its own module import path. Registration
+    # is documented as idempotent-by-design, so the message is never
+    # actionable; silence just this one logger, --verbose or not (#714).
+    logging.getLogger("docling.datamodel.stage_model_specs").setLevel(
+        logging.CRITICAL
+    )
+
     if verbose:
         os.environ["BARTLEBY_VERBOSE"] = "1"
         return

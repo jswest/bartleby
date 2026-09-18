@@ -182,22 +182,38 @@ def parse_stream(
         )
         drain.start()
 
+    pool = ctx.Pool(
+        processes=max_workers,
+        # Recycle each worker after WORKER_MAX_TASKS docs so docling/torch RSS
+        # can't grow unbounded across a long run (#213) — a replacement worker
+        # re-runs _init_worker (re-warming the models).
+        maxtasksperchild=WORKER_MAX_TASKS,
+        initializer=_init_worker,
+        initargs=(
+            parse_fn, config, warmup, verbose, tuple(required_models), progress_q,
+        ),
+    )
     try:
-        with ctx.Pool(
-            processes=max_workers,
-            # Recycle each worker after WORKER_MAX_TASKS docs so docling/torch RSS
-            # can't grow unbounded across a long run (#213) — a replacement worker
-            # re-runs _init_worker (re-warming the models).
-            maxtasksperchild=WORKER_MAX_TASKS,
-            initializer=_init_worker,
-            initargs=(
-                parse_fn, config, warmup, verbose, tuple(required_models), progress_q,
-            ),
-        ) as pool:
-            # chunksize=1 (imap_unordered default): a worker pulls the next single
-            # document whenever it's free, so a mixed corpus of cheap and expensive
-            # files load-balances instead of being dealt out in fixed blocks.
-            yield from pool.imap_unordered(_run_task, requests)
+        # chunksize=1 (imap_unordered default): a worker pulls the next single
+        # document whenever it's free, so a mixed corpus of cheap and expensive
+        # files load-balances instead of being dealt out in fixed blocks.
+        yield from pool.imap_unordered(_run_task, requests)
+    except BaseException:
+        # A failing run tears down promptly: terminate() SIGTERMs workers
+        # rather than waiting for them to drain.
+        pool.terminate()
+        raise
+    else:
+        # The happy path: every result has already been yielded, so close()
+        # (no more tasks) + join() lets workers exit on their own rather than
+        # being SIGTERMed. terminate() (the implicit call `with ctx.Pool()`
+        # used to make on __exit__) kills workers before docling's transitive
+        # loky/joblib executor can run its own atexit cleanup, leaking the
+        # named semaphores that resource_tracker complains about at shutdown
+        # (#714). close()/join() returns promptly here since the pool is
+        # already fully drained.
+        pool.close()
+        pool.join()
     finally:
         if progress_q is not None:
             progress_q.put(None)        # stop the drain thread

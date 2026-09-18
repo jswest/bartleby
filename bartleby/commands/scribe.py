@@ -202,6 +202,7 @@ def main(
         ),
         archive_root=archive_root,
         timings=timings,
+        verbose=verbose,
     )
     temperature = float(config.get("temperature", DEFAULT_TEMPERATURE))
     # Vision captioning gets its own temperature knob, defaulting to the
