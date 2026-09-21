@@ -32,7 +32,9 @@ def _emb(seed: float, n: int) -> list[list[float]]:
     ]
 
 
-def _parse_config(archive_root, *, vision_enabled=False, vision_min_dimension=32):
+def _parse_config(
+    archive_root, *, vision_enabled=False, vision_min_dimension=32, verbose=False,
+):
     """A ParseConfig with the per-format helpers' run-wide defaults — the scalar
     block these tests used to thread by hand. Only the fields that actually vary
     across call sites are overridable."""
@@ -42,6 +44,7 @@ def _parse_config(archive_root, *, vision_enabled=False, vision_min_dimension=32
         vision_enabled=vision_enabled, vision_max_dimension=1024,
         vision_min_dimension=vision_min_dimension,
         vector_ink_threshold=0, archive_root=archive_root,
+        verbose=verbose,
     )
 
 
@@ -1345,6 +1348,72 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
     images = parsers._parse_image_routes(
         [route],
         _parse_config(tmp_path / "archive", vision_enabled=True, vision_min_dimension=128),
+        on_warn=warnings.append,
+    )
+
+    assert images == []
+    assert len(warnings) == 1
+    assert "below the 128px vision minimum" in warnings[0]
+
+
+def test_parse_image_routes_aggregates_sub_minimum_skips(tmp_path, monkeypatch):
+    """A document with several undersized images reports one aggregate line
+    (#714), not one ``on_warn`` per image — a paper full of logos and table
+    rules used to produce dozens of near-identical warnings."""
+    monkeypatch.setattr(
+        parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+    )
+
+    warnings: list[str] = []
+    routes = [
+        parsers._ImageRoute(bytes_=_png_bytes(), page_number=n, image_index_on_page=0)
+        for n in range(1, 4)
+    ]
+    images = parsers._parse_image_routes(
+        routes,
+        _parse_config(tmp_path / "archive", vision_enabled=True, vision_min_dimension=128),
+        on_warn=warnings.append,
+    )
+
+    assert images == []
+    assert warnings == [
+        "Skipped 3 undersized image(s) (below the 128px vision minimum)."
+    ]
+
+
+def test_parse_image_routes_no_warning_when_nothing_skipped(tmp_path):
+    """Zero undersized images means zero noise — no aggregate line at all."""
+    warnings: list[str] = []
+    route = parsers._ImageRoute(
+        bytes_=_png_bytes(), page_number=1, image_index_on_page=0,
+    )
+    images = parsers._parse_image_routes(
+        [route],
+        _parse_config(tmp_path / "archive", vision_enabled=True, vision_min_dimension=1),
+        on_warn=warnings.append,
+    )
+
+    assert len(images) == 1
+    assert warnings == []
+
+
+def test_parse_image_routes_verbose_keeps_per_image_detail(tmp_path, monkeypatch):
+    """``--verbose`` restores the per-image page + dimensions detail instead of
+    the aggregate line."""
+    monkeypatch.setattr(
+        parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
+    )
+
+    warnings: list[str] = []
+    route = parsers._ImageRoute(
+        bytes_=_png_bytes(), page_number=3, image_index_on_page=0,
+    )
+    images = parsers._parse_image_routes(
+        [route],
+        _parse_config(
+            tmp_path / "archive", vision_enabled=True, vision_min_dimension=128,
+            verbose=True,
+        ),
         on_warn=warnings.append,
     )
 

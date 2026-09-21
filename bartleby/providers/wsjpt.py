@@ -20,6 +20,12 @@ from __future__ import annotations
 
 import os
 
+# Must land before wsjpt/pydantic_ai import below: pydantic-ai v2 prints a
+# Logfire advertisement banner on the first agent run unless this is set (or
+# observability is configured). setdefault so a user who's actually wired up
+# Logfire is unaffected.
+os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
+
 from pydantic import BaseModel
 
 from bartleby.providers.base import DocumentSummary, VlmDescription

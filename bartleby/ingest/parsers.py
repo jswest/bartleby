@@ -92,6 +92,13 @@ def _parse_image_routes(
     With no vision provider there's nothing to caption, so routes produce no
     rows (a warning, then skipped). Notices go to ``on_warn`` (routed to the
     parent), never the console — this runs in a spawn worker with no Live.
+
+    Sub-minimum skips are common (logos, table rules, equation snippets) and
+    expected, not exceptional, so they're reported once per document as an
+    aggregate count rather than one ``on_warn`` per image (#714) — a document
+    full of small figures used to produce dozens of near-identical lines. The
+    per-image detail (page + dimensions) is still emitted, but only under
+    ``--verbose``.
     """
     if not routes:
         return []
@@ -102,6 +109,7 @@ def _parse_image_routes(
             )
         return []
     parsed: list[ParsedImage] = []
+    skipped_below_minimum = 0
     for route in routes:
         prepared = image_pipeline.prepare_image(
             route.bytes_, max_dimension=config.vision_max_dimension,
@@ -109,8 +117,9 @@ def _parse_image_routes(
         if image_pipeline.is_below_vlm_minimum(
             prepared, min_dimension=config.vision_min_dimension
         ):
-            page_str = f" (page {route.page_number})" if route.page_number else ""
-            if on_warn is not None:
+            skipped_below_minimum += 1
+            if config.verbose and on_warn is not None:
+                page_str = f" (page {route.page_number})" if route.page_number else ""
                 on_warn(
                     f"Skipping image{page_str} — {prepared.width}x{prepared.height}px "
                     f"is below the {config.vision_min_dimension}px vision minimum."
@@ -125,6 +134,11 @@ def _parse_image_routes(
             page_number=route.page_number,
             image_index_on_page=route.image_index_on_page,
         ))
+    if skipped_below_minimum and not config.verbose and on_warn is not None:
+        on_warn(
+            f"Skipped {skipped_below_minimum} undersized image(s) (below the "
+            f"{config.vision_min_dimension}px vision minimum)."
+        )
     return parsed
 
 def _parse_text_document(
@@ -499,6 +513,7 @@ class ParseConfig:
     vector_ink_threshold: int
     archive_root: Path
     timings: bool = False
+    verbose: bool = False  # True: per-image skip detail; False: one aggregate line (#714)
 
 @dataclass
 class ParseRequest:
