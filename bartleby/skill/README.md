@@ -20,7 +20,7 @@ The skill is BYO-model. It works against whatever model your harness runs.
 2. A Bartleby project exists, with documents already ingested (`bartleby scribe`).
 3. The project is the active project, *or* each script is invoked with `--project <name>`.
 
-Every script opens the project DB via the shared runner, which validates the schema version on the spot and refuses to run against an incompatible database. If a session isn't active, the runner auto-creates one with memory on (see "How sessions work" below).
+Every script opens the project DB via the shared runner, which validates the schema version on the spot and refuses to run against an incompatible database. The agent opens its own run on its first call — no session setup on your part (see "How runs work" below).
 
 ---
 
@@ -78,35 +78,29 @@ For full argument-level contracts, see [`SKILL.md`](./SKILL.md) and the script d
 
 ---
 
-## How sessions work
+## How runs work
 
-Every agent run happens inside a *session*. Sessions are rows in the database with an ID and a memorable name (e.g., `mighty-grove`). Findings and audit log entries are tagged with a `session_id`.
+Every agent conversation is one *run*. Runs are rows in the `sessions` table with an ID and a memorable name (e.g., `mighty-grove`); findings and audit log entries are tagged with the run's `session_id`.
 
-Sessions don't really "end" — there's no end-state to enforce. They're just a way to group related work and to thread provenance through the database.
-
-**Starting a session:**
+**The agent opens its own.** Its first call is:
 
 ```
-bartleby session start
+bartleby skill session new [--model <id>] [--no-memory]
 ```
 
-This prints the session ID and name. The skill picks it up automatically via the active session.
+This mints a `run_key` (a UUID) and starts a fresh run. The agent passes `--run <run_key>` on every later call so its work attaches to that run, and every result echoes the run back under `"run"`. A new conversation is a new run; two conversations on one corpus never share one. A call that forgets `--run` falls back to the most recently used run.
 
-**You usually don't need to.** If no session is active when the skill's first script runs, the skill auto-creates one with default settings (memory on). Run `bartleby session start` explicitly only when you want `--no-memory`.
+Runs don't really "end" — there's no end-state to enforce. They group related work and thread provenance through the database.
 
 **Memory:**
 
-By default, the `search` script can return findings from any prior session. This lets the agent build on past research without re-deriving conclusions.
+By default a run is memory-on: `search --findings`, `list_findings`, and `read_finding` reach findings from any prior run, so the agent can build on past research.
 
-If a user wants the agent to ignore prior findings, they start a memory-off session:
+To have the agent ignore prior findings, ask for it in the **first message** of a new conversation ("ignore previous memory"). The agent opens its run with `bartleby skill session new --no-memory`. In a memory-off run, `search` silently drops all findings from results, *regardless of what flags the agent passes*, and the direct finding reads and curation commands reach only the run's own findings. This is enforced at the script level, not via prompt. The agent literally cannot reach prior findings.
 
-```
-bartleby session start --no-memory
-```
+Memory-off is fixed when the run opens. If you ask mid-conversation, the skill instructs the agent to stop and tell you to start a new conversation and ask up front — it won't switch runs mid-stream, since what it has already read stays in its context.
 
-In a memory-off session, the `search` script silently excludes findings from results, *regardless of what flags the agent passes*. This is enforced at the script level, not via prompt. The agent literally cannot reach prior findings.
-
-If a user asks the agent mid-session to "ignore previous memory" or similar, the skill instructs the agent to stop and tell the user to restart with `bartleby session start --no-memory`. The skill does not attempt to honor memory-off requests within an already-running session.
+**`bartleby session` (the human CLI)** doesn't drive agent runs. `bartleby session start --no-memory` does *not* make the agent's run memory-off — the agent mints its own run and moves the active marker to it. Use `bartleby session current` to see the latest run and `bartleby session set --model <id>` to stamp its model after the fact (handy for blind comparisons). See the [main README](../../README.md#bartleby-session).
 
 ---
 
