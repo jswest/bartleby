@@ -13,11 +13,9 @@ For the on-disk shape, read the code: `bartleby/db/schema.py` for the schema, `b
 
 **Default position: we don't care about it.** No migration code, no compat shims, no feature-flagged old code paths. Bump `SCHEMA_VERSION`, change the code, tell users to re-ingest. The cost of preserving compat is invariably higher than the cost of re-ingest for a tool at this scale.
 
-**The one allowed relaxation: additive-only schema upgrades.** A schema bump may ship with an entry in the upgrade chain (`bartleby/db/upgrades.py`) if — and only if — the change is purely additive: new tables, new indexes, new nullable columns. No row transformations, no column renames, no semantic shifts in existing data. Users run `bartleby project upgrade <name>` explicitly to apply the chain; the strict version check in `open_db` rejects mismatched DBs otherwise. Non-additive bumps still mean re-ingest (the chain simply has no entry for that step, and `project upgrade` refuses).
+**The one allowed relaxation: additive-only schema upgrades.** A schema bump may ship with an entry in the upgrade chain (`bartleby/db/upgrades.py`) if — and only if — the change is purely additive: new tables, new indexes, new nullable columns. No row transformations, no column renames, no semantic shifts in existing data. Users run `bartleby project upgrade <name>` explicitly to apply the chain; the strict version check in `open_db` rejects mismatched DBs otherwise. Non-additive bumps still mean re-ingest (the chain simply has no entry for that step, and `project upgrade` refuses). Either way the codebase never branches on schema version — it pins to `SCHEMA_VERSION` exactly; the upgrade path is one-shot at the gate, not an ongoing tax.
 
-The discipline: every new bump is either additive-with-an-upgrade-function or non-additive-with-re-ingest. The codebase never branches on schema version; it always pins to `SCHEMA_VERSION` exactly. The upgrade path is one-shot at the gate, not an ongoing tax.
-
-**The versioning policy in one line:** any schema change bumps the minor (the minor *is* `SCHEMA_VERSION`; releases are `v0.<SCHEMA_VERSION>.<patch>`), `check_drift` in `scripts/release.py` refuses to tag a DDL change that forgot the bump, the additive-vs-breaking disposition is binary (chain entry + `bartleby project upgrade` vs no entry + re-ingest), and the `breaking-schema` label is reserved for re-ingest-required changes. Written down in full in [the schema-change versioning-policy decision](./docs/decisions/GH-0362-schema-change-versioning-policy-0001.md).
+**Versioning:** releases are `v0.<SCHEMA_VERSION>.<patch>`, so any schema change bumps the minor; `check_drift` in `scripts/release.py` refuses to tag a DDL change that forgot the bump, and the `breaking-schema` label is reserved for re-ingest-required changes. Full policy: [GH-0362](./docs/decisions/GH-0362-schema-change-versioning-policy-0001.md).
 
 ## Load-bearing invariants
 
@@ -91,8 +89,7 @@ When a document exceeds `max_summarize_tokens`, the summary's `text` field gets 
 
 - Skill scripts print one JSON object to stdout, exit non-zero on error with `{"error", "code"}`. Prose/progress goes to stderr only.
 - Embedding model: `BAAI/bge-base-en-v1.5` (768 dims, 512 token max). FTS5 tokenizer: `unicode61 remove_diacritics 2`.
-- LLM provider defaults (`ALLOWED_PROVIDERS` — four): anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`, wsjpt `fast`.
-- VLM provider defaults: anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`, wsjpt `fast`.
+- LLM and VLM provider defaults (identical; `ALLOWED_PROVIDERS` — four): anthropic `claude-haiku-4-5`, openai `gpt-5-mini`, ollama `qwen3-vl:30b`, wsjpt `fast`.
 - PDF converter (config `pdf_converter`, CLI `--pdf-converter`): `pdfplumber` (default — fast text + page-render image extraction) and `docling` (opt-in — better structural extraction at higher cost).
 - HTML converter (config `html_converter`, CLI `--html-converter`): `docling` (default) and `sec2md` (opt-in — routes iXBRL EDGAR filings to sec2md by sniff, non-iXBRL HTML falls back to docling). MD always goes through docling. If you have an HTML/MD corpus, `docling` must be installed; if you set `html_converter=sec2md`, the `sec2md` extra must also be installed.
 - Dependency management: `uv` (not pip/venv). Run with `uv run python`.

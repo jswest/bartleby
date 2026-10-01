@@ -41,6 +41,14 @@ dimension knobs all move the numbers.
   looking near-instant. If your caption stage reads as ~free, check this before
   believing it. (Seen under a harness that set `TMPDIR=/tmp/claude-501`.)
 
+## Rough expectations (anecdotal)
+
+Not a measured run — one user's ballpark, entirely local models. A 12-document,
+51 MB sample (academic, news, and regulatory PDFs, a good number of images) took
+~2 minutes per document. Length and image count dominate: a ~200-page regulatory
+document with lots of fine print and 23 images took ~5 minutes to embed, caption,
+and summarize; a five-page news article with one image took ~30 seconds.
+
 ## Results
 
 ### 2026-06-07 — first baseline (10-doc NTSB sample)

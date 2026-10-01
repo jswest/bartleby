@@ -1,6 +1,6 @@
 # WSJ-internal: the wsjpt provider
 
-The `wsjpt` provider routes Gemini through WSJ's internal [parsing toolkit](https://github.dowjones.net/data/wsjpt), so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names live in Bartleby's config. It's WSJ-internal only: its git source is unreachable outside WSJ, and it authenticates to Gemini via **Vertex AI / Application Default Credentials, not an API key** — run `gcloud auth application-default login` (or equivalent) rather than setting `GEMINI_API_KEY`.
+The `wsjpt` provider routes Gemini through WSJ's internal [parsing toolkit](https://github.dowjones.net/data/wsjpt), so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names live in Bartleby's config. It's WSJ-internal only: its git source is unreachable outside WSJ, and by default it authenticates to Gemini via **Vertex AI / Application Default Credentials** — run `gcloud auth application-default login` (or equivalent). Setting `GEMINI_API_KEY` (or `wsjpt_api_key` in config) switches it to the Gemini API-key path instead.
 
 ## Install
 
