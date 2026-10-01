@@ -10,13 +10,13 @@ The skill is BYO-model. It works against whatever model your harness runs.
 
 **It is:** a set of small Python scripts that talk to a Bartleby SQLite database, plus a `SKILL.md` that tells the agent how to use them well. The skill is opinionated — it has views about what counts as evidence, when to search vs. read, and how to behave when memory is on or off.
 
-**It isn't:** a way to ingest documents. That's the [`bartleby` CLI](../README.md). The skill assumes the database already exists and the corpus is already chunked, embedded, and indexed.
+**It isn't:** a way to ingest documents. That's the [`bartleby` CLI](../../README.md). The skill assumes the database already exists and the corpus is already chunked, embedded, and indexed.
 
 ---
 
 ## Prerequisites
 
-1. The `bartleby` CLI is installed and on your `PATH`. The skill shells out to it for embedding queries (semantic search). Everything else (config, schema, project resolution) is imported from the installed `bartleby` package directly. (See the [main README](../README.md) for install instructions.)
+1. The `bartleby` CLI is installed and on your `PATH`. The skill shells out to it for embedding queries (semantic search). Everything else (config, schema, project resolution) is imported from the installed `bartleby` package directly. (See the [main README](../../README.md) for install instructions.)
 2. A Bartleby project exists, with documents already ingested (`bartleby scribe`).
 3. The project is the active project, *or* each script is invoked with `--project <name>`.
 
