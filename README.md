@@ -236,13 +236,15 @@ Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image fi
 
 In your harness of choice, load the `bartleby` skill (install it first with `bartleby ready` — see [Install the skill](#install-the-skill)) and ask the agent a question about your corpus. The skill guides it through searching, reading, synthesizing, and citing.
 
-The agent opens its own research *run* on its first call (`bartleby skill session new`) and carries it for the rest of the conversation, so **one conversation is one run** with no setup on your part — a new conversation is a new run. If you want the agent to ignore findings from prior runs (e.g. for a blind multi-model comparison), ask it to open the run with memory off:
+The agent opens its own research *run* on its first call (`bartleby skill session new`) and carries it for the rest of the conversation, so **one conversation is one run** with no setup on your part — a new conversation is a new run.
+
+**Memory off.** To have the agent ignore findings from prior runs (e.g. for a blind multi-model comparison), say so in the *first message* of a new conversation — "ignore previous memory" works. The agent then opens its run with:
 
 ```
 bartleby skill session new --no-memory
 ```
 
-(More on runs and memory in the skill README.)
+Memory-off is fixed when the run opens: ask mid-conversation and the agent will tell you to start a new one. `bartleby session start --no-memory` does **not** do this — the agent mints its own run instead. (More on runs and memory in the [skill README](bartleby/skill/README.md#how-runs-work).)
 
 ### 5. Browse what you've got
 
@@ -417,20 +419,18 @@ _N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, 
 
 ### `bartleby session`
 
-Manage agent sessions. Sessions are first-class rows in the database; findings and audit log entries are tagged with a `session_id`.
+Inspect and label research runs from your side. A run (a *session* in the database) is a row that findings and audit log entries are tagged with. **Agents open their own** — one per conversation, via `bartleby skill session new` (see [Quick start step 4](#4-start-an-agent-session)) — so you don't need to start one before pointing an agent at the corpus.
 
 ```
-bartleby session start [--no-memory] [--harness <name>] [--model <id>]   # Start a new session
+bartleby session start [--no-memory] [--harness <name>] [--model <id>]   # Start a session and mark it active
 bartleby session current                                                 # Show the active session
 bartleby session end                                                     # End the active session (cosmetic)
 bartleby session set [--harness <name>] [--model <id>]                   # Stamp the active session's backend
 ```
 
-**Most users will never run `bartleby session start`.** If no session is active when the skill calls a script, the skill auto-creates one with default settings (memory on). You only need to start a session explicitly if you want `--no-memory`.
+The *active* session is whichever was started or used most recently — usually the last agent run, since every agent call re-marks its run active. So `current` shows the latest run, and `set` stamps it: for a blind multi-model comparison, let the agent run without `--model`, then `session set --model <id>` after assessing. `--harness` is best-effort auto-detected (e.g. Claude Code) when omitted; `--model` usually has no environment signal. Unknown values stay null — never guessed. The values show up in `list_findings` / `read_finding`.
 
-The `--no-memory` flag creates a session that cannot read findings from prior sessions. This is enforced at the script level — the skill's `search` script returns no findings when called against a memory-off session, regardless of how the agent is prompted.
-
-`--harness` / `--model` record which backend authors the session's findings, so a corpus built across multiple models/harnesses stays self-describing (the values show up in `list_findings` / `read_finding`). `--harness` is best-effort auto-detected (e.g. Claude Code) when omitted; `--model` usually has no environment signal, so declare it explicitly or stamp it after the fact with `bartleby session set`. Unknown values stay null — never guessed. This is most useful when you start a session yourself before pointing an agent at the corpus; for blind multi-model comparison, leave them unset at start and `session set` them after assessing.
+`session start` marks a new session active, but an agent following the skill mints its own run on its first call and moves the marker to it — so `session start --no-memory` is not how you get a memory-off agent run. Ask the agent instead (see [Quick start step 4](#4-start-an-agent-session)). Memory-off is enforced at the script level: in a memory-off run, `search` returns no findings regardless of how the agent is prompted, and the direct finding reads see only that run's own findings.
 
 ### `bartleby embed`
 
