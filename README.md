@@ -268,27 +268,15 @@ bartleby finding import path/to/finding.md      # into the active project (or --
 
 ## Architecture
 
-The CLI ingests. The skill researches. The database acts as the API between them. Each piece can be replaced independently as long as the schema contract holds. The database is self-describing--schema version, embedding model, and `sqlite-vec` version live in a `meta` table inside the DB itself. The skill reads `meta` on startup and refuses to run against an incompatible database.
+The CLI ingests. The skill researches. The database is the API between them, so either side can be replaced as long as the schema contract holds. The DB is self-describing: schema version, embedding model, and `sqlite-vec` version live in its `meta` table, and Bartleby refuses to open an incompatible one.
 
-The core tables (see [`bartleby/db/schema.py`](./bartleby/db/schema.py) for the DDL):
+- **Schema:** [`bartleby/db/schema.py`](./bartleby/db/schema.py) is the DDL and the source of truth for tables.
+- **Invariants and current state:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the polymorphic `chunks` table, the single-writer ingest pipeline, memory-off enforcement, flag and id conventions.
+- **Why past calls went the way they did:** [`docs/decisions/`](./docs/decisions/).
 
-| Table | What lives here |
-| --- | --- |
-| `documents` | One row per ingested file, deduped by content hash. |
-| `summaries` | One row per `document` (1:1) — title, description, body, and (optional) `authored_date`. |
-| `images` | One row per *unique* image, deduped by byte hash. The same icon embedded in five docs is one row. |
-| `document_images` | Join: which images appear in which document, at which page. |
-| `findings` | Agent-authored research notes from `save_finding`. Each owned by a `session`. |
-| `sessions` | Agent research runs, with a memory flag, a self-reported model, and a `run_key` — the per-conversation UUID an agent mints to bind one run to one conversation. |
-| `chunks` | Polymorphic — one row per embeddable text chunk regardless of source. `source_kind` is one of `'document'`, `'summary'`, `'finding'`, `'image'`. |
-| `chunks_fts`, `chunks_vec` | Virtual tables shadowing `chunks` for full-text (FTS5) and vector (sqlite-vec) search. One query covers all four source kinds at once. |
-| `audit_logs` | One row per skill-script call, scoped to a session. |
-| `tags`, `document_tags` | A controlled vocabulary the user curates, with LLM-assisted assignment. Lets the agent slice the corpus by category (`search --tag ch`, `list_documents --tag nyseg --tag conedison`). |
-| `meta` | Schema version + embedding model fingerprint; the skill refuses to start against an incompatible DB. |
+The one thing worth knowing up front: documents, summaries, findings, and images all land in one polymorphic `chunks` table (shadowed by FTS5 and `sqlite-vec` indexes), so a single search covers every kind of source at once.
 
-Tag and finding curation lives on the skill surface, not the CLI: `bartleby skill <name>` (e.g. `bartleby skill add_tag`, `bartleby skill assign_tag`, `bartleby skill save_finding`) is the sanctioned human path for managing the vocabulary and the findings stored above.
-
-The `chunks` table is polymorphic on purpose: documents, summaries, findings, and images all produce searchable text, and folding them into one indexed table means one search query covers all of it. The trade-off is that `chunks.source_id` isn't a foreign key to any specific table — discipline lives in the typed insert helpers in [`bartleby/db/chunks.py`](./bartleby/db/chunks.py).
+Tag and finding curation lives on the skill surface, not the CLI: `bartleby skill <name>` (e.g. `bartleby skill add_tag`, `bartleby skill assign_tag`, `bartleby skill save_finding`) is the sanctioned human path for managing tags and findings.
 
 ---
 
@@ -515,11 +503,10 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 
 - **Storage:** SQLite with FTS5 (full-text) and [`sqlite-vec`](https://github.com/asg017/sqlite-vec) (vector). One file per project.
 - **Embeddings:** [`BAAI/bge-base-en-v1.5`](https://huggingface.co/BAAI/bge-base-en-v1.5) via `sentence-transformers`. 768 dimensions, ~400 MB on first download.
-- **PDF text + image extraction:** [pdfplumber](https://github.com/jsvine/pdfplumber) (text per page, image bounding boxes), [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (page rendering for OCR + image crops).
+- **PDF text + image extraction:** pdfplumber (text per page, image bounding boxes), pypdfium2 (page rendering for OCR + image crops). Default converter.
 - **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
 - **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
-- **Opt-in alternative PDF converter:** [Docling](https://docling-project.github.io/docling/) for layout-aware extraction with internal OCR. Activate via `--pdf-converter docling`. Required for HTML/MD ingest regardless of which PDF converter is selected.
-- **Opt-in alternative HTML converter for SEC filings:** [sec2md](https://github.com/alphanome-ai/sec2md) (Apache 2.0) for iXBRL EDGAR filings. Activate via `--html-converter sec2md`; only routed to for files whose first 4 KB contain the iXBRL namespace marker, so a directory mixing 10-Ks with ordinary HTML still does the right thing per file.
+- **Opt-in converters:** Docling (`--pdf-converter docling`; also required for HTML/MD ingest) and sec2md (Apache 2.0; `--html-converter sec2md`, iXBRL EDGAR filings only). See [Prerequisites](#prerequisites) and the [`scribe` converter notes](#bartleby-scribe) for what each does.
 - **Token counting:** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of which LLM provider you're using. A rough estimate — accurate enough for the `read_document --force` gate, not authoritative across providers.
 
 ---
@@ -533,11 +520,15 @@ Bartleby is built to run end-to-end without an internet connection — the path 
 
 No prompts, source text, or research notes leave the machine.
 
-Note: We pointed three models at the same large corpus and gave each the same open-ended brief: surface accountability angles, and save them as findings. The corpus is large, repetitive, and full of near-duplicate entities, so the task rewards models that can search efficiently, ground each claim in a specific document, and exercise judgment about what the evidence actually supports. We compared a frontier model (Claude Opus 4.8) against two locally-runnable open models (Qwen 3.6, 35B; Gemma 4, 31B) on time spent, factual accuracy, and editorial restraint.
+**How the models compare (as of June 2026).** We gave three models the same large, repetitive corpus and the same open-ended brief: surface accountability angles and save them as findings. The task rewards efficient search, claims grounded in a specific document, and judgment about what the evidence supports. We scored a frontier model (Claude Opus 4.8) against two locally-runnable open models (Qwen 3.6, 35B; Gemma 4, 31B) on time spent, factual accuracy, and editorial restraint.
 
-Opus 4.8 worked longest but turned the time into dense, specific, well-cited output, and consistently distinguished what the documents proved from what would be an unfair leap. Qwen 3.6 was a capable middle tier: real structural insight and usable leads, but tripped on a numeric error, some tool-use sloppiness, and one overreach where it asserted wrongdoing the filings didn't support. Gemma 4 was fastest and shallowest — thematically plausible but light on specifics, with garbled citations and claims stated as fact rather than shown. Buyer beware.
+- **Opus 4.8** worked longest but turned the time into dense, specific, well-cited output, and consistently separated what the documents proved from what would be an unfair leap.
+- **Qwen 3.6** was a capable middle tier: real structural insight and usable leads, but a numeric error, some tool-use sloppiness, and one overreach asserting wrongdoing the filings didn't support.
+- **Gemma 4** was fastest and shallowest — thematically plausible but light on specifics, with garbled citations and claims stated rather than shown. Buyer beware.
 
 ### Picking models for your hardware
+
+As of June 2026:
 
 | Hardware | Ingest (summarization and tagging) | Ingest (VLM) | Research (Goose or Pi) |
 | --- | --- | --- | --- |
