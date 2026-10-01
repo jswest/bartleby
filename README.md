@@ -20,7 +20,7 @@ At the _Wall Street Journal_, we have found it useful to let an AI agent run wil
 It's split into two pieces that share a SQLite database:
 
 - **The `bartleby` CLI** scribes (parses, chunks, embeds, and indexes) documents. It also exposes helper commands that agents use during research sessions. Run on its own, it gives you a rich, queryable corpus regardless of whether you ever point an agent at it.
-- **The `bartleby` skill** (in [`./bartleby/skill`](./bartleby/skill)) is a skill you drop into Claude Code, Cowork, Goose, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports.
+- **The `bartleby` skill** (in [`./bartleby/skill`](./bartleby/skill)) is a skill you drop into Claude Code, Cowork, Goose, or another compliant agent harness. It tells your agent how to explore the database, save findings, and cite evidence. The skill is BYO-model: it works with any agent the harness supports — full story in its [README](./bartleby/skill/README.md).
 
 A SQLite database binds these two together. The CLI writes it, the skill romps through it, writing findings back into it as it cavorts.
 
@@ -47,6 +47,8 @@ Both paths below install with the `docling` and `sec2md` extras: [Docling](https
 
 **WSJ-internal users** who want the wsjpt provider need one extra flag on the install/update commands below — see [`docs/wsj-internal.md`](./docs/wsj-internal.md).
 
+Both paths end with `bartleby ready`; restart your harness afterward so it reloads the skill.
+
 ### Riding `main`
 
 **Install:**
@@ -66,7 +68,7 @@ uv tool install '.[docling,sec2md]' --force
 bartleby ready
 ```
 
-Restart your harness afterward so it reloads the skill. Editable installs (`--editable .` in place of the install command) pick up plain code changes automatically — skip reinstalling for those, but still re-run `bartleby ready` (`--check` reports whether anything actually changed).
+Editable installs (`--editable .` in place of the install command) pick up plain code changes automatically — skip reinstalling for those, but still re-run `bartleby ready` (`--check` reports whether anything actually changed).
 
 **If a `git pull` added or bumped a dependency**, reinstall even on an editable install — it only references your source tree, so it won't pick up anything newly added to `pyproject.toml`. The symptom is a stray `ModuleNotFoundError` from a command that used to work fine ([#697](https://github.com/jswest/bartleby/issues/697)); fix it with `uv tool install --reinstall '.[docling,sec2md]'`.
 
@@ -112,20 +114,12 @@ bartleby project upgrade <name>
 
 Most updates upgrade in place; when a change isn't backward-compatible, `upgrade` tells you to re-ingest instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
 
-**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)): an old-style marker doesn't error, it just stops being recognized, so `finding_citations` can go stale with no signal anything broke. A one-time backfill already fixed every corpus present when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere can still carry one — fix it by rewriting the finding's body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)), which re-extracts citations under the current grammar.
-
-### Install the skill
-
-Covered above — `bartleby ready` installs or refreshes the skill as part of both paths. See the [`bartleby ready`](#bartleby-ready) command reference for its `--check` / `--force` / `--dest` flags.
+**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)): an old-style marker doesn't error, it just stops being recognized, so `finding_citations` can go stale with no signal anything broke. A one-time backfill already fixed every corpus present when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere can still carry one. `bartleby project upgrade` won't touch this — it's a data issue, not a schema one. Fix it by rewriting the finding's body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)), which re-extracts citations under the current grammar.
 
 ### Gotchas
 
 - Don't keep the repo (or its `.venv`) in a synced folder like Dropbox, iCloud, or OneDrive — syncing rewrites file paths and quietly breaks the install.
-- `bartleby` isn't on PyPI: run `uv` commands from inside the project directory — don't `uv pip install bartleby` or `uvx bartleby`.
-
-### A note on first-run latency
-
-Models download **lazily, the first time each is needed** — the `BAAI/bge-base-en-v1.5` embedding model (~400 MB plus tokenizer assets) on your first `bartleby scribe` (and the skill's first `search`), and Docling's layout/OCR models on the first scanned/image PDF if you opted into `docling`. They're cached and reused; see [Model downloads and offline mode](#model-downloads-and-offline-mode) for caching paths and restricted-network behavior.
+- `bartleby` isn't on PyPI: don't `uv pip install bartleby` or `uvx bartleby`. Riding `main`, run the `uv` commands from inside the repo checkout (a pinned install runs from anywhere).
 
 ---
 
@@ -159,7 +153,7 @@ Point this at a file or directory of `.pdf`, `.html`, `.md`, `.txt`, or image fi
 
 ### 4. Start an agent session
 
-In your harness of choice, load the `bartleby` skill (install it first with `bartleby ready` — see [Install the skill](#install-the-skill)) and ask the agent a question about your corpus. The skill guides it through searching, reading, synthesizing, and citing.
+In your harness of choice, load the `bartleby` skill (install it first with [`bartleby ready`](#bartleby-ready)) and ask the agent a question about your corpus. The skill guides it through searching, reading, synthesizing, and citing.
 
 The agent opens its own research *run* on its first call (`bartleby skill session new`) and carries it for the rest of the conversation, so **one conversation is one run** with no setup on your part — a new conversation is a new run.
 
@@ -169,15 +163,11 @@ The agent opens its own research *run* on its first call (`bartleby skill sessio
 bartleby skill session new --no-memory
 ```
 
-Memory-off is fixed when the run opens: ask mid-conversation and the agent will tell you to start a new one. `bartleby session start --no-memory` does **not** do this — the agent mints its own run instead. (More on runs and memory in the [skill README](bartleby/skill/README.md#how-runs-work).)
+Memory-off is fixed when the run opens — ask mid-conversation and the agent will tell you to start a new one. (`bartleby session start --no-memory` doesn't do it; more in the [skill README](bartleby/skill/README.md#how-runs-work).)
 
 ### 5. Browse what you've got
 
-```
-bartleby serve
-```
-
-Spins up a local SvelteKit UI for the active project — a corpus overview, document and finding browsers, and full-corpus search, with inline citations that link into the source PDFs at the cited page (full tour under [`bartleby serve`](#bartleby-serve)). It opens the database read-only, so it's safe to leave running alongside an ingest or a research session. Requires Node.js and npm on `PATH`.
+Run `bartleby serve` for a local web UI over the corpus and findings — see [`bartleby serve`](#bartleby-serve).
 
 ### 6. Share a single finding out of band
 
@@ -187,11 +177,7 @@ bartleby finding export <finding-id>            # writes <slug>.md (or pass --ou
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 ```
 
-- `finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs). Pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print in place; `--json` emits the raw finding. It resolves live rather than baking inert markers, so it's for reading here, not sharing elsewhere.
-- `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus.
-- `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line. Imported citations stay inert — never re-resolved to local chunk ids — and the finding then renders like any other local one.
-
-Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
+Details under [`bartleby finding`](#bartleby-finding).
 
 ---
 
@@ -240,22 +226,22 @@ Interactive configuration wizard. Asks for:
 | Temperature | 0 | 0 = deterministic, 1 = creative |
 | Reasoning effort | `low` | `minimal`/`low`/`medium`/`high`; only prompted when summary depth is `one-shot` |
 | Max summarize tokens | 50000 | Documents over this length are summarized from the first N tokens, with a note appended |
-| Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing |
+| Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing; Ollama auto-clamps to 1 (not prompted) |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
-| Parse workers | auto | How many documents to parse in parallel; `0` auto-sizes to cores and free RAM |
+| Parse workers | auto | How many documents to parse in parallel; `0` auto-sizes to `min(CPU cores − 2, free RAM ÷ 12 GB)`, at least 1 |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
-| Min image dimension | 64 | Images with a shorter edge than this are skipped |
+| Min image dimension | 64 | Images with a shorter edge than this are skipped — avoids wasted VLM calls (and crashes) on thin slivers |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
-| Caption workers | 4 (cloud) / 1 (Ollama) | How many images caption in parallel after parsing |
+| Caption workers | 4 (cloud) / 1 (Ollama) | How many images caption in parallel after parsing; Ollama auto-clamps to 1 (not prompted) |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
 
-Reasoning effort trades billed tokens for depth (OpenAI gpt-5 and effort-capable Anthropic models only; Ollama/wsjpt ignore it). Summarize and caption workers run network-bound LLM/VLM calls as their own pipeline stage and auto-clamp to 1 for a local Ollama provider (`OLLAMA_NUM_PARALLEL` defaults to 1). Parse workers are RAM-bound and recycle periodically; see [ARCHITECTURE.md](./ARCHITECTURE.md) ("Single-writer drain + per-unit resume") for the auto-sizing formula.
+Reasoning effort trades billed tokens for depth (OpenAI gpt-5 and effort-capable Anthropic models only; Ollama/wsjpt ignore it). Summarize and caption workers run network-bound LLM/VLM calls as their own pipeline stage; the Ollama clamp is because `OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue. Parse workers are RAM-bound and recycle periodically (see [ARCHITECTURE.md](./ARCHITECTURE.md#single-writer-drain--per-unit-resume)); a count you set explicitly can use every core.
 
-**API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
+**API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (optional for wsjpt — it defaults to Vertex AI / ADC; setting this, or `wsjpt_api_key` in config, switches it to the Gemini API-key path). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
 For local-only setups, see [Running fully local](#running-fully-local-for-sensitive-work) for the recommended model picks by hardware tier.
 
@@ -289,9 +275,23 @@ bartleby project publish <name> --to <s3-url>      # Publish a findings-free cop
 bartleby project import <name> --from <source>     # Import a published corpus as a new local project
 ```
 
-Schema-bump policy — additive-only upgrades via `project upgrade`, everything else re-ingests — is covered in [ARCHITECTURE.md](./ARCHITECTURE.md#backwards-compatibility).
-
 `publish` strips findings and sessions from a copy of the corpus before uploading the `.db` and archived originals to an S3 prefix. `import` pulls one back down (`s3://…`, a local directory, or `file://…`) as a brand-new project — refusing on a schema or embedding-model mismatch — optionally dropping tags (`--without-tags`) or overwriting a same-named project (`--yes`, which drops its local findings).
+
+### `bartleby finding`
+
+Read, export, or import a single finding out of band.
+
+```
+bartleby finding read <finding-id>              # render to stdout as Markdown (--json, --render)
+bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
+bartleby finding import path/to/finding.md      # into the active project (or --project)
+```
+
+- `finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs). Pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print in place; `--json` emits the raw finding. It resolves live rather than baking inert markers, so it's for reading here, not sharing elsewhere.
+- `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus.
+- `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line. Imported citations stay inert — never re-resolved to local chunk ids — and the finding then renders like any other local one.
+
+Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
 
 ### `bartleby scribe`
 
@@ -341,7 +341,7 @@ Ingestion runs in three concurrent phases — parse (a process pool), image capt
 
 **Backfilling dates.** `bartleby scribe backfill-dates [project] --from-filename '<regex>'` bulk-sets `authored_date` from a named `date` capture group matched against each file's name (`--match-path` matches the full path instead). Fills `NULL`s only unless `--overwrite`; `--dry-run` reports counts and sample matches without writing. A human-run admin op, not on the skill's surface — the skill's `probe_dates` validates a regex and hands you the exact command to run.
 
-**Benchmarking ingest.** `--timings` turns the run into a repeatable measurement, timing each document's stages and emitting a per-stage aggregate as JSON to stdout (the bar and prose stay on stderr, so capture it with a redirect). The reproducible recipe — fresh-project setup, the aggregate JSON field reference, the gotchas that silently corrupt a run, and recorded runs — lives in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+**Benchmarking ingest.** `--timings` turns the run into a repeatable measurement, timing each document's stages and emitting a per-stage aggregate as JSON to stdout (the bar and prose stay on stderr, so capture it with a redirect). The reproducible recipe — fresh-project setup, the aggregate JSON field reference, the gotchas that silently corrupt a run, recorded runs, and [rough per-document expectations](docs/BENCHMARKS.md#rough-expectations-anecdotal) — lives in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ### `bartleby session`
 
@@ -356,7 +356,7 @@ bartleby session set [--harness <name>] [--model <id>]                   # Stamp
 
 The *active* session is whichever was started or used most recently — usually the last agent run, since every agent call re-marks its run active. So `current` shows the latest run, and `set` stamps it: for a blind multi-model comparison, let the agent run without `--model`, then `session set --model <id>` after assessing. `--harness` is best-effort auto-detected (e.g. Claude Code) when omitted; `--model` usually has no environment signal. Unknown values stay null — never guessed. The values show up in `list_findings` / `read_finding`.
 
-`session start` marks a new session active, but an agent following the skill mints its own run on its first call and moves the marker to it — so `session start --no-memory` is not how you get a memory-off agent run. Ask the agent instead (see [Quick start step 4](#4-start-an-agent-session)). Memory-off is enforced at the script level: in a memory-off run, `search` returns no findings regardless of how the agent is prompted, and the direct finding reads see only that run's own findings.
+`session start --no-memory` doesn't make an agent's run memory-off — see [Quick start step 4](#4-start-an-agent-session).
 
 ### `bartleby embed`
 
@@ -406,8 +406,6 @@ Requires Node.js and npm on `PATH`; the first invocation runs `npm install` once
 
 - Opens the project database read-only. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
 - Picks up the active project from `~/.bartleby/config.yaml`: `bartleby project use <name>` plus a page reload switches what you're looking at.
-- `bartleby serve --project <name>` browses a different corpus for that server only, without disturbing the persisted active project.
-- Safe to leave running alongside an ingest or a research session.
 
 ### `bartleby benchmark`
 
@@ -449,7 +447,7 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 - **PDF text + image extraction:** pdfplumber (text per page, image bounding boxes), pypdfium2 (page rendering for OCR + image crops). Default converter.
 - **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
 - **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
-- **Opt-in converters:** Docling (`--pdf-converter docling`; also required for HTML/MD ingest) and sec2md (Apache 2.0; `--html-converter sec2md`, iXBRL EDGAR filings only). See [Prerequisites](#prerequisites) and the [`scribe` converter notes](#bartleby-scribe) for what each does.
+- **Converters:** Docling (default for HTML/MD, opt-in for PDF) and sec2md (Apache 2.0; iXBRL EDGAR HTML when opted in, required for EDGAR full-submission `.txt`) — see [Prerequisites](#prerequisites) and [`bartleby scribe`](#bartleby-scribe).
 - **Token counting:** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of which LLM provider you're using. A rough estimate — accurate enough for the `read_document --force` gate, not authoritative across providers.
 
 ---
@@ -490,17 +488,9 @@ Pi is a minimal harness with an unsandboxed `bash` tool — handing a local mode
 
 ### Model downloads and offline mode
 
-Bartleby pulls a few models from the Hugging Face Hub on demand: the embedding model (always), and — when you ingest with the Docling converter — Docling's layout and table models (the first time a conversion needs them). They cache under `~/.cache/huggingface/hub` and download once.
+Models download from the Hugging Face Hub lazily, the first time each is needed: the `BAAI/bge-base-en-v1.5` embedding model (~400 MB plus tokenizer assets) on your first `bartleby scribe` (or the skill's first `search`), and — when you ingest with Docling — its layout/OCR/table models on first use. They cache under `~/.cache/huggingface/hub` and download once.
 
 To avoid a Hub network check on every run, Bartleby switches Hugging Face into offline mode automatically — but only once *every* model the current run needs is already cached. Until then it stays online so the missing model can download. If you ever hit a model fetch that's blocked by offline mode, re-run with `HF_HUB_OFFLINE=0` to force the download; an explicit `HF_HUB_OFFLINE` in your environment always overrides Bartleby's default.
-
----
-
-## What's the `bartleby` skill?
-
-A skill bundle (installed with `bartleby ready`) that teaches the agent how to use this database. It exposes a small set of scripts (`search`, `read_document`, `save_finding`, etc.) and a `SKILL.md` that codifies an opinionated research methodology — what counts as evidence, when to read a full document vs. searching, how to cite.
-
-See [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for the full story.
 
 ---
 
@@ -511,8 +501,8 @@ work — the `/ship` issue→PR loop (leaf issues and omnibus bundles alike), th
 worktree convention, the commit gates, the safety hook — is version-controlled
 right in the repo. See
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) for how we develop here (and how to do it by
-hand if you'd rather). Architectural invariants and the decision log live in
-[`ARCHITECTURE.md`](./ARCHITECTURE.md).
+hand if you'd rather). Architectural invariants live in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md); the decision log in [`docs/decisions/`](./docs/decisions/).
 
 ---
 
