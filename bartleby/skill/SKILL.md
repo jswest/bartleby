@@ -16,6 +16,7 @@ The user has a question. Your job is to find the answer in the corpus, cite wher
 ```
 bartleby skill session new                  # → {"created": true, "run": {"run_key": "…", …}}
 bartleby skill session new --model opus      # optionally tell it which model you are
+bartleby skill session new --no-memory       # only if the user asked for memory off (see "Memory rules")
 ```
 
 Then **pass that id as `--run <run_key>` on every later call** so all your work attaches to this one run:
@@ -230,7 +231,7 @@ A plain tag answers *"which documents are X?"*; a **value-tag** answers *"what i
 
 ## Memory rules
 
-> **Memory-off sessions — check this first.** If this session was started with `--no-memory`, findings are walled off to your *own* session so a run can't be contaminated by other sessions' conclusions: `list_findings` shows only what *this* session authored, `read_finding` reads this session's findings but returns `{"code": "MEMORY_OFF"}` for another session's, `search --findings` is silently dropped entirely (the response carries `"memory_excluded": true`), and `read_chunks` won't hand you another session's finding chunks by id either (foreign ids land in `missing`; `--around-chunk` on one returns `{"code": "MEMORY_OFF"}`). The curation commands are walled the same way — `edit_finding`, `delete_finding`, and `merge_findings` all return `{"code": "MEMORY_OFF"}` if you name a finding (any `--from` source or the `--into` target) another session authored, so you can only retract or consolidate your *own* drafts. Don't plan around surveying or reading *prior* sessions' findings — you can't reach them. **`save_finding` still works**, and you can read back what you just wrote; it also returns the resolved `citations` in its own response, so you never need a read-back to verify what landed. The "use prior findings / tend the memory" guidance below applies only when memory is on.
+> **Memory-off runs — check this first.** If your run is memory-off (`run.memory_enabled` is `false` in your results — usually because it was opened with `session new --no-memory`), findings are walled off to your *own* session so a run can't be contaminated by other sessions' conclusions: `list_findings` shows only what *this* session authored, `read_finding` reads this session's findings but returns `{"code": "MEMORY_OFF"}` for another session's, `search --findings` is silently dropped entirely (the response carries `"memory_excluded": true`), and `read_chunks` won't hand you another session's finding chunks by id either (foreign ids land in `missing`; `--around-chunk` on one returns `{"code": "MEMORY_OFF"}`). The curation commands are walled the same way — `edit_finding`, `delete_finding`, and `merge_findings` all return `{"code": "MEMORY_OFF"}` if you name a finding (any `--from` source or the `--into` target) another session authored, so you can only retract or consolidate your *own* drafts. Don't plan around surveying or reading *prior* sessions' findings — you can't reach them. **`save_finding` still works**, and you can read back what you just wrote; it also returns the resolved `citations` in its own response, so you never need a read-back to verify what landed. The "use prior findings / tend the memory" guidance below applies only when memory is on.
 
 Prior findings live in the database and are reachable three ways: `search --findings` (ranked fragments matching a query), `list_findings` (browse what exists, newest first), and `read_finding --finding-id <id>` (one whole finding). Treat them as **hints**, never as evidence:
 
@@ -238,7 +239,7 @@ Prior findings live in the database and are reachable three ways: `search --find
 - **Never cite a finding.** Findings are derivative; the underlying documents are the evidence.
 - **Tend the memory, don't just grow it.** Findings accrete: stale drafts, zero-citation sketches, and several iterations of the same report pile up and make triage slower. When you notice this, curate — `delete_finding` to retract one that's superseded or dead, `merge_findings` to fold a cluster of overlapping versions into a single consolidated finding (you author the merged body; the sources are deleted). Both touch only finding rows; document evidence is never affected. Confirm with the user before deleting or merging findings you didn't author this session.
 
-If the user asks you to "ignore previous memory" or "start fresh" mid-session, stop and tell them to restart with `bartleby session start --no-memory`. The skill cannot honor memory-off requests inside an already-running session — that decision happens out-of-band, before you start.
+Memory-off is decided once, when the run opens. If the user's opening request asks you to "ignore previous memory" or "start fresh", open the run with `bartleby skill session new --no-memory` and work as usual. If they ask *after* the run is open, don't open a second run — stop and tell them to start a new conversation and ask for memory off in its first message. A memory-off request cannot be honored inside a run that's already going; what you've already read stays in your context.
 
 ## Output
 

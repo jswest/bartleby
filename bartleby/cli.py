@@ -358,7 +358,7 @@ def main():
 
     serve_parser = subparsers.add_parser(
         "serve",
-        help="Launch a local SvelteKit UI for browsing the active project's findings.",
+        help="Launch a local SvelteKit UI for browsing and searching the active project.",
     )
     serve_parser.add_argument(
         "--project", type=str, default=None,

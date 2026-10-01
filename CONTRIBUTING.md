@@ -243,8 +243,7 @@ to show the computed next version and notes, **PAUSE for your explicit OK**, the
 of truth for the version math and the schema-drift guard; the skill only advises
 and orchestrates (and never invents a version or reaches around the guard hook).
 The consumer side — pinning to and upgrading between releases — is documented in
-the README under [Pinning to a release](./README.md#pinning-to-a-release) and
-[Upgrading from a release](./README.md#upgrading-from-a-release).
+the README under [Pinned release](./README.md#pinned-release).
 
 ## A note for non-Claude contributors
 

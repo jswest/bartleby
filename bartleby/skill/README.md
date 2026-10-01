@@ -10,35 +10,23 @@ The skill is BYO-model. It works against whatever model your harness runs.
 
 **It is:** a set of small Python scripts that talk to a Bartleby SQLite database, plus a `SKILL.md` that tells the agent how to use them well. The skill is opinionated — it has views about what counts as evidence, when to search vs. read, and how to behave when memory is on or off.
 
-**It isn't:** a way to ingest documents. That's the [`bartleby` CLI](../README.md). The skill assumes the database already exists and the corpus is already chunked, embedded, and indexed.
+**It isn't:** a way to ingest documents. That's the [`bartleby` CLI](../../README.md). The skill assumes the database already exists and the corpus is already chunked, embedded, and indexed.
 
 ---
 
 ## Prerequisites
 
-1. The `bartleby` CLI is installed and on your `PATH`. The skill shells out to it for embedding queries (semantic search). Everything else (config, schema, project resolution) is imported from the installed `bartleby` package directly. (See the [main README](../README.md) for install instructions.)
+1. The `bartleby` CLI is installed and on your `PATH`. The skill shells out to it for embedding queries (semantic search). Everything else (config, schema, project resolution) is imported from the installed `bartleby` package directly. (See the [main README](../../README.md) for install instructions.)
 2. A Bartleby project exists, with documents already ingested (`bartleby scribe`).
 3. The project is the active project, *or* each script is invoked with `--project <name>`.
 
-Every script opens the project DB via the shared runner, which validates the schema version on the spot and refuses to run against an incompatible database. If a session isn't active, the runner auto-creates one with memory on (see "How sessions work" below).
+Every script opens the project DB via the shared runner, which validates the schema version on the spot and refuses to run against an incompatible database. The agent opens its own run on its first call — no session setup on your part (see "How runs work" below).
 
 ---
 
 ## Installation
 
-The skill ships inside the `bartleby` package, so the CLI installs it for you.
-
-**Claude Code:**
-
-```
-bartleby ready
-```
-
-This stamps the skill into `~/.claude/skills/bartleby/`. Re-run it any time to refresh; `bartleby ready --check` reports whether your installed copy is current.
-
-**Other harnesses:** point it elsewhere with `bartleby ready --dest <dir>`. The skill is a self-contained folder; it drops anywhere a compliant harness reads skills from.
-
-The main [README](../../README.md#install-the-skill) covers refreshing after an update — worth reading if you're updating an existing install.
+Run [`bartleby ready`](../../README.md#bartleby-ready): it installs to `~/.claude/skills/bartleby/` (`--dest <dir>` for other harnesses, `--check` to see if it's current). The skill is a self-contained folder; it drops anywhere a compliant harness reads skills from.
 
 ---
 
@@ -78,35 +66,29 @@ For full argument-level contracts, see [`SKILL.md`](./SKILL.md) and the script d
 
 ---
 
-## How sessions work
+## How runs work
 
-Every agent run happens inside a *session*. Sessions are rows in the database with an ID and a memorable name (e.g., `mighty-grove`). Findings and audit log entries are tagged with a `session_id`.
+Every agent conversation is one *run*. Runs are rows in the `sessions` table with an ID and a memorable name (e.g., `mighty-grove`); findings and audit log entries are tagged with the run's `session_id`.
 
-Sessions don't really "end" — there's no end-state to enforce. They're just a way to group related work and to thread provenance through the database.
-
-**Starting a session:**
+**The agent opens its own.** Its first call is:
 
 ```
-bartleby session start
+bartleby skill session new [--model <id>] [--no-memory]
 ```
 
-This prints the session ID and name. The skill picks it up automatically via the active session.
+This mints a `run_key` (a UUID) and starts a fresh run. The agent passes `--run <run_key>` on every later call so its work attaches to that run, and every successful result echoes the run back under `"run"`. A new conversation is a new run; two conversations on one corpus never share one. A call that forgets `--run` falls back to the most recently used run.
 
-**You usually don't need to.** If no session is active when the skill's first script runs, the skill auto-creates one with default settings (memory on). Run `bartleby session start` explicitly only when you want `--no-memory`.
+Runs don't really "end" — there's no end-state to enforce. They group related work and thread provenance through the database.
 
 **Memory:**
 
-By default, the `search` script can return findings from any prior session. This lets the agent build on past research without re-deriving conclusions.
+By default a run is memory-on: `search --findings`, `list_findings`, and `read_finding` reach findings from any prior run, so the agent can build on past research.
 
-If a user wants the agent to ignore prior findings, they start a memory-off session:
+To have the agent ignore prior findings, ask for it in the **first message** of a new conversation ("ignore previous memory"). The agent opens its run with `bartleby skill session new --no-memory`. In a memory-off run, `search` silently drops all findings from results, *regardless of what flags the agent passes*, and the direct finding reads and curation commands reach only the run's own findings. This is enforced at the script level, not via prompt. The agent literally cannot reach prior findings.
 
-```
-bartleby session start --no-memory
-```
+Memory-off is fixed when the run opens. If you ask mid-conversation, the skill instructs the agent to stop and tell you to start a new conversation and ask up front — it won't switch runs mid-stream, since what it has already read stays in its context.
 
-In a memory-off session, the `search` script silently excludes findings from results, *regardless of what flags the agent passes*. This is enforced at the script level, not via prompt. The agent literally cannot reach prior findings.
-
-If a user asks the agent mid-session to "ignore previous memory" or similar, the skill instructs the agent to stop and tell the user to restart with `bartleby session start --no-memory`. The skill does not attempt to honor memory-off requests within an already-running session.
+The human `bartleby session` CLI inspects and labels runs but doesn't drive them — see the [main README](../../README.md#bartleby-session).
 
 ---
 
@@ -118,7 +100,7 @@ Findings are chunked and embedded into the same vector space as documents and ag
 
 Findings are tagged with `source_kind = 'finding'` and excluded from search by default. The agent must opt in via `--findings` to include them. The skill's prompt guides the agent on when to do this (typically: at the start of a new topic, to check for prior relevant work; never as primary evidence in a citation).
 
-Beyond relevance search, findings have two direct read paths: `list_findings` enumerates them (newest first, for browsing), and `read_finding --finding-id <id>` returns one whole finding. In a memory-off session these don't fail outright — they scope to the session's **own** findings (so a run can read back what it just wrote): `list_findings` lists only this session's findings, and `read_finding` returns this session's findings but raises `{"code": "MEMORY_OFF"}` for one authored by another session. `search` is stricter — it silently drops **all** findings regardless, since ranked retrieval surfacing a finding as if it were evidence is the contamination path memory-off exists to prevent.
+Beyond relevance search, findings have two direct read paths: `list_findings` enumerates them (newest first, for browsing), and `read_finding --finding-id <id>` returns one whole finding. How memory-off narrows these is under "How runs work" above.
 
 Findings also have a curation path so memory can be tended rather than only grown: `delete_finding --finding-id <id>` retracts one (its row, body chunks, and citations), and `merge_findings --from <ids> --into <id> --body-file <path>` folds a cluster of duplicate iterations into a single consolidated finding (the target survives, the agent authors the merged body, the sources are deleted). Both touch only finding rows — the cited document chunks are never affected, because findings are derivative hints, not evidence.
 
@@ -138,7 +120,7 @@ Everything queryable lives in the project's `bartleby.db`:
 - `document_tags` — join table assigning tags to documents (with the captured `value` and source `chunk_id` for value-tags)
 - `audit_logs` — every tool call the agent made, append-only, never read by the agent
 
-No sidecar files. If you want to export a finding to disk, ask the agent to write it.
+No sidecar files. To share a finding as a file, use `bartleby finding export` (see the [main README](../../README.md#bartleby-finding)).
 
 ---
 
@@ -158,7 +140,7 @@ If you want different defaults, edit `SKILL.md`.
 
 ## Troubleshooting
 
-**"Schema version mismatch."** The database was created by a different version of the `bartleby` CLI. Either upgrade the CLI or re-ingest the corpus.
+**"Schema version mismatch."** The database was created by a different version of the `bartleby` CLI. Run `bartleby project upgrade <name>`. If it says the DB is newer than your code, update the CLI instead; if it otherwise refuses, re-ingest — see the [main README](../../README.md#after-a-schema-change).
 
 **"No active project."** Run `bartleby project use <name>` or pass `--project` via your harness's environment.
 
