@@ -31,7 +31,7 @@ A couple things to be aware of:
 
 ---
 
-## Installation
+## Install and update
 
 ### Prerequisites
 
@@ -41,11 +41,24 @@ brew install uv tesseract
 
 (`apt install tesseract-ocr` on Debian/Ubuntu; on Windows, use the official installer from UB Mannheim.)
 
-Tesseract is used for cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed. [Docling](https://docling-project.github.io/docling/) is available as an opt-in alternative PDF converter (slower, but more structurally aware) and as the default converter for HTML/MD. [sec2md](https://github.com/alphanome-ai/sec2md) is an opt-in HTML converter specialized for iXBRL EDGAR filings.
+Tesseract does cheap OCR on scanned PDF pages before falling back to the more expensive VLM. The default PDF pipeline uses [pdfplumber](https://github.com/jsvine/pdfplumber) for text and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) for page rendering — both are bundled as Python deps, no system install needed.
 
-### Install (or update) Bartleby
+Both paths below install with the `docling` and `sec2md` extras: [Docling](https://docling-project.github.io/docling/) is the layout-aware converter, required to ingest `.md`/`.html` files, so you almost always want it; [sec2md](https://github.com/alphanome-ai/sec2md) is a specialist for iXBRL EDGAR filings. A bare `uv tool install .` works but can't ingest those formats. (Development: `uv tool install --editable .`.)
 
-Install and update are the same three steps, from the project directory:
+**WSJ-internal users** who want the wsjpt provider need one extra flag on the install/update commands below — see [`docs/wsj-internal.md`](./docs/wsj-internal.md).
+
+### Riding `main`
+
+**Install:**
+
+```
+git clone https://github.com/jswest/bartleby.git   # skip if you already have the repo
+cd bartleby
+uv tool install '.[docling,sec2md]' --force
+bartleby ready
+```
+
+**Update** — pull, then repeat the same two commands:
 
 ```
 git pull
@@ -53,110 +66,11 @@ uv tool install '.[docling,sec2md]' --force
 bartleby ready
 ```
 
-(Fresh clone: `git clone` first, then the same commands. `bartleby ready` stamps the agent skill; see [After updating Bartleby](#after-updating-bartleby) for the post-update details.)
+Restart your harness afterward so it reloads the skill. Editable installs (`--editable .` in place of the install command) pick up plain code changes automatically — skip reinstalling for those, but still re-run `bartleby ready` (`--check` reports whether anything actually changed).
 
-**WSJ-internal users** who want the wsjpt provider (routes Gemini through WSJ's parsing toolkit) add one flag to the same command:
+**If a `git pull` added or bumped a dependency**, reinstall even on an editable install — it only references your source tree, so it won't pick up anything newly added to `pyproject.toml`. The symptom is a stray `ModuleNotFoundError` from a command that used to work fine ([#697](https://github.com/jswest/bartleby/issues/697)); fix it with `uv tool install --reinstall '.[docling,sec2md]'`.
 
-```
-uv tool install '.[docling,sec2md]' --with 'git+ssh://git@github.dowjones.net/data/wsjpt.git' --force
-```
-
-**Details and troubleshooting:**
-
-- **What the extras are.** [Docling](https://docling-project.github.io/docling/) is the layout-aware converter — required to ingest `.md` and `.html` files, so you almost always want it. [sec2md](https://github.com/alphanome-ai/sec2md) is a specialist for EDGAR iXBRL filings (10-K, 10-Q, 8-K, etc.); it preserves SEC table structure and section headings that Docling tends to flatten, and only activates when `html_converter = sec2md` *and* the file passes an iXBRL sniff (`xmlns:ix=...` in the head) — everything else on the HTML branch still falls through to Docling. A bare `uv tool install .` works but can't ingest those formats.
-- **Why wsjpt goes through `--with`.** Its git source is WSJ-internal and unreachable outside WSJ, so it can't live in the locked dependency set — that would break `uv lock`/`uv sync` for everyone else. `--with` injects it into the **tool's** isolated environment; a separate `uv pip install` lands somewhere the running tool can't see. `--force` re-applies over an existing install. wsjpt pins its own dependencies (including `pydantic-ai`), so no extra `--with` pins are needed.
-- **Sidestepping SSH.** Swap the wsjpt source for HTTPS and git authenticates through the normal credential helper (a PAT, usually already cached in the macOS keychain from prior HTTPS clones):
-
-  ```
-  --with 'git+https://github.dowjones.net/data/wsjpt.git'
-  ```
-
-- **SSH hangs at `resolving dependencies...`.** A passphrase-protected SSH key is the likely cause — `uv` runs git non-interactively, so the key can't prompt for its passphrase and the fetch silently blocks rather than erroring. Fix by loading the key into `ssh-agent`:
-
-  ```
-  eval "$(ssh-agent -s)"
-  ssh-add ~/.ssh/id_ed25519
-  ```
-
-  On macOS, persist it across reboots with `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` and this `~/.ssh/config` stanza:
-
-  ```
-  Host github.dowjones.net
-    AddKeysToAgent yes
-    UseKeychain yes
-  ```
-
-- **Local wsjpt checkout.** `--with '/abs/path/to/wsjpt'` avoids the network fetch entirely.
-- **Development.** `uv tool install --editable .`
-- **Check the version before updating** — see [Pinning to a release](#pinning-to-a-release) below for what a minor vs. patch bump means.
-
-### Pinning to a release
-
-The examples above install whatever `HEAD` you have checked out — fine for following along, but a moving target if you'd rather upgrade on your own schedule. Releases are git tags of the form `v0.<schema>.<patch>`, so you can pin to one directly without even cloning.
-
-**Read the number first.** The **minor** *is* the database schema version. A minor bump (`v0.7.x` → `v0.8.0`) means the schema changed and existing corpora must be re-ingested; a patch bump (`v0.7.0` → `v0.7.1`) is always safe to take in place. So you can compare two tags and know instantly whether moving between them will cost you a re-ingest. (Maintainers: see [`scripts/release.py`](./scripts/release.py) for how tags are cut.)
-
-To see what's available, browse the [releases page](https://github.com/jswest/bartleby/releases) or list the tags without cloning:
-
-```
-git ls-remote --tags https://github.com/jswest/bartleby.git 'v*'
-```
-
-Then pin to the one you want:
-
-```
-uv tool install 'git+https://github.com/jswest/bartleby.git@v0.7.0'
-```
-
-Extras and the `--with`/`--force` flags work the same as above. Versions are read straight from the tag, so `bartleby --version` always tells you exactly what you're running. (To pin with extras, see the `#egg=` form under [Upgrading from a release](#upgrading-from-a-release) below.)
-
-### Upgrading from a release
-
-When a newer release lands, moving to it is two pieces — the CLI and the skill — plus a quick check on the version number. (This is the pinned-release counterpart to [After updating Bartleby](#after-updating-bartleby), which covers riding `main`.)
-
-**First, find the latest tag** — don't reuse a number from memory. Browse the [releases page](https://github.com/jswest/bartleby/releases), or:
-
-```
-git ls-remote --tags https://github.com/jswest/bartleby.git 'v*'
-```
-
-Compare its minor (middle) number to what `bartleby --version` currently reports: same minor → a safe in-place upgrade; a higher minor → the schema moved and you'll re-ingest (see below). Use the new tag wherever `<latest>` appears below.
-
-**1. Reinstall the CLI at the new tag.** Repeat whatever extras you first used and add `--force` to replace the installed tool. The `#egg=bartleby[...]` fragment is how extras attach to a `git+https` URL — drop it and you get a working CLI with **no** Docling/sec2md, which silently breaks HTML/EDGAR ingestion (or falls back to weaker extraction). For SEC work, keep both:
-
-```
-uv tool install 'git+https://github.com/jswest/bartleby.git@<latest>#egg=bartleby[docling,sec2md]' --force
-```
-
-**2. Refresh the skill.** The skill now ships *inside* the package, so the CLI you just reinstalled already carries the matching version — `bartleby ready` stamps it straight into `~/.claude/skills/bartleby` with no separate checkout:
-
-```
-bartleby ready
-```
-
-Restart your harness afterward so it reloads the skill.
-
-**If the new tag crossed a schema boundary** (its minor number is higher), existing projects need to be brought up to date before they'll open — see [After updating Bartleby](#after-updating-bartleby) for `bartleby project upgrade <name>` and the re-ingest case.
-
-### Install the skill
-
-The skill ships inside the package, so one command installs (or refreshes) it into your harness's skills directory:
-
-```
-bartleby ready
-```
-
-This stamps the skill that came with your installed `bartleby` into `~/.claude/skills/bartleby/`, **replacing any prior copy** so `SKILL.md` always lands *directly* under `~/.claude/skills/bartleby/` — never nested a level too deep:
-
-```
-~/.claude/skills/bartleby/
-├── README.md
-└── SKILL.md
-```
-
-Restart your harness after installing — skills load at startup. See the [`bartleby ready`](#bartleby-ready) command reference for the `--check` / `--force` / `--dest` flags, and [`./bartleby/skill/README.md`](./bartleby/skill/README.md) for harness-specific notes.
-
-### Verify your install
+**Verify:**
 
 ```
 which bartleby                          # the CLI is on PATH
@@ -165,33 +79,44 @@ bartleby project list                   # the CLI actually runs
 bartleby ready --check                  # the installed skill is present and current
 ```
 
-WSJ users: once wsjpt is configured, `bartleby config` loads the provider with no `ModuleNotFoundError: No module named 'wsjpt'`.
+### Pinned release
 
-### After updating Bartleby
+Releases are git tags of the form `v0.<schema>.<patch>` — the **minor** number *is* the database schema version. Same minor → a safe in-place upgrade; a higher minor → the schema changed and existing corpora need [`bartleby project upgrade`](#after-a-schema-change) or a re-ingest. (Maintainers: see [`scripts/release.py`](./scripts/release.py) for how tags are cut.)
 
-This project moves fast. If you'd rather not ride `main`, [pin to a release tag](#pinning-to-a-release) and upgrade deliberately on your own schedule with [Upgrading from a release](#upgrading-from-a-release). Otherwise, after every `git pull`, refresh both pieces from the new code:
+**Install** — browse the [releases page](https://github.com/jswest/bartleby/releases) or list tags without cloning, then pin to one:
 
 ```
-# 1. Reinstall the CLI (repeat whatever extras you first used)
-uv tool install '.[docling,sec2md]' --force
-
-# 2. Refresh the skill so your agent sees the current contract
+git ls-remote --tags https://github.com/jswest/bartleby.git 'v*'
+uv tool install 'git+https://github.com/jswest/bartleby.git@v0.7.0#egg=bartleby[docling,sec2md]'
 bartleby ready
 ```
 
-Restart your harness afterward so it reloads the skill. (Editable installs — `--editable .` — pick up code changes automatically, so you can skip step 1 *for a plain code change*; `bartleby ready` still re-stamps the skill, and `--check` tells you whether a `git pull` actually changed it.)
+The `#egg=bartleby[...]` fragment is how extras attach to a `git+https` URL — drop it and you get a working CLI with no Docling/sec2md, which silently breaks HTML/EDGAR ingestion. `bartleby --version` always reports exactly what tag you're running.
 
-**If a `git pull` added or bumped a dependency**, reinstall even on an editable install — it just references your source tree, so it won't install anything newly added to `pyproject.toml` on its own. The symptom of skipping this is a stray `ModuleNotFoundError: No module named '<package>'` from a command that used to work fine ([#697](https://github.com/jswest/bartleby/issues/697)); fix it with `uv tool install --reinstall '.[docling,sec2md]'` — step 1's command with `--reinstall` in place of `--force`, which forces the dependency resync.
+**Update** — find the latest tag the same way, compare its minor to your current `bartleby --version`, then reinstall at the new tag with `--force`:
 
-**If the database schema changed**, existing projects won't open until they're brought up to date — a command will fail with a clear `schema version mismatch` message. Bring a project up to date with:
+```
+uv tool install 'git+https://github.com/jswest/bartleby.git@<latest>#egg=bartleby[docling,sec2md]' --force
+bartleby ready
+```
+
+**Verify:** same four commands as under riding `main`, above.
+
+### After a schema change
+
+Whichever path you're on, a schema bump makes an existing project fail to open with a `schema version mismatch` error. Bring it up to date:
 
 ```
 bartleby project upgrade <name>
 ```
 
-Most updates upgrade in place. When a change isn't backward-compatible, `upgrade` tells you to **re-ingest** instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
+Most updates upgrade in place; when a change isn't backward-compatible, `upgrade` tells you to re-ingest instead (recreate the project and run `bartleby scribe` again) — there's no automatic migration for those.
 
-**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)), check them: an old-style citation marker doesn't error, it just silently stops being recognized, so that finding's `finding_citations` can quietly go stale with no signal that anything broke. A one-time backfill already fixed every corpus present on a given machine when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere, or one that predates that fix, can still carry unrecognized markers. `bartleby project upgrade` won't touch this — it's a data issue, not a schema one. Fix a stale finding by rewriting its body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)) — it re-extracts citations from the body and rebuilds `finding_citations` under the current grammar.
+**If you have findings older than the `[^chunk:N]` citation format** ([#624](https://github.com/jswest/bartleby/issues/624)): an old-style marker doesn't error, it just stops being recognized, so `finding_citations` can go stale with no signal anything broke. A one-time backfill already fixed every corpus present when it ran ([#642](https://github.com/jswest/bartleby/issues/642)), but a corpus adopted from elsewhere can still carry one — fix it by rewriting the finding's body through `edit_finding` (see the [skill reference](./bartleby/skill/README.md)), which re-extracts citations under the current grammar.
+
+### Install the skill
+
+Covered above — `bartleby ready` installs or refreshes the skill as part of both paths. See the [`bartleby ready`](#bartleby-ready) command reference for its `--check` / `--force` / `--dest` flags.
 
 ### Gotchas
 
@@ -513,7 +438,7 @@ stores, and provenance — lives in [`benchmarks/README.md`](benchmarks/README.m
 | Anthropic | `claude-haiku-4-5` | `claude-haiku-4-5` | Requires API key. Structured output via tool-use. |
 | OpenAI | `gpt-5-mini` | `gpt-5-mini` | Requires API key. Structured output via the SDK's Pydantic parse helper. |
 | Ollama | `qwen3-vl:30b` | `qwen3-vl:30b` | Local server. Structured output via the chat API's `format=` JSON schema. One MoE model handles both jobs; `gemma4:e2b` is a lighter alternative (see [Picking models for your hardware](#picking-models-for-your-hardware)). |
-| wsjpt | `fast` | `fast` | Out-of-band install (see [install section](#installation) above for the full `uv tool install --with` command; not in the locked deps — WSJ-internal git source). Routes Gemini via WSJ's [parsing toolkit](https://github.dowjones.net/data/wsjpt) so model aliases (`fast` / `smart` / `smartest`) resolve centrally — no concrete model names in bartleby config. WSJ-internal install; authenticates to Gemini via **Vertex AI / Application Default Credentials, not an API key** — run `gcloud auth application-default login` (or equivalent) rather than setting `GEMINI_API_KEY`. |
+| wsjpt | `fast` | `fast` | WSJ-internal only — see [`docs/wsj-internal.md`](./docs/wsj-internal.md) for install and configuration. |
 
 The same provider list is used for both ingest-time summarization (the LLM) and image analysis (the VLM). You can mix providers — e.g. OpenAI for summaries, local Ollama for image analysis — or run the same one for both. Research at the agent layer is governed by whatever model your harness is running the `bartleby` skill against, not by these settings.
 
