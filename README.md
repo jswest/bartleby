@@ -394,13 +394,19 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 - `/tags` — the controlled tag vocabulary: every tag with its description and document count. Click a tag to see the documents carrying it.
 - `/chunks/<id>` — a single chunk in context: the chunk itself at full contrast, its two neighbors on each side (same source, by chunk index) muted as surrounding context, and a link back to the source document (or finding). Reached from the icon beside any chunk reference in findings and search results.
 
-![Corpus overview (`/`): document, chunk, and token totals, the authored-date range, a documents-by-year histogram, summary coverage, content mix, and the largest documents for the active project.](./docs/serve-overview.png)
+Screenshots below are from a demo project built from NASA public-domain Hubble documents and imagery (1990–2009).
 
-![Search (`/search`): fused full-text + semantic results across documents, findings, and images, with source-kind / tag / scope filters and markdown-aware snippets.](./docs/serve-search.png)
+![Corpus overview (`/`) for the Hubble demo project: 3 findings and 25 documents, chunk and token totals, the authored-date range, documents by year, content mix, tags, and the largest documents.](./docs/serve-overview.png)
 
-![Findings (`/findings`): the saved finding's body on the left with inline citation chips, the source PDF on the right at the cited page.](./docs/serve-findings.png)
+![Search (`/search`) for "astronaut spacewalk servicing the telescope": fused full-text + semantic hits led by two image descriptions, with source-kind, tag, and scope filters.](./docs/serve-search.png)
 
-![Documents (`/documents`): the ingested corpus with authored-date and tag filters, sorting, and paging — each row showing its file name, page count, and one-shot summary.](./docs/serve-documents.png)
+![A finding (`/findings/<id>`): "Why Hubble's mirror was flawed — and missed", with inline citations and margin source notes on the left and the cited Allen Report PDF open at page 4 on the right.](./docs/serve-findings.png)
+
+![Documents (`/documents`): the Hubble corpus of PDFs, text files, and images as cards with file name, page count, tags, and one-shot summary, plus date, tag, and sort filters.](./docs/serve-documents.png)
+
+![Tags (`/tags`): the controlled vocabulary — servicing-mission, investigation, press-kit, status-report, imagery, technical-paper — each with its description and document count.](./docs/serve-tags.png)
+
+![A chunk in context (`/chunks/<id>`): a cited Allen Report passage at full contrast between its two muted neighbors on each side, with a link back to the source document.](./docs/serve-chunk.png)
 
 Requires Node.js and npm on `PATH`; the first invocation runs `npm install` once into `~/.bartleby/serve/`.
 
