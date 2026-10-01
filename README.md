@@ -260,9 +260,11 @@ bartleby finding export <finding-id>            # writes <slug>.md (or pass --ou
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 ```
 
-`finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with its citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs) — so you can pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print it in place; `--json` emits the raw finding instead. Unlike `export`, it resolves against the live corpus rather than baking inert markers, so it's for reading here, not sharing elsewhere.
+- `finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs). Pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print in place; `--json` emits the raw finding. It resolves live rather than baking inert markers, so it's for reading here, not sharing elsewhere.
+- `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus.
+- `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line. Imported citations stay inert — never re-resolved to local chunk ids — and the finding then renders like any other local one.
 
-`finding export` writes a self-describing Markdown artifact: a YAML front-matter block (title, description, and baked-in provenance — the source corpus, the original finding id, and the export date) followed by the body. The body's corpus citations are rewritten inline as inert `[corpus: <file> · p.<N>]` markers so the artifact stands alone on a machine that doesn't have the corpus. `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line to the body (there's no author/origin column, so origin lives in the text). Imported corpus citations stay inert markers — they are *not* re-resolved to local chunk ids — and the finding then renders like any other local finding. This is the lightweight, no-S3 alternative to `bartleby project publish` / `import` when you just want to hand one finding to someone. For a fully *rendered* hand-off — the web view itself, fonts and the cited source files embedded in one (potentially large) HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
+Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
 
 ---
 
@@ -321,20 +323,22 @@ Interactive configuration wizard. Asks for:
 | API key | — | Required for Anthropic/OpenAI; can also use env vars |
 | Summary depth | `one-shot` | `none` or `one-shot` |
 | Temperature | 0 | 0 = deterministic, 1 = creative |
-| Reasoning effort | `low` | `minimal`, `low`, `medium`, or `high` — how hard the model reasons before summarizing. Lower = fewer billed reasoning tokens and faster; plenty for summaries. Applies to OpenAI (gpt-5) and effort-capable Anthropic models; Ollama/wsjpt accept and ignore it. Only prompted when summary depth is `one-shot` |
-| Max summarize tokens | 50000 | If a document exceeds this, only the first N tokens are summarized (with a note appended) |
-| Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing. The LLM call is network-bound, so it runs as its own stage — raise it for a rate-tolerant cloud provider. A local Ollama provider auto-clamps to 1 and isn't prompted for a count (`OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue) |
+| Reasoning effort | `low` | `minimal`/`low`/`medium`/`high`; only prompted when summary depth is `one-shot` |
+| Max summarize tokens | 50000 | Documents over this length are summarized from the first N tokens, with a note appended |
+| Summarize workers | 4 (cloud) / 1 (Ollama) | How many documents summarize in parallel after parsing |
 | PDF converter | `pdfplumber` | `pdfplumber` (fast, default) or `docling` (slower, more structurally aware) |
 | HTML converter | `docling` | `docling` (default; also handles `.md`) or `sec2md` (routes iXBRL EDGAR filings to sec2md, other HTML to docling) |
 | Sparse-text threshold | 100 | Pages with fewer extracted chars are treated as scanned; OCR then VLM fallback |
-| Parse workers | auto | How many documents to parse in parallel. `0` = auto (`min(CPU cores − 2 reserved, free RAM ÷ ~12 GB)`, the `PER_WORKER_GB` budget measured against peak pdfplumber RSS) — the auto-pick leaves a couple of cores for the OS so a long ingest doesn't saturate the machine; a value you set here can use every core. Workers recycle periodically to keep memory bounded. Raise for a faster bulk ingest on a big machine, lower if memory is tight |
+| Parse workers | auto | How many documents to parse in parallel; `0` auto-sizes to cores and free RAM |
 | Vision provider | (off) | Off by default; opt in during the wizard. If enabled, choose `anthropic`, `openai`, or `ollama` (plus `wsjpt`, WSJ-internal) |
 | Vision model | varies by provider | e.g., `claude-haiku-4-5`, `gpt-5-mini`, `qwen3-vl:30b` |
 | Max image dimension | 768 | Long-edge pixels before sending an image to the VLM |
-| Min image dimension | 64 | Images with a shorter edge than this are skipped — avoids wasting VLM calls (and crashes) on thin slivers |
+| Min image dimension | 64 | Images with a shorter edge than this are skipped |
 | Tesseract min confidence | 30 | Avg confidence (0-100) below which we fall back to the VLM on sparse pages |
-| Caption workers | 4 (cloud) / 1 (Ollama) | How many images caption in parallel after parsing. VLM calls are network-bound, so this runs separately from parse workers — raise it for a rate-tolerant cloud provider. A local Ollama vision provider auto-clamps to 1 and isn't prompted for a count (`OLLAMA_NUM_PARALLEL` defaults to 1, so parallel requests only queue) |
+| Caption workers | 4 (cloud) / 1 (Ollama) | How many images caption in parallel after parsing |
 | Max read tokens | 50000 | Threshold above which the skill's `read_document` requires `--force` |
+
+Reasoning effort trades billed tokens for depth (OpenAI gpt-5 and effort-capable Anthropic models only; Ollama/wsjpt ignore it). Summarize and caption workers run network-bound LLM/VLM calls as their own pipeline stage and auto-clamp to 1 for a local Ollama provider (`OLLAMA_NUM_PARALLEL` defaults to 1). Parse workers are RAM-bound and recycle periodically; see [ARCHITECTURE.md](./ARCHITECTURE.md) ("Single-writer drain + per-unit resume") for the auto-sizing formula.
 
 **API keys** can be provided in the config or via environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (used by the wsjpt provider). For Ollama, configure the server URL (default `http://localhost:11434`) or set `OLLAMA_API_BASE`.
 
@@ -344,7 +348,7 @@ Config saves to `~/.bartleby/config.yaml`.
 
 ### `bartleby ready`
 
-Install or refresh the skill into your agent harness. Stamps the skill bundled with your installed `bartleby` into `~/.claude/skills/bartleby/` (or `--dest <dir>`), replacing any prior copy so `SKILL.md` lands directly under it. "Latest" is decided by a content hash over the skill files — not the version number — because `SKILL.md` is edited between releases, so re-running is a no-op only when the bundled skill genuinely matches what's installed.
+Install or refresh the skill into your agent harness. Stamps the skill bundled with your installed `bartleby` into `~/.claude/skills/bartleby/` (or `--dest <dir>`), replacing any prior copy so `SKILL.md` lands directly under it. "Latest" is decided by a content hash over the skill files, not the version number, so re-running is a no-op only when the installed copy already matches.
 
 | Flag | Effect |
 | --- | --- |
@@ -360,15 +364,19 @@ Restart your harness afterward — skills load at startup.
 Manage project workspaces. Each project gets its own database and document archive.
 
 ```
-bartleby project create <name>    # Create and activate a new project
-bartleby project list             # List all projects
-bartleby project use <name>       # Switch active project
-bartleby project info [name]      # Show project details
-bartleby project delete <name>    # Delete a project and all its data (--yes to skip prompt)
-bartleby project upgrade <name>   # Apply additive schema upgrades to an existing DB
+bartleby project create <name>                     # Create and activate a new project
+bartleby project list                              # List all projects
+bartleby project use <name>                        # Switch active project
+bartleby project info [name]                       # Show project details (--verify for integrity checks)
+bartleby project delete <name>                     # Delete a project and all its data (--yes to skip prompt)
+bartleby project upgrade <name>                    # Apply additive schema upgrades to an existing DB
+bartleby project publish <name> --to <s3-url>      # Publish a findings-free copy (+ originals) to S3
+bartleby project import <name> --from <source>     # Import a published corpus as a new local project
 ```
 
-The default policy is "no backwards compat" — schema bumps mean re-ingest. The one allowed relaxation is *additive-only* upgrades (new tables, indexes, nullable columns), which ship with an entry in [`bartleby/db/upgrades.py`](./bartleby/db/upgrades.py) so existing corpora can opt in via `bartleby project upgrade <name>` instead of re-ingesting. Non-additive bumps still force a re-ingest; the upgrade command refuses them.
+Schema-bump policy — additive-only upgrades via `project upgrade`, everything else re-ingests — is covered in [ARCHITECTURE.md](./ARCHITECTURE.md#backwards-compatibility).
+
+`publish` strips findings and sessions from a copy of the corpus before uploading the `.db` and archived originals to an S3 prefix. `import` pulls one back down (`s3://…`, a local directory, or `file://…`) as a brand-new project — refusing on a schema or embedding-model mismatch — optionally dropping tags (`--without-tags`) or overwriting a same-named project (`--yes`, which drops its local findings).
 
 ### `bartleby scribe`
 
@@ -401,7 +409,7 @@ Ingestion runs in three concurrent phases — parse (a process pool), image capt
    - `.pdf`: pdfplumber by default — per-page text extraction; embedded images are extracted via page-render-crop. Pages whose extracted text is below `sparse_text_threshold` are treated as scanned: Tesseract OCR runs first (cheap), and only if confidence is below `ocr_min_confidence` does the page get routed to the VLM.
    - `.pdf` with `--pdf-converter docling`: layout-aware, structural extraction with internal OCR for image-based PDFs.
    - `.html`, `.htm`, `.md`: Docling by default (requires the `[docling]` install). With `--html-converter sec2md`, each HTML file is sniffed for the iXBRL namespace — matches route to sec2md (preserves SEC tables + section headings); non-matches still go through Docling. `.md` always goes through Docling.
-   - `.txt`: read as UTF-8, simple character chunker — *unless* it's an EDGAR full-submission file (detected by its `<SEC-DOCUMENT>`/`<SEC-HEADER>` SGML envelope, regardless of extension). Those are unwrapped into their inner `<DOCUMENT>` blocks: each HTML/iXBRL body is routed to sec2md (so the `[sec2md]` install is required for these), plain-text exhibits go through the character chunker, and graphics / XBRL data files are skipped. The whole submission lands as a single document. Note this overrides the `html_converter` setting for inner HTML — sec2md is the only converter that reads SEC HTML, and the alternative here is raw SGML tag soup, so the dependency is hard. (Standalone EDGAR `.htm` files are unaffected: they still honor `html_converter` and only use sec2md when you opt in.)
+   - `.txt`: read as UTF-8, simple character chunker — *unless* it's an EDGAR full-submission file (detected by its `<SEC-DOCUMENT>`/`<SEC-HEADER>` SGML envelope). Those are unwrapped into inner `<DOCUMENT>` blocks: HTML/iXBRL bodies route to sec2md (requires `[sec2md]` — the only converter that reads SEC HTML), plain-text exhibits use the character chunker, graphics/XBRL files are skipped, and the whole submission lands as one document. This overrides `html_converter` for inner HTML only; standalone EDGAR `.htm` files still honor it.
    - Image files: routed directly to the VLM. OCR transcription and scene description are stored as separate chunks (`content_type='image_ocr'` and `'image_description'`).
 3. Computes a `tiktoken` token count for the document.
 4. Generates vector embeddings (BAAI/bge-base-en-v1.5, 768 dims).
@@ -409,9 +417,14 @@ Ingestion runs in three concurrent phases — parse (a process pool), image capt
 6. For documents longer than `max_summarize_tokens`, the summarizer runs on the first N tokens only and a deterministic note is appended to the saved summary.
 7. Stores everything in SQLite with full-text search (FTS5) and vector search (sqlite-vec). Images dedupe at the byte level — the same icon embedded in five docs is one VLM call, not five.
 
-**Ingest is restartable.** Each document's parse (text + embeddings), each image caption, and the summary are committed as independent units, so an interrupted run — a crash, a Ctrl-C, a VLM that goes down mid-corpus — loses no completed work. Re-run the same `bartleby scribe` command and it resumes by what's *missing*: a document that died after its text landed but before its images were captioned re-captions only those images; it never re-parses or re-captions finished images, and a fully-ingested file is skipped. A unit that keeps failing is retried a few times, then recorded and **left out rather than retried forever** — those incomplete units are reported at the end of the run and counted under "Failed units" in `bartleby project info`, so a skipped caption never quietly passes for a complete document. A run that ends with any unit still unresolved **exits non-zero** — the only machine-readable signal a scripted caller (`bartleby scribe ... && next-step`) has — so a run that ingested nothing can't read as green; a fully successful run, including a no-op resume, exits 0.
+**Ingest is restartable:**
 
-_N.B._: For a sample corpus with 12 documents at 51MB total--a mix of academic, news, and regulatory PDFs--with a good number of images, it took ~2 minutes per document running with entirely local models. Shorter documents with fewer images will perform _much_ faster. Long documents with lots of images are slower. For example, a ~200-page regulatory document with lots of fine print and 23 images took ~5 minutes to embed, describe the images, and summarize. A five-page news article with a single image took ~30 seconds.
+- Each document's parse, each image caption, and the summary commit as independent units — a crash, Ctrl-C, or a VLM outage mid-corpus loses no completed work.
+- Re-running the same command resumes by what's *missing*: unfinished images get re-captioned, finished work is never redone, and a fully-ingested file is skipped.
+- A unit that keeps failing is retried a few times, then left out and reported rather than retried forever — counted under "Failed units" in `bartleby project info`.
+- A run exits non-zero if any unit is left unresolved, so a scripted caller (`bartleby scribe ... && next-step`) can trust the exit code; a fully successful run, including a no-op resume, exits 0.
+
+**Backfilling dates.** `bartleby scribe backfill-dates [project] --from-filename '<regex>'` bulk-sets `authored_date` from a named `date` capture group matched against each file's name (`--match-path` matches the full path instead). Fills `NULL`s only unless `--overwrite`; `--dry-run` reports counts and sample matches without writing. A human-run admin op, not on the skill's surface — the skill's `probe_dates` validates a regex and hands you the exact command to run.
 
 **Benchmarking ingest.** `--timings` turns the run into a repeatable measurement, timing each document's stages and emitting a per-stage aggregate as JSON to stdout (the bar and prose stay on stderr, so capture it with a redirect). The reproducible recipe — fresh-project setup, the aggregate JSON field reference, the gotchas that silently corrupt a run, and recorded runs — lives in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
@@ -445,10 +458,10 @@ bartleby embed "your query here"
 View the audit log for a session. Useful when an agent does something weird and you want to see what tools it called.
 
 ```
-bartleby logs [--session <name>] [--limit <n>]
+bartleby logs [--session <name>] [--limit <n>] [--project <name>]
 ```
 
-If no session is specified, shows the most recent session's logs.
+If no session is specified, shows the most recent session's logs. `--project` targets a project other than the active one; `--limit` defaults to 50.
 
 ### `bartleby serve`
 
@@ -476,7 +489,12 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 
 ![Documents (`/documents`): the ingested corpus with authored-date and tag filters, sorting, and paging — each row showing its file name, page count, and one-shot summary.](./docs/serve-documents.png)
 
-Requires Node.js and npm on `PATH`. The first invocation runs `npm install` once into `~/.bartleby/serve/`; subsequent runs skip it. Browsing opens the project database read-only; the corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, findings are searchable, and the web never disturbs whichever session an agent has active. It picks up the active project from `~/.bartleby/config.yaml`, so `bartleby project use <name>` followed by a page reload switches what you're looking at. To browse a different corpus without disturbing the persisted active project, pass `bartleby serve --project <name>` — the override applies to that server only. It's safe to leave running alongside an ingest or a research session.
+Requires Node.js and npm on `PATH`; the first invocation runs `npm install` once into `~/.bartleby/serve/`.
+
+- Opens the project database read-only. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
+- Picks up the active project from `~/.bartleby/config.yaml`: `bartleby project use <name>` plus a page reload switches what you're looking at.
+- `bartleby serve --project <name>` browses a different corpus for that server only, without disturbing the persisted active project.
+- Safe to leave running alongside an ingest or a research session.
 
 ### `bartleby benchmark`
 
