@@ -133,7 +133,7 @@ bartleby config
 
 The setup wizard asks for LLM provider/model, API keys, summary depth, temperature, and the max token threshold for reading whole documents. Settings save to `~/.bartleby/config.yaml`.
 
-![bartleby config: the interactive setup wizard walking through provider, model, and summarization settings.](./docs/demo.gif)
+![Terminal recording: `bartleby config` walks through the LLM, summarization, converter, and vision prompts; `bartleby project create hubble`; then `bartleby scribe` ingests seven Hubble PDFs, text files, and images through parse, caption, and summarize.](./docs/demo.gif)
 
 ### 2. Create a project
 
