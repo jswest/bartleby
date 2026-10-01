@@ -356,7 +356,7 @@ bartleby session set [--harness <name>] [--model <id>]                   # Stamp
 
 The *active* session is whichever was started or used most recently — usually the last agent run, since every agent call re-marks its run active. So `current` shows the latest run, and `set` stamps it: for a blind multi-model comparison, let the agent run without `--model`, then `session set --model <id>` after assessing. `--harness` is best-effort auto-detected (e.g. Claude Code) when omitted; `--model` usually has no environment signal. Unknown values stay null — never guessed. The values show up in `list_findings` / `read_finding`.
 
-`session start --no-memory` doesn't make an agent's run memory-off — see [Quick start step 4](#4-start-an-agent-session).
+`session start --no-memory` doesn't make an agent's run memory-off — the agent mints its own run on its first call and moves the active marker to it. See [Quick start step 4](#4-start-an-agent-session).
 
 ### `bartleby embed`
 
@@ -404,7 +404,7 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 
 Requires Node.js and npm on `PATH`; the first invocation runs `npm install` once into `~/.bartleby/serve/`.
 
-- Opens the project database read-only. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
+- Opens the project database read-only, so it's safe to leave running alongside an ingest or a research session. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
 - Picks up the active project from `~/.bartleby/config.yaml`: `bartleby project use <name>` plus a page reload switches what you're looking at.
 
 ### `bartleby benchmark`
@@ -447,7 +447,7 @@ The same provider list is used for both ingest-time summarization (the LLM) and 
 - **PDF text + image extraction:** pdfplumber (text per page, image bounding boxes), pypdfium2 (page rendering for OCR + image crops). Default converter.
 - **OCR:** [Tesseract](https://tesseract-ocr.github.io/) via `pytesseract`. Cheap first pass for sparse pages.
 - **VLM for image analysis:** pluggable — Anthropic / OpenAI / Ollama. Schema-enforced (Pydantic) JSON across providers, like the summarizer.
-- **Converters:** Docling (default for HTML/MD, opt-in for PDF) and sec2md (Apache 2.0; iXBRL EDGAR HTML when opted in, required for EDGAR full-submission `.txt`) — see [Prerequisites](#prerequisites) and [`bartleby scribe`](#bartleby-scribe).
+- **Converters:** Docling (default for HTML/MD, opt-in for PDF) and sec2md (Apache 2.0; iXBRL EDGAR HTML when opted in, required for HTML bodies inside EDGAR full-submission `.txt`) — see [Prerequisites](#prerequisites) and [`bartleby scribe`](#bartleby-scribe).
 - **Token counting:** `documents.token_count` is computed with `tiktoken`'s `cl100k_base` encoder regardless of which LLM provider you're using. A rough estimate — accurate enough for the `read_document --force` gate, not authoritative across providers.
 
 ---

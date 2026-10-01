@@ -140,7 +140,7 @@ If you want different defaults, edit `SKILL.md`.
 
 ## Troubleshooting
 
-**"Schema version mismatch."** The database was created by a different version of the `bartleby` CLI. Run `bartleby project upgrade <name>`; if it refuses, re-ingest — see the [main README](../../README.md#after-a-schema-change).
+**"Schema version mismatch."** The database was created by a different version of the `bartleby` CLI. Run `bartleby project upgrade <name>`. If it says the DB is newer than your code, update the CLI instead; if it otherwise refuses, re-ingest — see the [main README](../../README.md#after-a-schema-change).
 
 **"No active project."** Run `bartleby project use <name>` or pass `--project` via your harness's environment.
 
