@@ -13,6 +13,7 @@ import time
 import pytest
 
 from bartleby.commands import serve
+from tests._skill_fixtures import project_env  # noqa: F401
 
 
 def test_sync_symlinks_src_copies_files_preserves_node_modules(tmp_path):
@@ -171,3 +172,26 @@ def test_override_project_exits_when_db_missing(monkeypatch, tmp_path):
 
     assert exc.value.code == 1
     assert "BARTLEBY_PROJECT" not in os.environ
+
+
+def test_require_current_schema_exits_on_stale_db(project_env, monkeypatch):  # noqa: F811
+    from bartleby.db.connection import open_db
+
+    conn = open_db(project_env)
+    try:
+        conn.cursor().execute(
+            "UPDATE meta SET value = '1' WHERE key = 'schema_version'"
+        )
+    finally:
+        conn.close()
+
+    errors: list[str] = []
+    monkeypatch.setattr(serve.console, "error", errors.append)
+    with pytest.raises(SystemExit) as exc:
+        serve._require_current_schema(project_env)
+    assert exc.value.code == 1
+    assert f"bartleby project upgrade {project_env}" in errors[0]
+
+
+def test_require_current_schema_passes_current_db(project_env):  # noqa: F811
+    serve._require_current_schema(project_env)

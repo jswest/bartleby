@@ -126,7 +126,9 @@ def _rewrite_citations(body: str, citations: list[dict]) -> str:
 
 
 _ANNOTATION_GLYPH = "\u270e"  # ✎ — distinct from the citation glyphs † ‡ §
-_STALE_NOTE = "annotation anchor no longer matches the text"
+# The trailing section ``read``/``export`` append. ``parse_artifact`` cuts an
+# imported body at it: importing annotations is out of scope (#689).
+_ANNOTATIONS_HEADING = "## Annotations"
 
 
 def _excerpt(text: str, limit: int = 60) -> str:
@@ -161,20 +163,30 @@ def _insert_annotation_markers(body: str, annotations: list[dict]) -> str:
     return body
 
 
-def _annotations_section(annotations: list[dict]) -> str:
-    """Trailing "Annotations" Markdown section ('' when there are none)."""
+def _where(annotation: dict) -> str:
+    """Where a note attaches: whole finding, or its quoted span (flagged if stale)."""
+    if annotation["anchor_exact"] is None:
+        return "whole finding"
+    where = f"\u201c{_excerpt(annotation['anchor_exact'])}\u201d"
+    if not annotation["anchor_found"]:
+        where += " (annotation anchor no longer matches the text)"
+    return where
+
+
+def _annotations_section(annotations: list[dict], *, numbered: bool) -> str:
+    """Trailing "Annotations" Markdown section ('' when there are none).
+
+    ``numbered`` prefixes each note with ``✎N`` to pair it with the inline
+    ``[✎N]`` markers — only meaningful when the body carries those markers.
+    """
     if not annotations:
         return ""
-    lines = ["## Annotations", ""]
+    lines = [_ANNOTATIONS_HEADING, ""]
     for n, a in enumerate(annotations, start=1):
-        head = f"{_ANNOTATION_GLYPH}{n} \u00b7 {_author_kind(a)} \u00b7 {a['created_at']}"
-        if a["anchor_exact"] is None:
-            where = "whole finding"
-        else:
-            where = f"\u201c{_excerpt(a['anchor_exact'])}\u201d"
-            if not a["anchor_found"]:
-                where += f" ({_STALE_NOTE})"
-        lines.append(f"- {head} \u00b7 {where}")
+        head = f"{_author_kind(a)} \u00b7 {a['created_at']} \u00b7 {_where(a)}"
+        if numbered:
+            head = f"{_ANNOTATION_GLYPH}{n} \u00b7 {head}"
+        lines.append(f"- {head}")
         lines.extend(f"  > {ln}" if ln else "  >" for ln in a["body"].splitlines())
     return "\n".join(lines) + "\n"
 
@@ -359,7 +371,7 @@ def _finding_as_markdown(finding: dict) -> str:
     )
     parts.append(rendered_body)
     if annotations:
-        parts.append(_annotations_section(annotations))
+        parts.append(_annotations_section(annotations, numbered=True))
 
     return "\n".join(parts)
 
@@ -382,12 +394,7 @@ def read(*, finding_id: int, project: str | None, json_out: bool, render: bool) 
         _rf_script.main(argv)
         return
 
-    corpus = project or get_active_project()
-    if not corpus:
-        console.error("No active project. Specify one with --project.")
-        sys.exit(1)
-
-    conn = _open_or_exit(corpus)
+    conn = _open_corpus(project)
     try:
         finding = _read_finding_for_display(conn, finding_id)
     except ValueError as e:
@@ -404,12 +411,17 @@ def read(*, finding_id: int, project: str | None, json_out: bool, render: bool) 
         print(md_text, end="")
 
 
-def _open_corpus(project: str | None) -> tuple[str, "apsw.Connection"]:
+def _corpus_name(project: str | None) -> str:
+    """``--project`` or the active project, else exit(1)."""
     corpus = project or get_active_project()
     if not corpus:
         console.error("No active project. Specify one with --project.")
         sys.exit(1)
-    return corpus, _open_or_exit(corpus)
+    return corpus
+
+
+def _open_corpus(project: str | None) -> apsw.Connection:
+    return _open_or_exit(_corpus_name(project))
 
 
 def annotate(
@@ -434,7 +446,7 @@ def annotate(
         console.error("The note is empty.")
         sys.exit(1)
 
-    _corpus, conn = _open_corpus(project)
+    conn = _open_corpus(project)
     try:
         annotation_id = insert_annotation(
             conn,
@@ -446,10 +458,10 @@ def annotate(
             anchor_suffix=quote_suffix,
             chunk_id=chunk_id,
         )
-    except AnchorNotFound:
+    except AnchorNotFound as e:
         console.error(
-            "--quote does not match the finding body (exact, case-sensitive, "
-            "against the raw Markdown); nothing was written."
+            f"--quote rejected: {e} (matched exactly, case-sensitive, against "
+            "the raw Markdown); nothing was written."
         )
         sys.exit(1)
     except ValueError as e:
@@ -462,7 +474,7 @@ def annotate(
 
 def annotations(*, finding_id: int, project: str | None) -> None:
     """List a finding's annotations, oldest first."""
-    _corpus, conn = _open_corpus(project)
+    conn = _open_corpus(project)
     try:
         exists = conn.cursor().execute(
             "SELECT 1 FROM findings WHERE finding_id = ?", (finding_id,)
@@ -477,16 +489,10 @@ def annotations(*, finding_id: int, project: str | None) -> None:
         print(f"No annotations on finding:{finding_id}.")
         return
     for a in rows:
-        if a["anchor_exact"] is None:
-            where = "whole finding"
-        else:
-            where = f"\u201c{_excerpt(a['anchor_exact'])}\u201d"
-            if not a["anchor_found"]:
-                where += " [stale: anchor no longer matches]"
         chunk = f" \u00b7 chunk:{a['chunk_id']}" if a["chunk_id"] is not None else ""
         print(
             f"annotation:{a['annotation_id']} \u00b7 {_author_kind(a)} \u00b7 "
-            f"{a['created_at']} \u00b7 {where}{chunk}"
+            f"{a['created_at']} \u00b7 {_where(a)}{chunk}"
         )
         for ln in a["body"].splitlines():
             print(f"    {ln}")
@@ -494,7 +500,7 @@ def annotations(*, finding_id: int, project: str | None) -> None:
 
 def delete_annotation_cmd(*, annotation_id: int, project: str | None) -> None:
     """Delete one annotation by id."""
-    _corpus, conn = _open_corpus(project)
+    conn = _open_corpus(project)
     try:
         deleted = delete_annotation(conn, annotation_id)
     finally:
@@ -512,11 +518,7 @@ def export(*, finding_id: int, project: str | None, out: str | None) -> None:
     front-matter (title/description + provenance) and the body with corpus
     citations rewritten inline as inert ``[corpus: …]`` markers.
     """
-    corpus = project or get_active_project()
-    if not corpus:
-        console.error("No active project. Specify one with --project.")
-        sys.exit(1)
-
+    corpus = _corpus_name(project)
     conn = _open_or_exit(corpus)
     try:
         finding = _read_finding_for_export(conn, finding_id)
@@ -544,7 +546,8 @@ def export(*, finding_id: int, project: str | None, out: str | None) -> None:
         + "\n"
     )
     if finding["annotations"]:
-        artifact += "\n" + _annotations_section(finding["annotations"])
+        # Unnumbered: the exported body carries no inline [✎N] markers.
+        artifact += "\n" + _annotations_section(finding["annotations"], numbered=False)
 
     out_path = Path(out) if out else Path(f"{_slug(finding['title'])}.md")
     out_path.write_text(artifact, encoding="utf-8")
@@ -558,6 +561,9 @@ def export(*, finding_id: int, project: str | None, out: str | None) -> None:
 # ``---`` line, then the body. Captured non-greedily so a ``---`` inside the body
 # (a markdown horizontal rule) doesn't terminate the block early.
 _FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
+_ANNOTATIONS_SECTION_RE = re.compile(
+    rf"^{re.escape(_ANNOTATIONS_HEADING)}[ \t]*$", re.MULTILINE
+)
 
 
 def parse_artifact(text: str) -> dict:
@@ -582,7 +588,14 @@ def parse_artifact(text: str) -> dict:
 
     title = (meta.get("title") or "").strip()
     description = (meta.get("description") or "").strip()
-    body = m.group(2).strip()
+    # The trailing Annotations section ``export`` appends is informational:
+    # notes are not imported, and must not become finding text. Cut at the
+    # *last* such heading so one inside the finding's own prose survives.
+    body = m.group(2)
+    headings = list(_ANNOTATIONS_SECTION_RE.finditer(body))
+    if headings:
+        body = body[: headings[-1].start()]
+    body = body.strip()
     if not title:
         raise ValueError("Artifact front-matter is missing a non-empty title.")
     if not body:
@@ -637,10 +650,7 @@ def import_(*, path: str, project: str | None) -> None:
         console.error(str(e))
         sys.exit(1)
 
-    corpus = project or get_active_project()
-    if not corpus:
-        console.error("No active project. Specify one with --project.")
-        sys.exit(1)
+    corpus = _corpus_name(project)
 
     # Bake provenance into the body so it travels with the finding (no
     # author/origin column exists). A blank line separates the header from the
