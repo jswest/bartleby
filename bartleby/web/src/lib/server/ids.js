@@ -2,7 +2,7 @@
 // Tolerant of bare integers and numeric strings (DB-sourced lists emit those).
 // Returns NaN on anything unparseable — callers decide whether to 404 or skip.
 
-const PREFIXED = /^(?:chunk|document|finding|image|tag|summary):(\d+)$/;
+const PREFIXED = /^(?:annotation|chunk|document|finding|image|tag|summary):(\d+)$/;
 
 export function bareId(value) {
   if (typeof value === 'number') return Number.isInteger(value) ? value : NaN;
