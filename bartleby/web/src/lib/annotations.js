@@ -1,6 +1,7 @@
 // Text-quote anchors for finding annotations (#689). Pure string logic, shared
 // by the annotation endpoints (validation, `anchor_found`) and the finding page
-// (mapping a selection to an anchor, placing highlights). No DOM, no DB.
+// (mapping a selection to an anchor, placing highlights). No DOM, no DB —
+// the page supplies the render round-trip.
 //
 // An anchor is a W3C-style text-quote selector over the RAW markdown body:
 // `exact` is a verbatim substring; optional `prefix`/`suffix` pick out one
@@ -23,38 +24,65 @@ export function locateAnchor(body, exact, prefix = null, suffix = null) {
   return null;
 }
 
-// Start index of the k-th (0-based) occurrence of `needle` in `text`, or -1.
-// Steps by one char, like locateAnchor, so overlapping repeats count.
-export function nthIndexOf(text, needle, k) {
-  let i = text.indexOf(needle);
-  while (i !== -1 && k-- > 0) i = text.indexOf(needle, i + 1);
-  return i;
-}
+// Spans of the raw body an anchor boundary must not fall strictly inside:
+// citation markers `[^…]` and link/image targets `](…)`. Mirrors the Python
+// write-time rule (#689).
+const MARKER_SPAN = /\[\^[^\]]*\]|\]\([^)]*\)/g;
 
-// How many occurrences of `needle` start before `pos` — i.e. which occurrence
-// (0-based) the one at `pos` is.
-export function occurrenceIndex(text, needle, pos) {
-  let k = 0;
-  for (let i = text.indexOf(needle); i !== -1 && i < pos; i = text.indexOf(needle, i + 1)) k++;
-  return k;
-}
-
-// The minimal anchor that locates the k-th occurrence of `exact` in `body`:
-// bare `{exact}` when it is the first occurrence, else the shortest
-// prefix/suffix context (doubling from 16 chars) that brackets it. Null when
-// `exact` has no k-th occurrence in the raw body — the caller then offers a
-// whole-finding note rather than fabricating an anchor. Terminates: with the
-// whole remaining body as prefix+suffix only `start` itself can match.
-export function anchorFor(body, exact, k) {
-  if (!exact) return null;
-  const start = nthIndexOf(body, exact, k);
-  if (start === -1) return null;
-  const end = start + exact.length;
-  for (let n = 0; ; n = n ? n * 2 : 16) {
-    const prefix = body.slice(Math.max(0, start - n), start) || null;
-    const suffix = body.slice(end, end + n) || null;
-    if (locateAnchor(body, exact, prefix, suffix)?.[0] === start) {
-      return { exact, prefix, suffix };
-    }
+// True when `start` or `end` falls STRICTLY inside a marker/link-target span
+// of `body` (span.start < pos < span.end). An anchor that fully contains a
+// marker — or merely touches one — is fine.
+export function splitsMarker(body, start, end) {
+  for (const m of body.matchAll(MARKER_SPAN)) {
+    const s = m.index, e = m.index + m[0].length;
+    if ((s < start && start < e) || (s < end && end < e)) return true;
   }
+  return false;
+}
+
+// Private-use sentinels bracketing a raw span, so the span can be traced
+// through markdown rendering to its offsets in the rendered text.
+const OPEN = '';
+const CLOSE = '';
+
+export function bracketSpan(body, start, end) {
+  return body.slice(0, start) + OPEN + body.slice(start, end) + CLOSE + body.slice(end);
+}
+
+// Given the rendered text of a bracketSpan()-ed body and the rendered text of
+// the plain body, the [start, end) the span occupies in the plain rendered
+// text — or null when the sentinels did not survive rendering intact, the
+// rendering otherwise changed, or the span renders to nothing.
+export function renderedSpan(bracketedText, plainText) {
+  const start = bracketedText.indexOf(OPEN);
+  const close = bracketedText.indexOf(CLOSE);
+  if (start === -1 || close < start) return null;
+  const end = close - 1;
+  const stripped = bracketedText.slice(0, start) + bracketedText.slice(start + 1, close) + bracketedText.slice(close + 1);
+  if (stripped !== plainText || end <= start) return null;
+  return [start, end];
+}
+
+// Map a selection in the RENDERED text to a raw-body anchor, from rendered
+// context: `quote` must occur verbatim in the raw body; prefix/suffix are the
+// rendered text around the selection, trimmed (longest first) until the
+// anchor locates in the raw body. A candidate counts only if it does not split
+// a marker/link target and `placeSpan(rawStart, rawEnd)` — the caller's render
+// round-trip — lands exactly on the selection. Null when nothing verifies; the
+// caller then offers a whole-finding note rather than a fabricated anchor.
+const CONTEXT_LENGTHS = [32, 16, 8, 4, 0];
+
+export function anchorFromRendered(body, rendered, selStart, quote, placeSpan) {
+  const selEnd = selStart + quote.length;
+  const pairs = CONTEXT_LENGTHS.flatMap((p) => CONTEXT_LENGTHS.map((s) => [p, s]))
+    .sort((a, b) => b[0] + b[1] - (a[0] + a[1]));
+  for (const [p, s] of pairs) {
+    const prefix = rendered.slice(Math.max(0, selStart - p), selStart) || null;
+    const suffix = rendered.slice(selEnd, selEnd + s) || null;
+    const hit = locateAnchor(body, quote, prefix, suffix);
+    if (!hit || splitsMarker(body, ...hit)) continue;
+    const span = placeSpan(...hit);
+    if (span && span[0] === selStart && span[1] === selEnd) return { exact: quote, prefix, suffix };
+  }
+  return null;
 }
