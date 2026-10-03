@@ -363,3 +363,41 @@ def test_delete_finding_reports_annotations_dropped(seeded_project, tmp_path, ca
         _run(annotate_finding, _annotate(project, fid, "--body", text), capsys)
     out = _run(delete_finding, ["--project", project, "--finding-id", fid], capsys)
     assert out["annotations_dropped"] == 2
+
+
+def test_memory_off_delete_annotation_cannot_reach_foreign_agent_note(
+    seeded_project, tmp_path, capsys,
+):
+    project = seeded_project["project"]
+    start_session(project, memory_enabled=False)
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES ('other', 1)"
+        )
+        other = conn.last_insert_rowid()
+        theirs = insert_annotation(conn, finding_id=unprefix(fid), body="theirs",
+                                   is_human_author=False, session_id=other)
+        human = insert_annotation(conn, finding_id=unprefix(fid), body="human",
+                                  is_human_author=True)
+    finally:
+        conn.close()
+
+    # Behind the wall a foreign agent note is indistinguishable from a missing id —
+    # and it is not read back, not deleted.
+    err = _run_err(delete_annotation, [
+        "--project", project, "--annotation-id", f"annotation:{theirs}",
+    ], capsys)
+    assert err["code"] == "ANNOTATION_NOT_FOUND"
+    assert _annotation_count(project, unprefix(fid)) == 2
+    # A human note on the session's own finding is still deletable.
+    out = _run(delete_annotation, [
+        "--project", project, "--annotation-id", f"annotation:{human}",
+    ], capsys)
+    assert out["body"] == "human"
+    # And delete_finding's dropped count excludes the walled note.
+    dropped = _run(delete_finding, ["--project", project, "--finding-id", fid], capsys)
+    assert dropped["annotations_dropped"] == 0

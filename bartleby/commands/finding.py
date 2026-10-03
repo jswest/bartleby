@@ -537,6 +537,7 @@ def export(*, finding_id: int, project: str | None, out: str | None) -> None:
             "source_finding_id": finding_id,
             "exported_on": date.today().isoformat(),
         },
+        "annotations": len(finding["annotations"]),
     }
     artifact = (
         "---\n"
@@ -590,11 +591,13 @@ def parse_artifact(text: str) -> dict:
     description = (meta.get("description") or "").strip()
     # The trailing Annotations section ``export`` appends is informational:
     # notes are not imported, and must not become finding text. Cut at the
-    # *last* such heading so one inside the finding's own prose survives.
+    # *last* such heading — but only when the front-matter says export added
+    # one, so a finding whose own prose carries that heading survives intact.
     body = m.group(2)
-    headings = list(_ANNOTATIONS_SECTION_RE.finditer(body))
-    if headings:
-        body = body[: headings[-1].start()]
+    if meta.get("annotations"):
+        headings = list(_ANNOTATIONS_SECTION_RE.finditer(body))
+        if headings:
+            body = body[: headings[-1].start()]
     body = body.strip()
     if not title:
         raise ValueError("Artifact front-matter is missing a non-empty title.")

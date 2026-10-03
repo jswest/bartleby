@@ -26,7 +26,7 @@ import argparse
 
 from bartleby.db.annotations import delete_annotation, get_annotation
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import assert_findings_accessible
+from bartleby.skill_scripts._common import assert_findings_accessible, memory_enabled
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
@@ -51,6 +51,15 @@ def work(*, conn, args, session_id) -> dict:
     assert_findings_accessible(
         conn, session_id, [note["finding_id"]], action="delete annotations on",
     )
+    # On an accessible finding, another session's *agent* note is still that
+    # session's memory: behind the wall it is indistinguishable from a missing
+    # id — otherwise a memory-off delete would read it back (cf. GH-0272).
+    if not memory_enabled(conn, session_id) \
+            and not note["is_human_author"] and note["session_id"] != session_id:
+        raise SkillError(
+            "ANNOTATION_NOT_FOUND",
+            f"No annotation with id annotation:{args.annotation_id}.",
+        )
 
     delete_annotation(conn, args.annotation_id)
     return format_output_ids({

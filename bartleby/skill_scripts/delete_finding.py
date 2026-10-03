@@ -45,7 +45,7 @@ import argparse
 from bartleby.db.annotations import count_annotations
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import assert_findings_accessible
+from bartleby.skill_scripts._common import assert_findings_accessible, memory_enabled
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
@@ -82,7 +82,10 @@ def work(*, conn, args, session_id) -> dict:
     ).fetchone()[0]
 
     # Annotations cascade with the finding row; report how many went with it.
-    annotations_dropped = count_annotations(conn, [args.finding_id])[args.finding_id]
+    annotations_dropped = count_annotations(
+        conn, [args.finding_id],
+        walled_session_id=None if memory_enabled(conn, session_id) else session_id,
+    )[args.finding_id]
 
     removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
     cur.execute(

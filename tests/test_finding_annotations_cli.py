@@ -202,3 +202,15 @@ def test_export_import_round_trip_drops_annotations(seeded_project, tmp_path):
         conn.close()
     assert "Annotations" not in body and "human correction" not in body
     assert body.rstrip().endswith("Gamma holds.")
+
+
+def test_import_keeps_prose_annotations_heading_when_export_added_none(tmp_path):
+    text = (
+        "---\ntitle: T\ndescription: D\nannotations: 0\n---\n\n"
+        "Intro text.\n\n## Annotations\n\nHow reviewers annotated the draft.\n"
+    )
+    parsed = finding_cmd.parse_artifact(text)
+    assert "How reviewers annotated the draft." in parsed["body"]
+    # With the flag set, the trailing section export appended is cut.
+    flagged = text.replace("annotations: 0", "annotations: 1")
+    assert "How reviewers" not in finding_cmd.parse_artifact(flagged)["body"]

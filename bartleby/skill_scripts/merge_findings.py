@@ -55,10 +55,11 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.db.annotations import reparent_annotations
+from bartleby.db.annotations import count_annotations, reparent_annotations
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    memory_enabled,
     assert_findings_accessible,
     embed_body_chunks,
     extract_external_citations,
@@ -164,6 +165,11 @@ def work(*, conn, args, session_id) -> dict:
     # Notes on the sources move to the target before the sources' delete would
     # cascade them away — a human correction must survive a merge (#689).
     annotations_moved = reparent_annotations(conn, sources, target)
+    if not memory_enabled(conn, session_id):
+        # Report only what this session may see; foreign agent notes still move.
+        annotations_moved = count_annotations(
+            conn, [target], walled_session_id=session_id,
+        )[target]
     for src in sources:
         delete_chunks_for(conn, "finding", src)
     src_ph = ",".join("?" * len(sources))
