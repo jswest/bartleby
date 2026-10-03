@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bartleby.db.annotations import (
+    get_annotation,
     AnchorNotFound,
     count_annotations,
     delete_annotation,
@@ -126,3 +127,18 @@ def test_finding_delete_cascades(finding):
     insert_annotation(conn, finding_id=fid, body="a", is_human_author=True)
     conn.cursor().execute("DELETE FROM findings WHERE finding_id = ?", (fid,))
     assert count_annotations(conn, [fid]) == {fid: 0}
+
+
+def test_get_annotation_by_id(finding):
+    conn, finding_id, _ = finding
+    aid = insert_annotation(
+        conn, finding_id=finding_id, body="note", is_human_author=True,
+        anchor_exact="gamma",
+    )
+    row = get_annotation(conn, aid)
+    assert row is not None
+    assert row["annotation_id"] == aid
+    assert row["finding_id"] == finding_id
+    assert row["body"] == "note"
+    assert row["anchor_found"] is True
+    assert get_annotation(conn, aid + 1000) is None
