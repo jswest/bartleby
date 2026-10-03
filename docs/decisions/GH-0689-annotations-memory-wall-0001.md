@@ -17,8 +17,18 @@ and gates on it the same way before deleting or echoing, and
 already admit. A second, annotation-specific ownership check was rejected:
 it would re-derive the wall per script, the drift GH-0288 consolidated into
 one chokepoint. Consequence: in a memory-off session an agent can annotate
-its own findings (and see every note on them, including a human's), but
-cannot annotate — or learn the annotations of — another session's finding.
+its own findings, but cannot annotate — or learn the annotations of — another
+session's finding.
+
+**On an admitted finding, a memory-off session sees human notes and its own
+agent notes — never another session's agent notes.** The parent-finding gate
+alone leaks: a memory-on session B can annotate memory-off session A's
+finding, and B's note is B's conclusion — exactly the prior-session memory
+the wall exists to keep out. Human notes are not another session's memory
+(they are the user's corrections, and must outrank the finding text), so they
+pass. `read_finding`'s `annotations` and `list_findings`' `annotation_count`
+both filter `is_human_author = 1 OR session_id = <caller>` when the caller is
+memory-off, via `db.annotations`' `walled_session_id` parameter.
 
 **Agent-written annotations are `is_human_author=0` and stamped with the
 authoring `session_id`.** The skill never claims human authorship; web and

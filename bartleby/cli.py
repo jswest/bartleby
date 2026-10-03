@@ -566,8 +566,6 @@ def _finding(args, parser):
             finding_id=args.finding_id, project=args.project, out=args.out,
         )
     elif args.finding_command == "annotate":
-        if (args.quote_prefix or args.quote_suffix) and not args.quote:
-            parser.error("--quote-prefix/--quote-suffix require --quote")
         finding_cmd.annotate(
             finding_id=args.finding_id, project=args.project, note=args.note,
             note_file=args.note_file, quote=args.quote,

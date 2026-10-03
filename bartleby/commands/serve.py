@@ -30,10 +30,12 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
+import apsw
+
 from bartleby.config import bartleby_dir
-from bartleby.db.connection import project_db_path
+from bartleby.db.connection import open_db, project_db_path
 from bartleby.lib import console
-from bartleby.project import validate_project_name
+from bartleby.project import get_active_project, validate_project_name
 
 
 # The SvelteKit UI is packaged as data inside the ``bartleby`` package, so it
@@ -123,10 +125,28 @@ def _override_project(name: str) -> None:
     os.environ["BARTLEBY_PROJECT"] = name
 
 
+def _require_current_schema(project: str | None) -> None:
+    """Exit(1) if the served project's DB doesn't match ``SCHEMA_VERSION``.
+
+    The web UI opens the DB raw and would 500 on a table an un-upgraded corpus
+    lacks; ``open_db`` is the same check every CLI/skill path refuses on, with
+    the standard "run ``bartleby project upgrade``" message. No project at all
+    is left for the UI to report.
+    """
+    if project is None and get_active_project() is None:
+        return
+    try:
+        open_db(project).close()
+    except (RuntimeError, FileNotFoundError, apsw.Error) as e:
+        console.error(str(e))
+        sys.exit(1)
+
+
 def main(project: str | None = None) -> None:
     _require_node()
     if project is not None:
         _override_project(project)
+    _require_current_schema(project)
     console.splash()
     console.warn(
         "If a pi-vm (containerized) session is running against this corpus, stop "

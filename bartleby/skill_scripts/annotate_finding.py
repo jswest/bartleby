@@ -16,14 +16,18 @@ Output (every id is type-tagged):
     {
       "annotation_id": "annotation:<id>",
       "finding_id": "finding:<id>",
-      "body": str,
+      "body": str,                       # stored stripped of edge whitespace
       "anchor": {"exact": str, "prefix": str|null, "suffix": str|null}|null,
+      "anchor_found": true,
       "chunk_id": "chunk:<id>"|null,
-      "is_human_author": false
+      "is_human_author": false,
+      "session_id": int,
+      "created_at": str
     }
 
 Errors: ``FINDING_NOT_FOUND``; ``ANCHOR_NOT_FOUND`` when ``--quote`` (with any
-prefix/suffix) doesn't occur verbatim in the finding's current body;
+prefix/suffix) doesn't occur verbatim in the finding's current body, or when
+the span starts or ends inside a ``[^…]`` citation marker or ``](…)`` link target;
 ``QUOTE_REQUIRED`` for an empty ``--quote`` or a prefix/suffix without one; ``UNKNOWN_CHUNK``;
 ``EMPTY_BODY`` / ``BODY_FILE_NOT_FOUND``. In a memory-off session you can only
 annotate findings *this* session authored; annotating another session's
@@ -35,8 +39,9 @@ from __future__ import annotations
 
 import argparse
 
-from bartleby.db.annotations import AnchorNotFound, insert_annotation
+from bartleby.db.annotations import AnchorNotFound, get_annotation, insert_annotation
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._annotations import annotation_json
 from bartleby.skill_scripts._common import assert_findings_accessible, read_text_arg
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
@@ -101,7 +106,7 @@ def work(*, conn, args, session_id) -> dict:
         annotation_id = insert_annotation(
             conn,
             finding_id=args.finding_id,
-            body=body,
+            body=body.strip(),
             is_human_author=False,
             anchor_exact=args.quote,
             anchor_prefix=args.quote_prefix,
@@ -109,30 +114,18 @@ def work(*, conn, args, session_id) -> dict:
             chunk_id=args.chunk_id,
             session_id=session_id,
         )
-    except AnchorNotFound:
+    except AnchorNotFound as e:
         raise SkillError(
             "ANCHOR_NOT_FOUND",
-            "--quote (with any --quote-prefix/--quote-suffix) does not occur "
-            "verbatim in the finding's current body. Copy the span exactly from "
-            "read_finding's body.",
+            f"--quote rejected: {e}. Copy the span exactly from read_finding's "
+            "body, and don't start or end it inside a [^…] citation marker or "
+            "a ](…) link target.",
         ) from None
 
-    anchor = None
-    if args.quote is not None:
-        anchor = {
-            "exact": args.quote,
-            "prefix": args.quote_prefix,
-            "suffix": args.quote_suffix,
-        }
     return format_output_ids({
-        "annotation_id": annotation_id,
         "finding_id": args.finding_id,
-        "body": body,
-        "anchor": anchor,
-        "chunk_id": args.chunk_id,
-        "is_human_author": False,
+        **annotation_json(get_annotation(conn, annotation_id)),
     })
-
 
 def main(argv: list[str] | None = None) -> None:
     run(

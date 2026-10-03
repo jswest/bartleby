@@ -96,12 +96,20 @@ def test_note_file_and_anchor_not_found(seeded_project, monkeypatch, capsys, tmp
     assert len(_rows(project, fid)) == 1
 
 
-def test_prefix_without_quote_is_usage_error(seeded_project, monkeypatch):
+def _capture_errors(monkeypatch) -> list[str]:
+    errors: list[str] = []
+    monkeypatch.setattr(finding_cmd.console, "error", errors.append)
+    return errors
+
+
+def test_prefix_without_quote_is_rejected(seeded_project, monkeypatch):
     project, fid, _ = _seed(seeded_project)
+    errors = _capture_errors(monkeypatch)
     with pytest.raises(SystemExit) as e:
         _run(monkeypatch, "annotate", f"finding:{fid}", "--project", project,
              "--note", "x", "--quote-prefix", "Alpha")
-    assert e.value.code == 2
+    assert e.value.code != 0
+    assert "require anchor_exact" in errors[0]
     assert _rows(project, fid) == []
 
 
@@ -159,3 +167,38 @@ def test_export_carries_annotations(seeded_project, tmp_path):
     finding_cmd.export(finding_id=fid, project=project, out=str(out))
     text = out.read_text()
     assert "## Annotations" in text and "human correction" in text
+
+
+def test_annotate_rejects_quote_splitting_a_citation_marker(
+    seeded_project, monkeypatch
+):
+    project, fid, _ = _seed(seeded_project)
+    errors = _capture_errors(monkeypatch)
+    with pytest.raises(SystemExit) as e:
+        _run(monkeypatch, "annotate", f"finding:{fid}", "--project", project,
+             "--note", "x", "--quote", "false.[^chunk:")
+    assert e.value.code != 0
+    assert "citation marker" in errors[0]
+    assert _rows(project, fid) == []
+
+
+def test_export_import_round_trip_drops_annotations(seeded_project, tmp_path):
+    import bartleby.project
+
+    project, fid, _ = _seed(seeded_project)
+    _annotate_direct(project, fid, body="human correction", is_human_author=True,
+                     anchor_exact="Alpha is true")
+    out = tmp_path / "f.md"
+    finding_cmd.export(finding_id=fid, project=project, out=str(out))
+    text = out.read_text()
+    assert "✎" not in text  # export emits no inline markers, so no numbering
+
+    bartleby.project.create_project("fresh")
+    finding_cmd.import_(path=str(out), project="fresh")
+    conn = open_db("fresh")
+    try:
+        [(body,)] = conn.cursor().execute("SELECT body FROM findings").fetchall()
+    finally:
+        conn.close()
+    assert "Annotations" not in body and "human correction" not in body
+    assert body.rstrip().endswith("Gamma holds.")
