@@ -1057,3 +1057,128 @@ input[type="number"] {
      only, so the fill is irrelevant — the dagger's currentColor shows through. */
   --pixel-bookmark: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M6%202h12v2H6zM4%204h2v18H4zm14%200h2v18h-2zm-2%2016h2v2h-2zm-2-2h2v2h-2zm-8%202h2v2H6zm2-2h2v2H8zm2-2h4v2h-4z%22%2F%3E%3C%2Fsvg%3E");
 }
+
+/* =========================================================================
+   Annotations (#689/#734) — human/agent notes layered on a finding.
+
+   Deliberately NOT citations: a ✎ pencil instead of the bookmark glyph, no
+   ordinal, an ink-blue tone apart from amber (source), danger (gone) and link
+   green, and a dashed left rule. The anchored span is painted with the CSS
+   Custom Highlight API (::highlight) — the {@html} body is never mutated.
+   Anchored notes sit in the .cite-notes gutter; whole-finding and stale notes
+   in .annotations below the body.
+   ========================================================================= */
+:root {
+  --color-annotation-text: #3b4a9c;
+  --color-annotation-wash: #e4e8fb;
+  --color-annotation-wash-strong: #c3cbf3;
+}
+::highlight(annotation) {
+  background-color: var(--color-annotation-wash);
+  text-decoration: underline dashed var(--color-annotation-text);
+  text-underline-offset: 3px;
+}
+::highlight(annotation-active) {
+  background-color: var(--color-annotation-wash-strong);
+}
+.margin-note--annotation {
+  border-left: 2px dashed var(--color-annotation-text);
+  padding-left: var(--space-xs);
+}
+.margin-note--annotation .margin-note__head {
+  color: var(--color-annotation-text);
+}
+.annotation-glyph {
+  font-weight: 700;
+  margin-right: 0.3em;
+}
+.annotation-stale {
+  margin-left: 0.4em;
+  padding: 0 0.3em;
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.annotation-body,
+.annotation-quote,
+.annotation-meta,
+.annotation-warn {
+  margin: var(--space-3xs) 0 0;
+  font-family: var(--font-sans);
+}
+.annotation-body {
+  white-space: pre-wrap; /* plain text: keep the author's line breaks */
+  word-break: break-word;
+  color: var(--color-text);
+}
+.annotation-quote {
+  font-style: italic;
+  color: var(--color-text-soft);
+}
+.annotation-meta {
+  color: var(--color-off);
+}
+.annotation-meta a {
+  color: var(--color-annotation-text);
+}
+.annotation-delete {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-danger-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.annotation-warn {
+  color: var(--color-danger-text);
+}
+.annotations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  max-width: var(--ledger-prose-width);
+  margin-top: var(--space-xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-rule);
+}
+.annotations__hed {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-annotation-text);
+}
+.annotations .margin-note {
+  font-size: var(--text-xs);
+}
+/* The floating "✎ Annotate" button under a body selection. */
+.annotate-pop {
+  position: absolute;
+  z-index: 5;
+  padding: var(--space-3xs) var(--space-sm);
+  border: 1px solid var(--color-annotation-text);
+  background: var(--color-surface);
+  color: var(--color-annotation-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.annotation-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  max-width: var(--ledger-prose-width);
+  margin-top: var(--space-lg);
+  padding: var(--space-md);
+  border: 1px dashed var(--color-annotation-text);
+  background: var(--color-surface);
+}
+.annotation-form textarea,
+.annotation-form input {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--color-rule);
+}

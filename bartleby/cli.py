@@ -106,7 +106,7 @@ def main():
     )
 
     finding_parser = subparsers.add_parser(
-        "finding", help="Read, export, or import a single finding"
+        "finding", help="Read, export, import, or annotate a single finding"
     )
     finding_sub = finding_parser.add_subparsers(dest="finding_command")
     frd = finding_sub.add_parser(
@@ -133,6 +133,45 @@ def main():
         "--out", type=str, default=None, metavar="PATH",
         help="Output path (default: <slugified-title>.md in the cwd).",
     )
+    from bartleby.skill_scripts._ids import prefixed_int
+
+    fan = finding_sub.add_parser(
+        "annotate",
+        help="Add a note to a finding, optionally anchored to a quoted span",
+    )
+    fan.add_argument("finding_id", type=prefixed_int("finding"), metavar="finding:<N>")
+    fan.add_argument("--project", type=str, default=None)
+    fan_note = fan.add_mutually_exclusive_group(required=True)
+    fan_note.add_argument("--note", type=str, default=None, help="Note text.")
+    fan_note.add_argument(
+        "--note-file", type=str, default=None, metavar="PATH",
+        help="Read the note text from a file.",
+    )
+    fan.add_argument(
+        "--quote", type=str, default=None,
+        help="Exact text in the finding body (raw Markdown) to anchor the note to; "
+             "omit for a whole-finding note.",
+    )
+    fan.add_argument("--quote-prefix", type=str, default=None,
+                     help="Text immediately before --quote (disambiguates repeats).")
+    fan.add_argument("--quote-suffix", type=str, default=None,
+                     help="Text immediately after --quote (disambiguates repeats).")
+    fan.add_argument(
+        "--chunk-id", type=prefixed_int("chunk"), default=None, metavar="chunk:<N>",
+        help="Point the note at a chunk.",
+    )
+    fls = finding_sub.add_parser(
+        "annotations", help="List a finding's annotations, oldest first"
+    )
+    fls.add_argument("finding_id", type=prefixed_int("finding"), metavar="finding:<N>")
+    fls.add_argument("--project", type=str, default=None)
+    fda = finding_sub.add_parser(
+        "delete-annotation", help="Delete one annotation"
+    )
+    fda.add_argument(
+        "annotation_id", type=prefixed_int("annotation"), metavar="annotation:<N>"
+    )
+    fda.add_argument("--project", type=str, default=None)
     fim = finding_sub.add_parser(
         "import",
         help="Import a finding artifact .md into a project (provenance baked in)",
@@ -525,6 +564,21 @@ def _finding(args, parser):
     elif args.finding_command == "export":
         finding_cmd.export(
             finding_id=args.finding_id, project=args.project, out=args.out,
+        )
+    elif args.finding_command == "annotate":
+        if (args.quote_prefix or args.quote_suffix) and not args.quote:
+            parser.error("--quote-prefix/--quote-suffix require --quote")
+        finding_cmd.annotate(
+            finding_id=args.finding_id, project=args.project, note=args.note,
+            note_file=args.note_file, quote=args.quote,
+            quote_prefix=args.quote_prefix, quote_suffix=args.quote_suffix,
+            chunk_id=args.chunk_id,
+        )
+    elif args.finding_command == "annotations":
+        finding_cmd.annotations(finding_id=args.finding_id, project=args.project)
+    elif args.finding_command == "delete-annotation":
+        finding_cmd.delete_annotation_cmd(
+            annotation_id=args.annotation_id, project=args.project,
         )
     elif args.finding_command == "import":
         finding_cmd.import_(path=args.path, project=args.project)

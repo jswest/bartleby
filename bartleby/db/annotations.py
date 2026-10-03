@@ -85,29 +85,47 @@ def insert_annotation(
     return conn.last_insert_rowid()
 
 
-def list_annotations(conn: apsw.Connection, finding_id: int) -> list[dict]:
-    """Annotations on a finding, oldest first, each with ``anchor_found``.
+def _with_anchor_found(conn: apsw.Connection, rows: list[tuple]) -> list[dict]:
+    """Zip rows into dicts and add ``anchor_found`` against each finding's current body.
 
-    ``anchor_found`` is computed against the finding's current body; it is
-    ``True`` for a whole-finding note (no anchor).
+    ``anchor_found`` is ``True`` for a whole-finding note (no anchor).
     """
     cur = conn.cursor()
-    row = cur.execute(
-        "SELECT body FROM findings WHERE finding_id = ?", (finding_id,)
-    ).fetchone()
-    finding_body = row[0] if row else ""
+    bodies: dict[int, str] = {}
     out = []
-    for r in cur.execute(
-        f"SELECT {', '.join(_COLUMNS)} FROM finding_annotations "
-        "WHERE finding_id = ? ORDER BY annotation_id",
-        (finding_id,),
-    ).fetchall():
+    for r in rows:
         d = dict(zip(_COLUMNS, r))
+        fid = d["finding_id"]
+        if fid not in bodies:
+            row = cur.execute(
+                "SELECT body FROM findings WHERE finding_id = ?", (fid,)
+            ).fetchone()
+            bodies[fid] = row[0] if row else ""
         d["anchor_found"] = d["anchor_exact"] is None or locate_anchor(
-            finding_body, d["anchor_exact"], d["anchor_prefix"], d["anchor_suffix"]
+            bodies[fid], d["anchor_exact"], d["anchor_prefix"], d["anchor_suffix"]
         ) is not None
         out.append(d)
     return out
+
+
+def get_annotation(conn: apsw.Connection, annotation_id: int) -> dict | None:
+    """One annotation by id (same keys as :func:`list_annotations` rows), or None."""
+    rows = conn.cursor().execute(
+        f"SELECT {', '.join(_COLUMNS)} FROM finding_annotations "
+        "WHERE annotation_id = ?",
+        (annotation_id,),
+    ).fetchall()
+    return _with_anchor_found(conn, rows)[0] if rows else None
+
+
+def list_annotations(conn: apsw.Connection, finding_id: int) -> list[dict]:
+    """Annotations on a finding, oldest first, each with ``anchor_found``."""
+    rows = conn.cursor().execute(
+        f"SELECT {', '.join(_COLUMNS)} FROM finding_annotations "
+        "WHERE finding_id = ? ORDER BY annotation_id",
+        (finding_id,),
+    ).fetchall()
+    return _with_anchor_found(conn, rows)
 
 
 def delete_annotation(conn: apsw.Connection, annotation_id: int) -> bool:
