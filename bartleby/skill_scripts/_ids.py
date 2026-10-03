@@ -21,6 +21,7 @@ import argparse
 # deliberately absent — its real type depends on the row's ``source_kind``, so it
 # is prefixed by kind explicitly at its emission sites, never through this map.
 _OUTPUT_FIELD_TYPES = {
+    "annotation_id": "annotation",
     "chunk_id": "chunk",
     "chunk_ids": "chunk",
     "dangling_citations": "chunk",       # [^chunk:N] markers whose citation no longer resolves
