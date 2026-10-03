@@ -76,6 +76,7 @@ function buildFontFaceCss() {
 // already be captured as a base64 snapshot for the same reason.
 const EXPORT_CSS = `
 :root {
+  --color-annotation-text: #3b4a9c;
   --font-display: "Doto", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-sans: "Iosevka Term", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
@@ -233,9 +234,9 @@ p.meta, .meta { font-family: var(--font-sans); font-size: var(--text-xs); font-w
 
 /* --- annotations (#734): a static trailing section, not highlights --- */
 .annotations { display: flex; flex-direction: column; gap: var(--space-md); max-width: var(--ledger-prose-width); margin-top: var(--space-xl); padding-top: var(--space-lg); border-top: 1px solid var(--color-rule); }
-.annotations__hed { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: #3b4a9c; }
-.annotations .margin-note { font-size: var(--text-xs); border-left: 2px dashed #3b4a9c; padding-left: var(--space-xs); }
-.annotations .margin-note__head { color: #3b4a9c; }
+.annotations__hed { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--color-annotation-text); }
+.annotations .margin-note { font-size: var(--text-xs); border-left: 2px dashed var(--color-annotation-text); padding-left: var(--space-xs); }
+.annotations .margin-note__head { color: var(--color-annotation-text); }
 .annotation-body, .annotation-quote, .annotation-meta { margin: var(--space-3xs) 0 0; font-family: var(--font-sans); }
 .annotation-body { white-space: pre-wrap; word-break: break-word; }
 .annotation-quote { font-style: italic; color: var(--color-text-soft); }

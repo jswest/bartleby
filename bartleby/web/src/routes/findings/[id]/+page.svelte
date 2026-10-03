@@ -6,7 +6,8 @@
   import SourceViewer from "$lib/components/SourceViewer.svelte";
   import AnnotationNote from "$lib/components/AnnotationNote.svelte";
   import { substituteCitations } from "$lib/citations.js";
-  import { anchorFor, nthIndexOf, occurrenceIndex } from "$lib/annotations.js";
+  import { anchorFromRendered, bracketSpan, locateAnchor, renderedSpan } from "$lib/annotations.js";
+  import { browser } from "$app/environment";
   import { CHUNK_ICON } from "$lib/icons.js";
   import { slugify } from "$lib/format.js";
 
@@ -85,12 +86,34 @@
   // ===== Annotations (#689/#734) =====================================
   // Human/agent notes layered on the finding — commentary, NOT citations, so
   // they get their own ✎ kind in the gutter and never touch the body markdown.
-  // An anchored note whose quote still locates sits in the gutter beside a
-  // highlight of its span; whole-finding notes and stale anchors (the finding
-  // was edited since) render as a block below the body.
-  const isPlaced = (a) => a.anchor_exact != null && a.anchor_found;
-  $: placed = data.annotations.filter(isPlaced);
-  $: unplaced = data.annotations.filter((a) => !isPlaced(a));
+  // An anchored note sits in the gutter beside a highlight of its span when
+  // the span can be traced into the rendered text; whole-finding notes, stale
+  // anchors (the finding was edited since) and anchors that can't be placed
+  // render as a block below the body.
+  //
+  // Placement is a render round-trip: bracket the raw span with sentinels,
+  // render the body the same way, and read where the sentinels land in the
+  // rendered text. Needs a DOM parser, so it runs in the browser only; on the
+  // server every found anchor is provisionally "placed" (no highlight yet).
+  function renderedText(body) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = renderBody(body, byId, null).html;
+    return tpl.content.textContent;
+  }
+  $: plainText = browser ? renderedText(data.finding.body) : null;
+  // raw [start, end) → rendered [start, end), or null if it doesn't survive.
+  $: placeSpan = (start, end) =>
+    renderedSpan(renderedText(bracketSpan(data.finding.body, start, end)), plainText);
+  $: spans = new Map(plainText == null ? [] : data.annotations.flatMap((a) => {
+    if (a.anchor_exact == null || !a.anchor_found) return [];
+    const hit = locateAnchor(data.finding.body, a.anchor_exact, a.anchor_prefix, a.anchor_suffix);
+    const span = hit && placeSpan(...hit);
+    return span ? [[a.annotation_id, span]] : [];
+  }));
+  const isPlaced = (a, spans) =>
+    a.anchor_exact != null && a.anchor_found && (plainText == null || spans.has(a.annotation_id));
+  $: placed = data.annotations.filter((a) => isPlaced(a, spans));
+  $: unplaced = data.annotations.filter((a) => !isPlaced(a, spans));
 
   // annotation_id → DOM Range over its span in the rendered body. Mutated (never
   // reassigned) in afterUpdate, so it is deliberately non-reactive.
@@ -121,25 +144,17 @@
     return range;
   }
 
-  // Highlight each placed note's span by searching the RENDERED text (never by
-  // editing the markdown — see app.css on <mark> mid-parse) and painting it with
-  // the CSS Custom Highlight API, so the {@html} body DOM is never mutated. The
-  // occurrence index from the raw anchor picks the same repeat here. An
-  // agent-written quote may carry inline markdown (`**`, backticks) the
-  // rendered text lacks, so retry with those stripped.
+  // Highlight each placed note's span (offsets from the round-trip above) in
+  // the live body, painted with the CSS Custom Highlight API so the {@html}
+  // body DOM is never mutated (see app.css on <mark> mid-parse). If the live
+  // text somehow differs from the round-trip's, paint nothing rather than
+  // the wrong span.
   function highlightAnnotations() {
     annotationRanges.clear();
     if (!bodyEl) return;
     const { nodes, text } = bodyText();
-    for (const a of placed) {
-      for (const needle of [a.anchor_exact, a.anchor_exact.replace(/[*`]/g, "")]) {
-        if (!needle) continue;
-        let at = nthIndexOf(text, needle, a.anchor_occurrence);
-        if (at === -1) at = text.indexOf(needle);
-        if (at === -1) continue;
-        annotationRanges.set(a.annotation_id, rangeAt(nodes, at, at + needle.length));
-        break;
-      }
+    if (text === plainText) {
+      for (const [id, [from, to]] of spans) annotationRanges.set(id, rangeAt(nodes, from, to));
     }
     if (globalThis.CSS?.highlights) {
       CSS.highlights.set("annotation", new Highlight(...annotationRanges.values()));
@@ -162,12 +177,12 @@
   let formError = null;
   let saving = false;
 
-  // Map the selection to a raw-body anchor. The selected rendered text must
-  // occur verbatim in the raw markdown; repeats are told apart by occurrence
-  // order (which repeat in the rendered text = which in the raw body), then
-  // pinned with prefix/suffix. A selection that crosses formatting or a
-  // citation marker maps to nothing (anchor null) and is offered as a
-  // whole-finding note — never a fabricated anchor.
+  // Map the selection to a raw-body anchor built from RENDERED context (see
+  // anchorFromRendered): the quote must occur verbatim in the raw markdown,
+  // and the anchor must round-trip back onto exactly this selection. A
+  // selection that crosses formatting or a citation marker maps to nothing
+  // (anchor null) and is offered as a whole-finding note — never a
+  // fabricated anchor.
   function onBodyMouseUp() {
     pick = null;
     const sel = window.getSelection();
@@ -181,14 +196,13 @@
     before.setStart(bodyEl, 0);
     before.setEnd(range.startContainer, range.startOffset);
     const pos = before.toString().length + (raw.length - raw.trimStart().length);
-    const k = occurrenceIndex(bodyText().text, quote, pos);
     const rect = range.getBoundingClientRect();
     const box = container.getBoundingClientRect();
     pick = {
       top: rect.bottom - box.top + 6,
       left: Math.max(0, rect.left - box.left),
       quote,
-      anchor: anchorFor(data.finding.body, quote, k),
+      anchor: anchorFromRendered(data.finding.body, bodyText().text, pos, quote, placeSpan),
     };
   }
 
@@ -436,7 +450,7 @@
               on:mouseenter={() => focusAnnotation(a.annotation_id)}
               on:mouseleave={() => focusAnnotation(null)}
             >
-              <AnnotationNote annotation={a} on:delete={(e) => removeNote(e.detail)} />
+              <AnnotationNote annotation={a} gutter on:delete={(e) => removeNote(e.detail)} />
             </div>
           {/each}
         </aside>
@@ -480,7 +494,7 @@
         <h2 class="annotations__hed">✎ Notes</h2>
         {#each unplaced as a (a.annotation_id)}
           <div class="margin-note margin-note--annotation">
-            <AnnotationNote annotation={a} stale={a.anchor_exact != null} on:delete={(e) => removeNote(e.detail)} />
+            <AnnotationNote annotation={a} on:delete={(e) => removeNote(e.detail)} />
           </div>
         {/each}
       </section>
