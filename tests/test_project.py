@@ -34,6 +34,9 @@ def _strip_db_to_v4(db_path) -> None:
     conn = apsw.Connection(str(db_path))
     try:
         cur = conn.cursor()
+        # v11 finding_annotations (#689): a new table + index, dropped whole.
+        cur.execute("DROP INDEX idx_finding_annotations_finding")
+        cur.execute("DROP TABLE finding_annotations")
         # v10 per-conversation run_key (#547): drop the unique index before the
         # column, so the re-walked v9→v10 step can re-ALTER + re-index cleanly.
         cur.execute("DROP INDEX idx_sessions_run_key")
@@ -283,7 +286,7 @@ def test_list_projects_marks_active(projects_root):
 
 
 def test_upgrade_chain_walks_from_v4_through_current(projects_root):
-    """Upgrading a v4 DB walks v4→v5→v6→v7→v8→v9, leaving all new shapes present.
+    """Upgrading a v4 DB walks v4→v5→…→v11, leaving all new shapes present.
 
     The v0.9.0 assembly bumped SCHEMA_VERSION to 9, activating the additive
     `_upgrade_v8_to_v9` step (#114 value-bearing-tags + #254 anchor-splitting

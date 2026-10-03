@@ -157,6 +157,36 @@ def _upgrade_v9_to_v10(conn: apsw.Connection) -> None:
     cur.execute("CREATE UNIQUE INDEX idx_sessions_run_key ON sessions(run_key)")
 
 
+def _upgrade_v10_to_v11(conn: apsw.Connection) -> None:
+    # Schema v11 adds `finding_annotations` (#689/#731): span-anchored notes
+    # layered on a finding without touching its body. Purely additive — a new
+    # table plus an index; no existing row changes and nothing assumes it is
+    # populated, so existing corpora run `bartleby project upgrade` rather than
+    # re-ingest. Keep this DDL in lockstep with db/schema.py.
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE finding_annotations (
+            annotation_id    INTEGER PRIMARY KEY,
+            finding_id       INTEGER NOT NULL REFERENCES findings(finding_id) ON DELETE CASCADE,
+            body             TEXT NOT NULL,
+            anchor_exact     TEXT,
+            anchor_prefix    TEXT,
+            anchor_suffix    TEXT,
+            chunk_id         INTEGER REFERENCES chunks(chunk_id) ON DELETE SET NULL,
+            is_human_author  INTEGER NOT NULL CHECK (is_human_author IN (0, 1)),
+            session_id       INTEGER REFERENCES sessions(session_id) ON DELETE SET NULL,
+            created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (anchor_exact IS NOT NULL OR (anchor_prefix IS NULL AND anchor_suffix IS NULL))
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX idx_finding_annotations_finding "
+        "ON finding_annotations(finding_id)"
+    )
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
@@ -164,6 +194,7 @@ _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     7: _upgrade_v7_to_v8,
     8: _upgrade_v8_to_v9,
     9: _upgrade_v9_to_v10,
+    10: _upgrade_v10_to_v11,
 }
 
 
