@@ -46,6 +46,13 @@ import yaml
 from rich.console import Console
 from rich.markdown import Markdown
 
+from bartleby.db.annotations import (
+    AnchorNotFound,
+    delete_annotation,
+    insert_annotation,
+    list_annotations,
+    locate_anchor,
+)
 from bartleby.db.connection import open_db
 from bartleby.lib import console
 from bartleby.project import get_active_project
@@ -118,6 +125,60 @@ def _rewrite_citations(body: str, citations: list[dict]) -> str:
     return _CHUNK_MARKER.sub(_sub, body)
 
 
+_ANNOTATION_GLYPH = "\u270e"  # ✎ — distinct from the citation glyphs † ‡ §
+_STALE_NOTE = "annotation anchor no longer matches the text"
+
+
+def _excerpt(text: str, limit: int = 60) -> str:
+    """One-line excerpt of an anchor quote for listings."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "\u2026"
+
+
+def _author_kind(annotation: dict) -> str:
+    return "human" if annotation["is_human_author"] else "agent"
+
+
+def _insert_annotation_markers(body: str, annotations: list[dict]) -> str:
+    """Insert ``[✎N]`` after each anchored, still-locatable annotation's span.
+
+    Anchors are offsets into the *raw* body, so this runs before the citation
+    rewrite (which shifts offsets). ``N`` is the annotation's 1-based position
+    in the oldest-first list. Stale anchors get no inline marker.
+    """
+    inserts: list[tuple[int, str]] = []
+    for n, a in enumerate(annotations, start=1):
+        if a["anchor_exact"] is None:
+            continue
+        span = locate_anchor(
+            body, a["anchor_exact"], a["anchor_prefix"], a["anchor_suffix"]
+        )
+        if span is not None:
+            inserts.append((span[1], f"[{_ANNOTATION_GLYPH}{n}]"))
+    # Right-to-left so earlier offsets stay valid; stable for equal offsets.
+    for end, marker in sorted(inserts, key=lambda t: t[0], reverse=True):
+        body = body[:end] + marker + body[end:]
+    return body
+
+
+def _annotations_section(annotations: list[dict]) -> str:
+    """Trailing "Annotations" Markdown section ('' when there are none)."""
+    if not annotations:
+        return ""
+    lines = ["## Annotations", ""]
+    for n, a in enumerate(annotations, start=1):
+        head = f"{_ANNOTATION_GLYPH}{n} \u00b7 {_author_kind(a)} \u00b7 {a['created_at']}"
+        if a["anchor_exact"] is None:
+            where = "whole finding"
+        else:
+            where = f"\u201c{_excerpt(a['anchor_exact'])}\u201d"
+            if not a["anchor_found"]:
+                where += f" ({_STALE_NOTE})"
+        lines.append(f"- {head} \u00b7 {where}")
+        lines.extend(f"  > {ln}" if ln else "  >" for ln in a["body"].splitlines())
+    return "\n".join(lines) + "\n"
+
+
 def _read_finding_for_export(conn, finding_id: int) -> dict:
     """Read one finding (title/description/body + resolved citations) for export.
 
@@ -140,6 +201,7 @@ def _read_finding_for_export(conn, finding_id: int) -> dict:
     title, description, body = row
     _chunk_ids, citation_ids = finding_chunk_and_citation_ids(cur, finding_id)
     return {
+        "annotations": list_annotations(conn, finding_id),
         "title": title,
         "description": description,
         "body": body,
@@ -258,6 +320,7 @@ def _read_finding_for_display(conn, finding_id: int) -> dict:
     prov = session_provenance(conn, owning_session_id)
 
     return {
+        "annotations": list_annotations(conn, finding_id),
         "title": title,
         "description": description,
         "body": body,
@@ -288,12 +351,15 @@ def _finding_as_markdown(finding: dict) -> str:
     if finding.get("description"):
         parts.append(finding["description"] + "\n")
 
+    annotations = finding.get("annotations", [])
     rendered_body = _render_body_as_markdown(
-        finding["body"],
+        _insert_annotation_markers(finding["body"], annotations),
         finding["citations"],
         finding["dangling"],
     )
     parts.append(rendered_body)
+    if annotations:
+        parts.append(_annotations_section(annotations))
 
     return "\n".join(parts)
 
@@ -338,6 +404,107 @@ def read(*, finding_id: int, project: str | None, json_out: bool, render: bool) 
         print(md_text, end="")
 
 
+def _open_corpus(project: str | None) -> tuple[str, "apsw.Connection"]:
+    corpus = project or get_active_project()
+    if not corpus:
+        console.error("No active project. Specify one with --project.")
+        sys.exit(1)
+    return corpus, _open_or_exit(corpus)
+
+
+def annotate(
+    *,
+    finding_id: int,
+    project: str | None,
+    note: str | None,
+    note_file: str | None,
+    quote: str | None,
+    quote_prefix: str | None,
+    quote_suffix: str | None,
+    chunk_id: int | None,
+) -> None:
+    """Add a human note to a finding; prints the new ``annotation:<N>``."""
+    if note_file is not None:
+        try:
+            note = Path(note_file).read_text(encoding="utf-8")
+        except OSError as e:
+            console.error(f"Cannot read --note-file: {e}")
+            sys.exit(1)
+    if not note or not note.strip():
+        console.error("The note is empty.")
+        sys.exit(1)
+
+    _corpus, conn = _open_corpus(project)
+    try:
+        annotation_id = insert_annotation(
+            conn,
+            finding_id=finding_id,
+            body=note.strip(),
+            is_human_author=True,
+            anchor_exact=quote,
+            anchor_prefix=quote_prefix,
+            anchor_suffix=quote_suffix,
+            chunk_id=chunk_id,
+        )
+    except AnchorNotFound:
+        console.error(
+            "--quote does not match the finding body (exact, case-sensitive, "
+            "against the raw Markdown); nothing was written."
+        )
+        sys.exit(1)
+    except ValueError as e:
+        console.error(str(e))
+        sys.exit(1)
+    finally:
+        conn.close()
+    print(f"annotation:{annotation_id}")
+
+
+def annotations(*, finding_id: int, project: str | None) -> None:
+    """List a finding's annotations, oldest first."""
+    _corpus, conn = _open_corpus(project)
+    try:
+        exists = conn.cursor().execute(
+            "SELECT 1 FROM findings WHERE finding_id = ?", (finding_id,)
+        ).fetchone()
+        if exists is None:
+            console.error(f"No finding with id {finding_id} in this corpus.")
+            sys.exit(1)
+        rows = list_annotations(conn, finding_id)
+    finally:
+        conn.close()
+    if not rows:
+        print(f"No annotations on finding:{finding_id}.")
+        return
+    for a in rows:
+        if a["anchor_exact"] is None:
+            where = "whole finding"
+        else:
+            where = f"\u201c{_excerpt(a['anchor_exact'])}\u201d"
+            if not a["anchor_found"]:
+                where += " [stale: anchor no longer matches]"
+        chunk = f" \u00b7 chunk:{a['chunk_id']}" if a["chunk_id"] is not None else ""
+        print(
+            f"annotation:{a['annotation_id']} \u00b7 {_author_kind(a)} \u00b7 "
+            f"{a['created_at']} \u00b7 {where}{chunk}"
+        )
+        for ln in a["body"].splitlines():
+            print(f"    {ln}")
+
+
+def delete_annotation_cmd(*, annotation_id: int, project: str | None) -> None:
+    """Delete one annotation by id."""
+    _corpus, conn = _open_corpus(project)
+    try:
+        deleted = delete_annotation(conn, annotation_id)
+    finally:
+        conn.close()
+    if not deleted:
+        console.error(f"No annotation with id {annotation_id} in this corpus.")
+        sys.exit(1)
+    print(f"Deleted annotation:{annotation_id}")
+
+
 def export(*, finding_id: int, project: str | None, out: str | None) -> None:
     """Emit a self-describing ``.md`` artifact for one finding.
 
@@ -376,6 +543,8 @@ def export(*, finding_id: int, project: str | None, out: str | None) -> None:
         + rewritten.rstrip("\n")
         + "\n"
     )
+    if finding["annotations"]:
+        artifact += "\n" + _annotations_section(finding["annotations"])
 
     out_path = Path(out) if out else Path(f"{_slug(finding['title'])}.md")
     out_path.write_text(artifact, encoding="utf-8")
