@@ -27,15 +27,19 @@ export function locateAnchor(body, exact, prefix = null, suffix = null) {
 // Spans of the raw body an anchor boundary must not fall strictly inside:
 // citation markers `[^…]` and link/image targets `](…)`. Mirrors the Python
 // write-time rule (#689).
-const MARKER_SPAN = /\[\^[^\]]*\]|\]\([^)]*\)/g;
+// Scanned as two separate passes (not one alternation) so overlapping spans such as
+// `[^a](b)` both count — this mirrors `splits_protected_span` in db/annotations.py.
+const MARKER_SPANS = [/\[\^[^\]]*\]/g, /\]\([^)]*\)/g];
 
 // True when `start` or `end` falls STRICTLY inside a marker/link-target span
 // of `body` (span.start < pos < span.end). An anchor that fully contains a
 // marker — or merely touches one — is fine.
 export function splitsMarker(body, start, end) {
-  for (const m of body.matchAll(MARKER_SPAN)) {
-    const s = m.index, e = m.index + m[0].length;
-    if ((s < start && start < e) || (s < end && end < e)) return true;
+  for (const re of MARKER_SPANS) {
+    for (const m of body.matchAll(re)) {
+      const s = m.index, e = m.index + m[0].length;
+      if ((s < start && start < e) || (s < end && end < e)) return true;
+    }
   }
   return false;
 }

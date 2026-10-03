@@ -71,3 +71,9 @@ test('anchorFromRendered: null when the selection is not verbatim in the raw bod
   const quote = 'rose ¶1 sharply';
   assert.equal(anchorFromRendered(raw, rendered, rendered.indexOf(quote), quote, placer(raw)), null);
 });
+
+test('splitsMarker scans overlapping marker and link-target spans separately', () => {
+  const body = 'see [^a](b) here';
+  // boundary inside the link target "(b)" — the `](` overlaps the `[^a]` match
+  assert.equal(splitsMarker(body, body.indexOf('(b') + 1, body.indexOf(' here')), true);
+});
