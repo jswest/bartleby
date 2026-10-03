@@ -7,14 +7,16 @@ import json
 
 import pytest
 
-from bartleby.db.annotations import count_annotations
+from bartleby.db.annotations import count_annotations, insert_annotation
 from bartleby.db.connection import open_db
 from bartleby.session import start_session
 from bartleby.skill_scripts import (
     annotate_finding,
     delete_annotation,
+    delete_finding,
     edit_finding,
     list_findings,
+    merge_findings,
     read_finding,
 )
 from tests._skill_fixtures import (  # noqa: F401
@@ -268,3 +270,96 @@ def test_delete_annotation_memory_off_foreign_refused_own_allowed(
         "--project", project, "--annotation-id", own_note["annotation_id"],
     ], capsys)
     assert out["finding_id"] == own
+
+
+def test_annotate_rejects_quote_splitting_a_citation_marker(
+    seeded_project, tmp_path, capsys
+):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run_err(annotate_finding, _annotate(
+        project, fid, "--body", "x", "--quote", "one[^chunk:",
+    ), capsys)
+    assert out["code"] == "ANCHOR_NOT_FOUND"
+    assert "citation marker" in out["error"]
+    assert _annotation_count(project, unprefix(fid)) == 0
+
+
+def test_annotate_strips_body(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run(annotate_finding, _annotate(project, fid, "--body", "  note \n"), capsys)
+    assert out["body"] == "note"
+    assert out["anchor_found"] is True and out["created_at"]
+
+
+def test_memory_off_read_hides_foreign_agent_notes(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    start_session(project, memory_enabled=False)
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    _run(annotate_finding, _annotate(project, fid, "--body", "mine"), capsys)
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES ('other', 1)"
+        )
+        other = conn.last_insert_rowid()
+        insert_annotation(conn, finding_id=unprefix(fid), body="theirs",
+                          is_human_author=False, session_id=other)
+        insert_annotation(conn, finding_id=unprefix(fid), body="human",
+                          is_human_author=True)
+    finally:
+        conn.close()
+
+    read = _run(read_finding, ["--project", project, "--finding-id", fid], capsys)
+    assert [a["body"] for a in read["annotations"]] == ["mine", "human"]
+    listed = _run(list_findings, ["--project", project], capsys)
+    [row] = listed["findings"]
+    assert row["annotation_count"] == 2
+
+
+def test_merge_moves_source_annotations_to_target(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    into = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="Into", description="D",
+    )
+    src = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="Src", description="D",
+    )["finding_id"]
+    conn = open_db(project)
+    try:
+        insert_annotation(conn, finding_id=unprefix(src), body="$3M is wrong",
+                          is_human_author=True, anchor_exact="Claim one")
+    finally:
+        conn.close()
+    body_file = tmp_path / "merged.md"
+    body_file.write_text(into["body"].replace("Claim one", "Merged claim"))
+
+    out = _run(merge_findings, [
+        "--project", project, "--from", src, "--into", into["finding_id"],
+        "--body-file", str(body_file),
+    ], capsys)
+    assert out["annotations_moved"] == 1
+    read = _run(read_finding, [
+        "--project", project, "--finding-id", into["finding_id"],
+    ], capsys)
+    [note] = read["annotations"]
+    assert note["body"] == "$3M is wrong"
+    assert note["anchor_found"] is False  # anchored to the old source body
+
+
+def test_delete_finding_reports_annotations_dropped(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    for text in ("one", "two"):
+        _run(annotate_finding, _annotate(project, fid, "--body", text), capsys)
+    out = _run(delete_finding, ["--project", project, "--finding-id", fid], capsys)
+    assert out["annotations_dropped"] == 2

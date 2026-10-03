@@ -12,6 +12,8 @@ from bartleby.db.annotations import (
     insert_annotation,
     list_annotations,
     locate_anchor,
+    reparent_annotations,
+    splits_protected_span,
 )
 from bartleby.db.connection import open_db
 from tests._skill_fixtures import project_env, seed_finding, seeded_project  # noqa: F401
@@ -142,3 +144,83 @@ def test_get_annotation_by_id(finding):
     assert row["body"] == "note"
     assert row["anchor_found"] is True
     assert get_annotation(conn, aid + 1000) is None
+
+
+MARKED = "Revenue rose [^chunk:12] sharply, see [the memo](http://x/y)."
+
+
+def _span(text: str) -> tuple[int, int]:
+    start = MARKED.index(text)
+    return start, start + len(text)
+
+
+@pytest.mark.parametrize("quote", [
+    "rose [^chunk:1",       # end inside [^chunk:12]
+    "chunk:12] sharply",    # start inside [^chunk:12]
+    "memo](http",           # end inside ](http://x/y)
+    "x/y).",                # start inside ](http://x/y)
+])
+def test_splits_protected_span_rejects_split_markers(quote):
+    assert splits_protected_span(MARKED, *_span(quote)) is True
+
+
+@pytest.mark.parametrize("quote", [
+    "rose [^chunk:12] sharply",  # wholly contains a marker
+    "[^chunk:12]",               # exactly a marker (boundaries on its edges)
+    "Revenue rose",              # plain prose
+    "the memo](http://x/y)",     # wholly contains a link target
+])
+def test_splits_protected_span_accepts_whole_markers(quote):
+    assert splits_protected_span(MARKED, *_span(quote)) is False
+
+
+def test_insert_rejects_anchor_splitting_a_marker(seeded_project):  # noqa: F811
+    conn = open_db(seeded_project["project"])
+    try:
+        conn.cursor().execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES ('s1', 1)"
+        )
+        fid, _ = seed_finding(conn, conn.last_insert_rowid(), body=MARKED)
+        for bad in ("rose [^chunk:1", "memo](http"):
+            with pytest.raises(AnchorNotFound, match="citation marker or link"):
+                insert_annotation(conn, finding_id=fid, body="x",
+                                  is_human_author=True, anchor_exact=bad)
+        assert list_annotations(conn, fid) == []
+        insert_annotation(conn, finding_id=fid, body="ok", is_human_author=True,
+                          anchor_exact="rose [^chunk:12] sharply")
+        assert len(list_annotations(conn, fid)) == 1
+    finally:
+        conn.close()
+
+
+def test_reparent_annotations_moves_notes(finding):
+    conn, fid, _ = finding
+    sid = conn.cursor().execute("SELECT session_id FROM findings").fetchone()[0]
+    other, _ = seed_finding(conn, sid, body="other body")
+    insert_annotation(conn, finding_id=fid, body="a", is_human_author=True,
+                      anchor_exact="gamma")
+    insert_annotation(conn, finding_id=fid, body="b", is_human_author=False)
+    assert reparent_annotations(conn, [fid], other) == 2
+    assert reparent_annotations(conn, [], other) == 0
+    rows = list_annotations(conn, other)
+    assert [r["body"] for r in rows] == ["a", "b"]
+    assert rows[0]["anchor_found"] is False  # quoted the old body
+    assert count_annotations(conn, [fid]) == {fid: 0}
+
+
+def test_walled_session_hides_foreign_agent_notes(finding):
+    conn, fid, _ = finding
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sessions (name, memory_enabled) VALUES ('me', 0)")
+    me = conn.last_insert_rowid()
+    cur.execute("INSERT INTO sessions (name, memory_enabled) VALUES ('them', 1)")
+    them = conn.last_insert_rowid()
+    insert_annotation(conn, finding_id=fid, body="human", is_human_author=True)
+    insert_annotation(conn, finding_id=fid, body="mine", is_human_author=False,
+                      session_id=me)
+    insert_annotation(conn, finding_id=fid, body="theirs", is_human_author=False,
+                      session_id=them)
+    walled = list_annotations(conn, fid, walled_session_id=me)
+    assert [r["body"] for r in walled] == ["human", "mine"]
+    assert len(list_annotations(conn, fid)) == 3
+    assert count_annotations(conn, [fid], walled_session_id=me) == {fid: 2}

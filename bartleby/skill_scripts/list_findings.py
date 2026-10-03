@@ -35,8 +35,9 @@ With ``--brief`` each finding is trimmed to ``finding_id``, ``title``,
 
 In a memory-off session the listing is scoped to findings *this* session
 authored (other sessions' findings are walled off to avoid contaminating an
-evaluation run); ``total`` and pagination reflect that scoped set. A
-memory-on session lists every finding.
+evaluation run); ``total`` and pagination reflect that scoped set, and
+``annotation_count`` counts only human notes and this session's own agent
+notes. A memory-on session lists every finding.
 """
 
 from __future__ import annotations
@@ -70,9 +71,10 @@ def work(*, conn, args, session_id) -> dict:
 
     # Memory-off: own findings only (see module docstring). Memory-on: all.
     if memory_enabled(conn, session_id):
-        scope_sql, scope_params = "", ()
+        scope_sql, scope_params, walled = "", (), None
     else:
         scope_sql, scope_params = "WHERE f.session_id = ?", (session_id,)
+        walled = session_id
 
     total = cur.execute(
         f"SELECT COUNT(*) FROM findings f {scope_sql}", scope_params,
@@ -89,7 +91,9 @@ def work(*, conn, args, session_id) -> dict:
         "ORDER BY f.finding_id DESC LIMIT ? OFFSET ?",
         (*scope_params, args.limit, args.offset),
     ).fetchall()
-    annotation_counts = count_annotations(conn, [r[0] for r in rows])
+    annotation_counts = count_annotations(
+        conn, [r[0] for r in rows], walled_session_id=walled,
+    )
 
     if args.brief:
         findings = [

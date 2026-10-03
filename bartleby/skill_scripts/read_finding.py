@@ -60,7 +60,9 @@ CLI; ``is_human_author: true``) or an agent (``annotate_finding``). The body is
 never rewritten by them. ``anchor`` is the verbatim span the note attaches to
 (``null`` = a whole-finding note). ``anchor_found`` is false when the quoted span
 no longer occurs in the current body (the finding was edited since) — the
-note still stands; only its location is stale. **A human annotation saying an
+note still stands; only its location is stale. In a memory-off session the list
+holds human notes and this session's own agent notes only — another session's
+agent notes are its memory and stay walled off. **A human annotation saying an
 assertion is wrong outranks the finding text**: carry the correction into any
 report built on this finding.
 
@@ -83,6 +85,7 @@ import argparse
 
 from bartleby.db.annotations import list_annotations
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._annotations import annotation_json
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     extract_citations,
@@ -90,6 +93,7 @@ from bartleby.skill_scripts._common import (
     extract_finding_citations,
     finding_chunk_and_citation_ids,
     live_finding_ids,
+    memory_enabled,
     resolve_citations,
     session_provenance,
 )
@@ -153,21 +157,11 @@ def work(*, conn, args, session_id) -> dict:
         "dangling_citations": dangling,
         "dangling_finding_links": dangling_finding_links,
         "annotations": [
-            {
-                "annotation_id": a["annotation_id"],
-                "body": a["body"],
-                "anchor": None if a["anchor_exact"] is None else {
-                    "exact": a["anchor_exact"],
-                    "prefix": a["anchor_prefix"],
-                    "suffix": a["anchor_suffix"],
-                },
-                "anchor_found": a["anchor_found"],
-                "chunk_id": a["chunk_id"],
-                "is_human_author": bool(a["is_human_author"]),
-                "session_id": a["session_id"],
-                "created_at": a["created_at"],
-            }
-            for a in list_annotations(conn, args.finding_id)
+            annotation_json(a)
+            for a in list_annotations(
+                conn, args.finding_id,
+                walled_session_id=None if memory_enabled(conn, session_id) else session_id,
+            )
         ],
     })
 

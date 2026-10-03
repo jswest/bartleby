@@ -8,6 +8,8 @@ is the only place annotation SQL lives in Python.
 
 from __future__ import annotations
 
+import re
+
 import apsw
 
 _COLUMNS = (
@@ -42,6 +44,27 @@ def locate_anchor(
     return None
 
 
+# Body spans an anchor boundary may not fall strictly inside: a ``[^…]``
+# citation marker and a Markdown link's ``](…)`` target. A boundary inside one
+# would split it when a reader inserts an inline note marker (``[✎N]``) or a
+# highlight at that offset. Each pattern is scanned separately (their matches
+# may overlap); the web UI mirrors this rule exactly.
+_PROTECTED_SPANS = (re.compile(r"\[\^[^\]]*\]"), re.compile(r"\]\([^)]*\)"))
+
+
+def splits_protected_span(body: str, start: int, end: int) -> bool:
+    """True when ``start`` or ``end`` falls strictly inside a protected span.
+
+    An anchor that wholly contains a marker (or touches one at its edge) is fine.
+    """
+    return any(
+        m.start() < pos < m.end()
+        for pattern in _PROTECTED_SPANS
+        for m in pattern.finditer(body)
+        for pos in (start, end)
+    )
+
+
 def insert_annotation(
     conn: apsw.Connection,
     *,
@@ -57,7 +80,8 @@ def insert_annotation(
     """Insert an annotation and return its id.
 
     Validates that the finding exists, that the anchor (if any) locates in the
-    finding's current body (else :class:`AnchorNotFound`), and that ``chunk_id``
+    finding's current body without a boundary splitting a citation marker or
+    link target (else :class:`AnchorNotFound`), and that ``chunk_id``
     exists when given. Other violations raise ValueError.
     """
     cur = conn.cursor()
@@ -69,8 +93,16 @@ def insert_annotation(
     if anchor_exact is None:
         if anchor_prefix is not None or anchor_suffix is not None:
             raise ValueError("anchor_prefix/anchor_suffix require anchor_exact")
-    elif locate_anchor(row[0], anchor_exact, anchor_prefix, anchor_suffix) is None:
-        raise AnchorNotFound("anchor does not match the finding body")
+    else:
+        span = locate_anchor(row[0], anchor_exact, anchor_prefix, anchor_suffix)
+        if span is None:
+            raise AnchorNotFound(
+                "anchor does not occur verbatim in the finding's current body"
+            )
+        if splits_protected_span(row[0], *span):
+            raise AnchorNotFound(
+                "anchor boundary falls inside a citation marker or link target"
+            )
     if chunk_id is not None and cur.execute(
         "SELECT 1 FROM chunks WHERE chunk_id = ?", (chunk_id,)
     ).fetchone() is None:
@@ -118,12 +150,28 @@ def get_annotation(conn: apsw.Connection, annotation_id: int) -> dict | None:
     return _with_anchor_found(conn, rows)[0] if rows else None
 
 
-def list_annotations(conn: apsw.Connection, finding_id: int) -> list[dict]:
-    """Annotations on a finding, oldest first, each with ``anchor_found``."""
+# Memory-off wall for notes (#689): a memory-off session sees human notes and
+# its own agent notes, never another session's agent notes (those are that
+# session's memory). Bound to the walled session id.
+_WALL_SQL = " AND (is_human_author = 1 OR session_id = ?)"
+
+
+def list_annotations(
+    conn: apsw.Connection, finding_id: int, *, walled_session_id: int | None = None
+) -> list[dict]:
+    """Annotations on a finding, oldest first, each with ``anchor_found``.
+
+    ``walled_session_id`` (a memory-off caller) drops other sessions' agent notes.
+    """
+    params: list = [finding_id]
+    wall = ""
+    if walled_session_id is not None:
+        wall = _WALL_SQL
+        params.append(walled_session_id)
     rows = conn.cursor().execute(
         f"SELECT {', '.join(_COLUMNS)} FROM finding_annotations "
-        "WHERE finding_id = ? ORDER BY annotation_id",
-        (finding_id,),
+        f"WHERE finding_id = ?{wall} ORDER BY annotation_id",
+        params,
     ).fetchall()
     return _with_anchor_found(conn, rows)
 
@@ -138,17 +186,48 @@ def delete_annotation(conn: apsw.Connection, annotation_id: int) -> bool:
 
 
 def count_annotations(
-    conn: apsw.Connection, finding_ids: list[int]
+    conn: apsw.Connection,
+    finding_ids: list[int],
+    *,
+    walled_session_id: int | None = None,
 ) -> dict[int, int]:
-    """Annotation count per finding id (ids with none map to 0)."""
+    """Annotation count per finding id (ids with none map to 0).
+
+    ``walled_session_id`` applies the same wall as :func:`list_annotations`.
+    """
     counts = {fid: 0 for fid in finding_ids}
     if not finding_ids:
         return counts
     marks = ",".join("?" * len(finding_ids))
+    params: list = list(finding_ids)
+    wall = ""
+    if walled_session_id is not None:
+        wall = _WALL_SQL
+        params.append(walled_session_id)
     for fid, n in conn.cursor().execute(
         "SELECT finding_id, COUNT(*) FROM finding_annotations "
-        f"WHERE finding_id IN ({marks}) GROUP BY finding_id",
-        list(finding_ids),
+        f"WHERE finding_id IN ({marks}){wall} GROUP BY finding_id",
+        params,
     ):
         counts[fid] = n
     return counts
+
+
+def reparent_annotations(
+    conn: apsw.Connection, from_finding_ids: list[int], into_finding_id: int
+) -> int:
+    """Move every annotation on ``from_finding_ids`` onto ``into_finding_id``.
+
+    Used by a merge so notes on the deleted sources survive (a human correction
+    outranks finding text). Their anchors quote the old bodies, so they usually
+    read back ``anchor_found: false`` — the note stands, its location is stale.
+    Returns the number of annotations moved.
+    """
+    if not from_finding_ids:
+        return 0
+    marks = ",".join("?" * len(from_finding_ids))
+    conn.cursor().execute(
+        f"UPDATE finding_annotations SET finding_id = ? WHERE finding_id IN ({marks})",
+        [into_finding_id, *from_finding_ids],
+    )
+    return conn.changes()
