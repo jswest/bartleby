@@ -279,16 +279,20 @@ bartleby project import <name> --from <source>     # Import a published corpus a
 
 ### `bartleby finding`
 
-Read, export, or import a single finding out of band.
+Read, export, import, or annotate a single finding out of band.
 
 ```
 bartleby finding read <finding-id>              # render to stdout as Markdown (--json, --render)
 bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
+bartleby finding annotate finding:<N> --note "…" [--quote "<exact text>"] [--chunk-id chunk:<N>]
+bartleby finding annotations finding:<N>        # list the notes on a finding
+bartleby finding delete-annotation annotation:<N>
 ```
 
 - `finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs). Pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print in place; `--json` emits the raw finding. It resolves live rather than baking inert markers, so it's for reading here, not sharing elsewhere.
 - `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus.
+- `finding annotate` leaves a human note on a finding — on the whole finding, or pinned to an exact stretch of its text with `--quote` (add `--quote-prefix` / `--quote-suffix` when the phrase repeats), optionally pointing at a chunk with `--chunk-id`. Use it to record that an assertion is wrong without rewriting the finding; `finding read` renders anchored notes as `[✎N]` markers plus a trailing *Annotations* section, and `finding export` carries the section along. Agents see the same notes through `read_finding`, where a human note outranks the finding text.
 - `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line. Imported citations stay inert — never re-resolved to local chunk ids — and the finding then renders like any other local one.
 
 Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
@@ -389,7 +393,7 @@ Five top-level views (plus a per-chunk view reached from citations and search hi
 
 - `/` — a corpus overview for the active project (the same aggregate the agent's `describe_corpus` returns): document / chunk / token totals, the authored-date range shown with its undated count, a documents-by-year histogram, summary coverage, content mix, tag chips, and the largest documents — plus nav cards into findings and documents.
 - `/search` — search the whole corpus using the same engine the agent uses. **Search** mode fuses full-text + semantic ranking (RRF) across documents, summaries, findings, and images; **Scan** mode enumerates *every* chunk matching a literal phrase, paginated. Filter by source kind, tag, and document scope; expand any hit to its full text or open the source file at the cited page. Each hit's `chunk N` carries a small open-in-context icon → its `/chunks/<id>` view. (Semantic queries load the embedding model per request, so the first hit takes a few seconds — the page shows a loading state.)
-- `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page; the small icon beside it opens that chunk's `/chunks/<id>` view. A **Save as HTML** button (beside *Copy as Markdown* / *Download .md*) downloads the finding as a single self-contained HTML file — fonts and every cited source embedded — that reproduces this view offline, on any machine, with no server and no network.
+- `/findings` — every saved finding, newest first. Click through to a split view: the finding's body (markdown, with inline citation chips) on the left, the source PDF on the right. Clicking a chip jumps the viewer to the cited page; the small icon beside it opens that chunk's `/chunks/<id>` view. Select any stretch of the body to **annotate** it — a human note pinned to that text, shown as a ✎ margin note (visibly distinct from the citation notes) with an optional chunk reference; *Add note* leaves a whole-finding note. A **Save as HTML** button (beside *Copy as Markdown* / *Download .md*) downloads the finding as a single self-contained HTML file — fonts and every cited source embedded — that reproduces this view offline, on any machine, with no server and no network.
 - `/documents` — the ingested corpus, filterable by authored-date range (with an include-undated toggle) and tag, sortable by title / date / ingest order, and paginated. Each row shows its assigned tag chips (hover a chip for the tag's description); when a date filter hides undated documents it says how many and offers to show them. Click through to a split view: the one-shot summary on the left, the original document on the right (PDFs in the browser's native viewer with `#page=` jumps; markdown rendered to formatted HTML; everything else in a sandboxed frame).
 - `/tags` — the controlled tag vocabulary: every tag with its description and document count. Click a tag to see the documents carrying it.
 - `/chunks/<id>` — a single chunk in context: the chunk itself at full contrast, its two neighbors on each side (same source, by chunk index) muted as surrounding context, and a link back to the source document (or finding). Reached from the icon beside any chunk reference in findings and search results.
@@ -410,7 +414,7 @@ Screenshots below are from a demo project built from NASA public-domain Hubble d
 
 Requires Node.js and npm on `PATH`; the first invocation runs `npm install` once into `~/.bartleby/serve/`.
 
-- Opens the project database read-only, so it's safe to leave running alongside an ingest or a research session. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
+- Opens the project database read-only for everything except annotations — the one write path, confined to the finding page's annotate/delete controls — so it's safe to leave running alongside an ingest or a research session. The corpus overview, document listing, and search delegate to the skill scripts (`describe_corpus`, `list_documents`, `search`, `scan`, `read_chunks`) as subprocesses under a dedicated, memory-enabled `web-reader` session — so the views show exactly what the agent sees, and the web never disturbs whichever session an agent has active.
 - Picks up the active project from `~/.bartleby/config.yaml`: `bartleby project use <name>` plus a page reload switches what you're looking at.
 
 ### `bartleby benchmark`

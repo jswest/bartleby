@@ -15,7 +15,7 @@ re-extracted, and the ``--from`` sources are deleted (body chunks +
 current values. The target must not appear in ``--from``.
 
 Output mirrors ``save_finding`` (every id type-tagged; the verbatim-body echo
-contract holds) plus ``merged_from``:
+contract holds) plus ``merged_from`` and ``annotations_moved``:
 
     {
       "finding_id": "finding:<id>",  # the surviving target
@@ -30,8 +30,13 @@ contract holds) plus ``merged_from``:
         "page_number": int|null,
       }, ...],
       "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
-      "merged_from": ["finding:<id>", ...]   # source ids folded in and deleted
+      "merged_from": ["finding:<id>", ...],  # source ids folded in and deleted
+      "annotations_moved": int     # notes moved from the sources onto the target
     }
+
+Annotations on the ``--from`` sources are moved onto the ``--into`` target, not
+dropped. Their anchors quote the old bodies, so they usually read back with
+``anchor_found: false`` — the note stands, only its location is stale.
 
 ``external_citations`` echo the merged body's ``[^url:…]`` / ``[^doc:…]``
 markers — supplementary external attributions alongside (never replacing) the
@@ -50,9 +55,11 @@ from __future__ import annotations
 
 import argparse
 
+from bartleby.db.annotations import count_annotations, reparent_annotations
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
 from bartleby.skill_scripts._common import (
+    memory_enabled,
     assert_findings_accessible,
     embed_body_chunks,
     extract_external_citations,
@@ -155,6 +162,14 @@ def work(*, conn, args, session_id) -> dict:
     )
     chunk_ids = write_finding_chunks(conn, target, chunk_inputs)
     replace_finding_citations(conn, target, citations)
+    # Notes on the sources move to the target before the sources' delete would
+    # cascade them away — a human correction must survive a merge (#689).
+    annotations_moved = reparent_annotations(conn, sources, target)
+    if not memory_enabled(conn, session_id):
+        # Report only what this session may see; foreign agent notes still move.
+        annotations_moved = count_annotations(
+            conn, [target], walled_session_id=session_id,
+        )[target]
     for src in sources:
         delete_chunks_for(conn, "finding", src)
     src_ph = ",".join("?" * len(sources))
@@ -173,6 +188,7 @@ def work(*, conn, args, session_id) -> dict:
         # merged_from is a list of finding ids; not in the output field map, so
         # tag each explicitly as a finding id.
         "merged_from": [format_id("finding", fid) for fid in sources],
+        "annotations_moved": annotations_moved,
     })
 
 

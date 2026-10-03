@@ -27,7 +27,8 @@ Output:
       "removed_chunks": int,        # finding body chunks removed (a count, bare)
       # this finding's OWN outgoing finding_citations rows removed — NOT the
       # incoming citations the cascade severs in other findings (a count, bare).
-      "removed_citations": int
+      "removed_citations": int,
+      "annotations_dropped": int    # notes on this finding, deleted with it
     }
 
 ``FINDING_NOT_FOUND`` when the id doesn't exist. In a memory-off session you
@@ -41,9 +42,10 @@ from __future__ import annotations
 
 import argparse
 
+from bartleby.db.annotations import count_annotations
 from bartleby.db.chunks import delete_chunks_for
 from bartleby.skill_runner import SkillError, build_arg_parser, run
-from bartleby.skill_scripts._common import assert_findings_accessible
+from bartleby.skill_scripts._common import assert_findings_accessible, memory_enabled
 from bartleby.skill_scripts._ids import format_output_ids, prefixed_int
 
 
@@ -79,6 +81,12 @@ def work(*, conn, args, session_id) -> dict:
         (args.finding_id,),
     ).fetchone()[0]
 
+    # Annotations cascade with the finding row; report how many went with it.
+    annotations_dropped = count_annotations(
+        conn, [args.finding_id],
+        walled_session_id=None if memory_enabled(conn, session_id) else session_id,
+    )[args.finding_id]
+
     removed_chunks = delete_chunks_for(conn, "finding", args.finding_id)
     cur.execute(
         "DELETE FROM findings WHERE finding_id = ?", (args.finding_id,),
@@ -90,6 +98,7 @@ def work(*, conn, args, session_id) -> dict:
         "title": title,
         "removed_chunks": removed_chunks,
         "removed_citations": n_citations,
+        "annotations_dropped": annotations_dropped,
     })
 
 

@@ -1,0 +1,9 @@
+# Annotations live in a separate `finding_annotations` table; the finding body is never touched.
+
+A user note on a finding (on a span of its text, or on the whole finding, optionally pointing at a chunk) is stored as a row in `finding_annotations`, schema v11 (issue #689, DB leaf #731). The finding stays exactly what the agent wrote. Two alternatives were rejected: a `[^note:N]` body marker (rewrites the record and funnels through the owner-gated edit path) and "annotations as findings" (no span anchoring; worsens the correction-narrative problem of #700/#709).
+
+**Anchor** is a W3C-style text-quote selector over the raw markdown body: `anchor_exact` (verbatim substring) plus optional `anchor_prefix`/`anchor_suffix` to disambiguate repeats; a NULL `anchor_exact` is a whole-finding note (a CHECK forbids prefix/suffix without it). `locate_anchor` takes the first occurrence of `exact` that satisfies the prefix and suffix. Anchors are not rewritten when a finding is edited; a stale anchor surfaces as `anchor_found: false` from `list_annotations`, the cousin of `dangling_citations`. `insert_annotation` validates the finding, the anchor (`AnchorNotFound`), and the chunk explicitly rather than relying on FK enforcement.
+
+**Author** is `is_human_author` (web and CLI write 1; skill scripts write 0 and stamp `session_id`). **Visibility** is that of the parent finding; there is no second memory wall, and annotations stay out of ranked `search`.
+
+**Schema** is purely additive (new table + index), so `_upgrade_v10_to_v11` ships and `bartleby project upgrade` walks it with no re-ingest; the fresh DDL and the upgrade DDL are held identical by the upgrade-chain parity test. **Publish** deletes `finding_annotations` explicitly with the rest of the session layer. All annotation SQL in Python lives in `bartleby/db/annotations.py`; the web layer reimplements `locateAnchor` in JS with the same semantics.

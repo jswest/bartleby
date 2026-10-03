@@ -42,8 +42,29 @@ Output (every id is type-tagged, e.g. ``"chunk:15837"``, ``"finding:204"``):
       }, ...],
       "external_citations": [{"scheme": "url"|"doc", "ref": str}, ...],
       "dangling_citations": ["chunk:<id>", ...],    # [^chunk:N] markers with no resolved citation
-      "dangling_finding_links": ["finding:<id>", ...] # [^finding:N] markers whose target is gone
+      "dangling_finding_links": ["finding:<id>", ...], # [^finding:N] markers whose target is gone
+      "annotations": [{                              # oldest first
+        "annotation_id": "annotation:<id>",
+        "body": str,
+        "anchor": {"exact": str, "prefix": str|null, "suffix": str|null}|null,
+        "anchor_found": bool,
+        "chunk_id": "chunk:<id>"|null,
+        "is_human_author": bool,
+        "session_id": int|null,
+        "created_at": str,
+      }, ...]
     }
+
+``annotations`` are notes layered on the finding — by a human (via the web or
+CLI; ``is_human_author: true``) or an agent (``annotate_finding``). The body is
+never rewritten by them. ``anchor`` is the verbatim span the note attaches to
+(``null`` = a whole-finding note). ``anchor_found`` is false when the quoted span
+no longer occurs in the current body (the finding was edited since) — the
+note still stands; only its location is stale. In a memory-off session the list
+holds human notes and this session's own agent notes only — another session's
+agent notes are its memory and stay walled off. **A human annotation saying an
+assertion is wrong outranks the finding text**: carry the correction into any
+report built on this finding.
 
 ``external_citations`` are the ``[^url:<url>]`` / ``[^doc:<ref>]`` markers in the
 body — supplementary external attributions that ride *alongside* (never replace)
@@ -62,7 +83,9 @@ from __future__ import annotations
 
 import argparse
 
+from bartleby.db.annotations import list_annotations
 from bartleby.skill_runner import SkillError, build_arg_parser, run
+from bartleby.skill_scripts._annotations import annotation_json
 from bartleby.skill_scripts._common import (
     assert_findings_accessible,
     extract_citations,
@@ -70,6 +93,7 @@ from bartleby.skill_scripts._common import (
     extract_finding_citations,
     finding_chunk_and_citation_ids,
     live_finding_ids,
+    memory_enabled,
     resolve_citations,
     session_provenance,
 )
@@ -132,6 +156,13 @@ def work(*, conn, args, session_id) -> dict:
         "external_citations": extract_external_citations(body),
         "dangling_citations": dangling,
         "dangling_finding_links": dangling_finding_links,
+        "annotations": [
+            annotation_json(a)
+            for a in list_annotations(
+                conn, args.finding_id,
+                walled_session_id=None if memory_enabled(conn, session_id) else session_id,
+            )
+        ],
     })
 
 

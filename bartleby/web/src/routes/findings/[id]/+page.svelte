@@ -1,9 +1,13 @@
 <script>
   import { onMount, onDestroy, afterUpdate } from "svelte";
+  import { invalidateAll } from "$app/navigation";
   import { marked } from "marked";
   import Button from "$lib/components/Button.svelte";
   import SourceViewer from "$lib/components/SourceViewer.svelte";
+  import AnnotationNote from "$lib/components/AnnotationNote.svelte";
   import { substituteCitations } from "$lib/citations.js";
+  import { anchorFromRendered, bracketSpan, locateAnchor, renderedSpan } from "$lib/annotations.js";
+  import { browser } from "$app/environment";
   import { CHUNK_ICON } from "$lib/icons.js";
   import { slugify } from "$lib/format.js";
 
@@ -77,6 +81,172 @@
   // since the markers are static {@html}.
   let container;
   let citesAside;
+  let bodyEl;
+
+  // ===== Annotations (#689/#734) =====================================
+  // Human/agent notes layered on the finding — commentary, NOT citations, so
+  // they get their own ✎ kind in the gutter and never touch the body markdown.
+  // An anchored note sits in the gutter beside a highlight of its span when
+  // the span can be traced into the rendered text; whole-finding notes, stale
+  // anchors (the finding was edited since) and anchors that can't be placed
+  // render as a block below the body.
+  //
+  // Placement is a render round-trip: bracket the raw span with sentinels,
+  // render the body the same way, and read where the sentinels land in the
+  // rendered text. Needs a DOM parser, so it runs in the browser only; on the
+  // server every found anchor is provisionally "placed" (no highlight yet).
+  function renderedText(body) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = renderBody(body, byId, null).html;
+    return tpl.content.textContent;
+  }
+  $: plainText = browser ? renderedText(data.finding.body) : null;
+  // raw [start, end) → rendered [start, end), or null if it doesn't survive.
+  $: placeSpan = (start, end) =>
+    renderedSpan(renderedText(bracketSpan(data.finding.body, start, end)), plainText);
+  $: spans = new Map(plainText == null ? [] : data.annotations.flatMap((a) => {
+    if (a.anchor_exact == null || !a.anchor_found) return [];
+    const hit = locateAnchor(data.finding.body, a.anchor_exact, a.anchor_prefix, a.anchor_suffix);
+    const span = hit && placeSpan(...hit);
+    return span ? [[a.annotation_id, span]] : [];
+  }));
+  const isPlaced = (a, spans) =>
+    a.anchor_exact != null && a.anchor_found && (plainText == null || spans.has(a.annotation_id));
+  $: placed = data.annotations.filter((a) => isPlaced(a, spans));
+  $: unplaced = data.annotations.filter((a) => !isPlaced(a, spans));
+
+  // annotation_id → DOM Range over its span in the rendered body. Mutated (never
+  // reassigned) in afterUpdate, so it is deliberately non-reactive.
+  const annotationRanges = new Map();
+
+  // The body's text nodes with their offsets into the concatenated text —
+  // the same string Range.toString() yields over the body.
+  function bodyText() {
+    const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let text = "";
+    while (walker.nextNode()) {
+      nodes.push({ node: walker.currentNode, start: text.length });
+      text += walker.currentNode.data;
+    }
+    return { nodes, text };
+  }
+
+  function rangeAt(nodes, from, to) {
+    const point = (pos, isEnd) => {
+      const hit = nodes.find(({ node, start }) =>
+        isEnd ? pos <= start + node.data.length : pos < start + node.data.length);
+      return [hit.node, pos - hit.start];
+    };
+    const range = document.createRange();
+    range.setStart(...point(from, false));
+    range.setEnd(...point(to, true));
+    return range;
+  }
+
+  // Highlight each placed note's span (offsets from the round-trip above) in
+  // the live body, painted with the CSS Custom Highlight API so the {@html}
+  // body DOM is never mutated (see app.css on <mark> mid-parse). If the live
+  // text somehow differs from the round-trip's, paint nothing rather than
+  // the wrong span.
+  function highlightAnnotations() {
+    annotationRanges.clear();
+    if (!bodyEl) return;
+    const { nodes, text } = bodyText();
+    if (text === plainText) {
+      for (const [id, [from, to]] of spans) annotationRanges.set(id, rangeAt(nodes, from, to));
+    }
+    if (globalThis.CSS?.highlights) {
+      CSS.highlights.set("annotation", new Highlight(...annotationRanges.values()));
+    }
+  }
+
+  // Hovering a note deepens its own span's highlight — the tie-back.
+  function focusAnnotation(id) {
+    if (!globalThis.CSS?.highlights) return;
+    const range = id != null && annotationRanges.get(id);
+    if (range) CSS.highlights.set("annotation-active", new Highlight(range));
+    else CSS.highlights.delete("annotation-active");
+  }
+
+  // --- Add flow: select text → "Annotate" pop → form → POST ---
+  let pick = null; // {top, left, quote, anchor} — the floating Annotate button
+  let draft = null; // the open form: {quote, anchor} (both null = whole-finding)
+  let noteText = "";
+  let chunkRef = "";
+  let formError = null;
+  let saving = false;
+
+  // Map the selection to a raw-body anchor built from RENDERED context (see
+  // anchorFromRendered): the quote must occur verbatim in the raw markdown,
+  // and the anchor must round-trip back onto exactly this selection. A
+  // selection that crosses formatting or a citation marker maps to nothing
+  // (anchor null) and is offered as a whole-finding note — never a
+  // fabricated anchor.
+  function onBodyMouseUp() {
+    pick = null;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!bodyEl.contains(range.commonAncestorContainer)) return;
+    const raw = range.toString();
+    const quote = raw.trim();
+    if (!quote) return;
+    const before = document.createRange();
+    before.setStart(bodyEl, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    const pos = before.toString().length + (raw.length - raw.trimStart().length);
+    const rect = range.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    pick = {
+      top: rect.bottom - box.top + 6,
+      left: Math.max(0, rect.left - box.left),
+      quote,
+      anchor: anchorFromRendered(data.finding.body, bodyText().text, pos, quote, placeSpan),
+    };
+  }
+
+  function startNote(from = null) {
+    draft = { quote: from?.quote ?? null, anchor: from?.anchor ?? null };
+    pick = null;
+    noteText = "";
+    chunkRef = "";
+    formError = null;
+  }
+
+  function focusOnMount(node) {
+    node.focus();
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  async function saveNote() {
+    const ref = chunkRef.trim();
+    if (ref && !/^(chunk:)?\d+$/.test(ref)) {
+      formError = "Chunk must look like chunk:123.";
+      return;
+    }
+    if (saving) return;
+    saving = true;
+    formError = null;
+    const res = await fetch(`/findings/${data.finding.finding_id}/annotations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: noteText, anchor: draft.anchor, chunk_id: ref || null }),
+    });
+    saving = false;
+    if (!res.ok) {
+      formError = (await res.json().catch(() => null))?.error ?? `Save failed (${res.status}).`;
+      return;
+    }
+    draft = null;
+    await invalidateAll();
+  }
+
+  async function removeNote(a) {
+    if (!confirm("Delete this note?")) return;
+    await fetch(`/findings/${data.finding.finding_id}/annotations/${a.annotation_id}`, { method: "DELETE" });
+    await invalidateAll();
+  }
 
   // ===== Dagger-aligned sidenote layout (#631) =========================
   // Each margin note's top is pinned to the vertical position of its inline
@@ -111,9 +281,12 @@
     // Pass 1: set position:absolute and initial top from the dagger offset.
     // left/right are set via CSS (.cite-notes .margin-note { left:0; right:0 })
     // so the final width is established before we measure heights in pass 2.
+    // A citation note aligns to its inline dagger; an annotation note to the
+    // top of its highlighted span.
     const items = noteEls.map((el) => {
-      const n = el.dataset.note;
-      const ref = container.querySelector(`.cite-ref[data-note="${n}"]`);
+      const ref = el.dataset.annotation
+        ? annotationRanges.get(Number(el.dataset.annotation))
+        : container.querySelector(`.cite-ref[data-note="${el.dataset.note}"]`);
       let top = 0;
       if (ref) {
         top = ref.getBoundingClientRect().top + window.scrollY - asideTop;
@@ -125,7 +298,9 @@
     });
 
     // Pass 2: now that each note is absolutely positioned at its final width,
-    // read offsetHeight and run the downward de-overlap sweep.
+    // read offsetHeight and run the downward de-overlap sweep — in reading
+    // order, since annotation notes interleave with citation notes.
+    items.sort((a, b) => a.top - b.top);
     let runningBottom = 0;
     for (const item of items) {
       const height = item.el.offsetHeight;
@@ -142,7 +317,10 @@
   // dagger positions. It must NOT be a reactive `$:` block calling tick(): doing
   // so re-enters Svelte's flush every cycle and pins the main thread (#631).
   // layoutNotes only mutates inline styles, so it never schedules a new update.
-  afterUpdate(layoutNotes);
+  afterUpdate(() => {
+    highlightAnnotations();
+    layoutNotes();
+  });
 
   let resizeObserver;
 
@@ -158,18 +336,20 @@
       const noteEl = el?.querySelector("[data-chunk-id]");
       if (noteEl) activate(Number(noteEl.dataset.chunkId));
     });
+    bodyEl.addEventListener("mouseup", onBodyMouseUp);
 
     // Re-measure on resize. ResizeObserver on the prose body catches both
     // window resize and flex/grid reflow of the prose column.
-    const proseEl = container.querySelector(".body");
-    if (proseEl && typeof ResizeObserver !== "undefined") {
+    if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(() => layoutNotes());
-      resizeObserver.observe(proseEl);
+      resizeObserver.observe(bodyEl);
     }
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
+    globalThis.CSS?.highlights?.delete("annotation");
+    globalThis.CSS?.highlights?.delete("annotation-active");
   });
 
   let copied = false;
@@ -209,16 +389,17 @@
       </Button>
       <Button size="sm" type="button" on:click={downloadMarkdown}>Download .md</Button>
       <Button size="sm" type="button" on:click={downloadHtml}>Save as HTML</Button>
+      <Button size="sm" type="button" on:click={() => startNote()}>Add note</Button>
     </div>
 
     <!-- Ledger column: drop-capped prose + a margin-note gutter. The body
          carries inline dagger anchors; the gutter carries the matching notes. -->
     <div class="ledger-column">
-      <div class="body markdown-body drop-cap-body">
+      <div class="body markdown-body drop-cap-body" bind:this={bodyEl}>
         {@html bodyHtml}
       </div>
 
-      {#if notes.length}
+      {#if notes.length || placed.length}
         <aside class="cite-notes" aria-label="Citations" bind:this={citesAside}>
           {#each notes as note (note.n)}
             <div
@@ -261,9 +442,63 @@
               {/if}
             </div>
           {/each}
+          {#each placed as a (a.annotation_id)}
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
+            <div
+              class="margin-note margin-note--annotation"
+              data-annotation={a.annotation_id}
+              on:mouseenter={() => focusAnnotation(a.annotation_id)}
+              on:mouseleave={() => focusAnnotation(null)}
+            >
+              <AnnotationNote annotation={a} gutter on:delete={(e) => removeNote(e.detail)} />
+            </div>
+          {/each}
         </aside>
       {/if}
     </div>
+
+    {#if pick}
+      <button
+        type="button"
+        class="annotate-pop"
+        style="top: {pick.top}px; left: {pick.left}px"
+        on:mousedown|preventDefault
+        on:click={() => startNote(pick)}
+      >✎ Annotate</button>
+    {/if}
+
+    {#if draft}
+      <form class="annotation-form" on:submit|preventDefault={saveNote}>
+        {#if draft.anchor}
+          <p class="annotation-quote">On “{draft.quote}”</p>
+        {:else if draft.quote}
+          <p class="annotation-warn">
+            That selection crosses formatting or a citation marker, so it can't be
+            anchored to the finding's text verbatim. Save it as a whole-finding note instead?
+          </p>
+        {:else}
+          <p class="annotation-quote">A note on the whole finding</p>
+        {/if}
+        <textarea bind:value={noteText} rows="3" required placeholder="Note (plain text)" use:focusOnMount></textarea>
+        <input type="text" bind:value={chunkRef} placeholder="chunk:123 (optional)" />
+        {#if formError}<p class="annotation-warn">{formError}</p>{/if}
+        <div class="toolbar">
+          <Button size="sm" type="submit">{draft.quote && !draft.anchor ? "Save as whole-finding note" : "Save note"}</Button>
+          <Button size="sm" type="button" on:click={() => (draft = null)}>Cancel</Button>
+        </div>
+      </form>
+    {/if}
+
+    {#if unplaced.length}
+      <section class="annotations" aria-label="Notes on this finding">
+        <h2 class="annotations__hed">✎ Notes</h2>
+        {#each unplaced as a (a.annotation_id)}
+          <div class="margin-note margin-note--annotation">
+            <AnnotationNote annotation={a} on:delete={(e) => removeNote(e.detail)} />
+          </div>
+        {/each}
+      </section>
+    {/if}
   </article>
 
   <aside class="viewer">
@@ -271,7 +506,12 @@
   </aside>
 </div>
 
+<svelte:window on:mousedown={(e) => { if (!e.target.closest?.(".annotate-pop")) pick = null; }} />
+
 <style>
+  .ledger {
+    position: relative; /* anchors the floating Annotate button */
+  }
   .toolbar {
     display: flex;
     gap: var(--space-sm);

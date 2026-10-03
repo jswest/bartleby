@@ -17,7 +17,7 @@ invariant and the rest of the project's load-bearing rules.
 # without those structures. That cohort is RE-INGEST-ONLY — it shares a version
 # number with released v8 but not its DDL, so no upgrade step can repair it in
 # place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 EMBEDDING_DIM = 768
 
@@ -138,6 +138,21 @@ CREATE TABLE finding_citations (
     chunk_id INTEGER NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
     PRIMARY KEY (finding_id, chunk_id)
 );
+
+CREATE TABLE finding_annotations (
+    annotation_id    INTEGER PRIMARY KEY,
+    finding_id       INTEGER NOT NULL REFERENCES findings(finding_id) ON DELETE CASCADE,
+    body             TEXT NOT NULL,
+    anchor_exact     TEXT,
+    anchor_prefix    TEXT,
+    anchor_suffix    TEXT,
+    chunk_id         INTEGER REFERENCES chunks(chunk_id) ON DELETE SET NULL,
+    is_human_author  INTEGER NOT NULL CHECK (is_human_author IN (0, 1)),
+    session_id       INTEGER REFERENCES sessions(session_id) ON DELETE SET NULL,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (anchor_exact IS NOT NULL OR (anchor_prefix IS NULL AND anchor_suffix IS NULL))
+);
+CREATE INDEX idx_finding_annotations_finding ON finding_annotations(finding_id);
 
 CREATE TABLE audit_logs (
     audit_log_id INTEGER PRIMARY KEY,
