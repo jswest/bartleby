@@ -13,6 +13,7 @@ import path from 'node:path';
 import { Marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
 import { getFinding, getDocumentFilePath, getImageFilePath } from './queries.js';
+import { listAnnotations } from './annotations.js';
 import { MIME_BY_EXT, IMAGE_EXTS } from './mime.js';
 import { substituteCitations } from '../citations.js';
 import { escapeHtml, slugify } from '../format.js';
@@ -229,6 +230,17 @@ p.meta, .meta { font-family: var(--font-sans); font-size: var(--text-xs); font-w
 .export-fallback { font-family: var(--font-sans); font-size: var(--text-xs); }
 .export-fallback a { color: var(--color-off-light); }
 .export-image { max-width: 100%; max-height: 100%; display: block; margin: 0 auto; background: var(--color-surface); }
+
+/* --- annotations (#734): a static trailing section, not highlights --- */
+.annotations { display: flex; flex-direction: column; gap: var(--space-md); max-width: var(--ledger-prose-width); margin-top: var(--space-xl); padding-top: var(--space-lg); border-top: 1px solid var(--color-rule); }
+.annotations__hed { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: #3b4a9c; }
+.annotations .margin-note { font-size: var(--text-xs); border-left: 2px dashed #3b4a9c; padding-left: var(--space-xs); }
+.annotations .margin-note__head { color: #3b4a9c; }
+.annotation-body, .annotation-quote, .annotation-meta { margin: var(--space-3xs) 0 0; font-family: var(--font-sans); }
+.annotation-body { white-space: pre-wrap; word-break: break-word; }
+.annotation-quote { font-style: italic; color: var(--color-text-soft); }
+.annotation-meta { color: var(--color-off); }
+.annotation-stale { margin-left: 0.4em; padding: 0 0.3em; background: #fdecea; color: var(--color-danger-text); text-transform: none; letter-spacing: 0; }
 
 @media (max-width: 56rem) {
   .split { grid-template-columns: minmax(0, 1fr); }
@@ -524,7 +536,26 @@ const RUNTIME_JS = `
 })();
 `;
 
-function renderDocument({ title, metaLine, description, bodyHtml, notesHtml, citationMetaJson, sourcesJson }) {
+// Annotations (#689/#734) as a trailing "Notes" section — the export is static,
+// so no span highlighting. Each anchored note quotes its span instead; note
+// text is plain text, escaped, same as the live page.
+function renderAnnotationsHtml(annotations) {
+  if (!annotations.length) return '';
+  const items = annotations.map((a) => {
+    const stale = a.anchor_exact != null && !a.anchor_found;
+    const meta = [escapeHtml(a.created_at.slice(0, 10)), a.chunk_id != null && `chunk:${a.chunk_id}`]
+      .filter(Boolean).join(' · ');
+    return `<div class="margin-note">
+      <p class="margin-note__head">✎ ${a.is_human_author ? 'human' : 'agent'} note${stale ? ' <span class="annotation-stale">text has changed</span>' : ''}</p>
+      ${a.anchor_exact != null ? `<p class="annotation-quote">“${escapeHtml(a.anchor_exact)}”</p>` : ''}
+      <p class="annotation-body">${escapeHtml(a.body)}</p>
+      <p class="annotation-meta">${meta}</p>
+    </div>`;
+  }).join('\n');
+  return `<section class="annotations"><h2 class="annotations__hed">✎ Notes</h2>${items}</section>`;
+}
+
+function renderDocument({ title, metaLine, description, bodyHtml, notesHtml, annotationsHtml, citationMetaJson, sourcesJson }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -544,6 +575,7 @@ ${EXPORT_CSS}</style>
       <div class="body markdown-body drop-cap-body">${bodyHtml}</div>
       ${notesHtml ? `<aside class="cite-notes" id="cite-notes" aria-label="Citations">${notesHtml}</aside>` : ''}
     </div>
+    ${annotationsHtml}
   </article>
   <aside class="viewer" id="viewer"></aside>
 </div>
@@ -598,6 +630,7 @@ export function buildFindingExportHtml(findingId) {
     description: finding.description,
     bodyHtml,
     notesHtml: notes.map((note) => renderMarginNoteHtml(note, embeddedChunkIds, fileBackedChunkIds)).join('\n'),
+    annotationsHtml: renderAnnotationsHtml(listAnnotations(findingId, finding.body)),
     citationMetaJson: jsonScriptSafe(citationMeta),
     sourcesJson: jsonScriptSafe(
       Object.fromEntries([...sources].filter(([, payload]) => payload != null))
