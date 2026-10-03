@@ -12,6 +12,7 @@ from bartleby.db.connection import open_db
 from bartleby.session import start_session
 from bartleby.skill_scripts import (
     annotate_finding,
+    delete_annotation,
     edit_finding,
     list_findings,
     read_finding,
@@ -208,3 +209,62 @@ def test_list_findings_annotation_count(seeded_project, tmp_path, capsys):
         out = _run(list_findings, ["--project", project, *extra], capsys)
         counts = {f["finding_id"]: f["annotation_count"] for f in out["findings"]}
         assert counts == {noted: 2, bare: 0}
+
+
+def _annotation_count(project, finding_id: int) -> int:
+    conn = open_db(project)
+    try:
+        return count_annotations(conn, [finding_id])[finding_id]
+    finally:
+        conn.close()
+
+
+def test_delete_annotation_happy_path(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    note = _run(annotate_finding, _annotate(project, fid, "--body", "Gone."), capsys)
+
+    out = _run(delete_annotation, [
+        "--project", project, "--annotation-id", note["annotation_id"],
+    ], capsys)
+    assert out["status"] == "deleted"
+    assert out["annotation_id"] == note["annotation_id"]
+    assert out["finding_id"] == fid
+    assert out["body"] == "Gone."
+    assert _annotation_count(project, unprefix(fid)) == 0
+
+
+def test_delete_annotation_not_found(seeded_project, capsys):
+    out = _run_err(delete_annotation, [
+        "--project", seeded_project["project"], "--annotation-id", "annotation:999",
+    ], capsys)
+    assert out["code"] == "ANNOTATION_NOT_FOUND"
+
+
+def test_delete_annotation_memory_off_foreign_refused_own_allowed(
+    seeded_project, tmp_path, capsys
+):
+    project = seeded_project["project"]
+    foreign = _foreign_finding(project)
+    # Annotate the foreign finding from a memory-on session first.
+    foreign_note = _run(annotate_finding, _annotate(
+        project, f"finding:{foreign}", "--body", "theirs",
+    ), capsys)["annotation_id"]
+
+    start_session(project, memory_enabled=False)
+    out = _run_err(delete_annotation, [
+        "--project", project, "--annotation-id", foreign_note,
+    ], capsys)
+    assert out["code"] == "MEMORY_OFF"
+    assert _annotation_count(project, foreign) == 1  # row survives
+
+    own = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    own_note = _run(annotate_finding, _annotate(project, own, "--body", "mine"), capsys)
+    out = _run(delete_annotation, [
+        "--project", project, "--annotation-id", own_note["annotation_id"],
+    ], capsys)
+    assert out["finding_id"] == own

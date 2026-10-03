@@ -47,6 +47,7 @@ The agent calls these scripts via `bartleby skill <name>`. They're package-inter
 | `merge_findings` | Collapse a cluster of duplicate findings into one. The `--into` target survives (keeps its id); you author the consolidated body via `--body-file`; the `--from` sources are deleted. The curation counterpart to `merge_tags`. |
 | `delete_finding` | Retract a finding outright — its row, body chunks, and citations. Cited document chunks (evidence) are untouched. The curation counterpart to `delete_tag`. |
 | `annotate_finding` | Attach a note to a finding without rewriting it — whole-finding or anchored to a verbatim quoted span, optionally pointing at a chunk. Memory-gated on the parent finding. |
+| `delete_annotation` | Remove one annotation by id (no in-place edit — delete and re-annotate). Memory-gated on the parent finding. |
 | `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count, annotation count. Paginated. The enumeration counterpart to `search --findings`. |
 | `read_finding` | Read one whole finding by id — full body, the finding's chunks, resolved citations, and annotations (oldest first). Same shape as `save_finding`. |
 | `edit_finding` | Update an existing finding's title, description, and/or body. Memory-gated like the other finding reads/writes. |

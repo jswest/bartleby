@@ -1,4 +1,4 @@
-# Skill-side finding annotations gate on the parent finding through the existing chokepoint; agent notes are `is_human_author=0` and session-stamped; annotations stay out of ranked `search`.
+# Skill-side finding annotations (annotate and delete) gate on the parent finding through the existing chokepoint; agent notes are `is_human_author=0` and session-stamped; annotations stay out of ranked `search`.
 
 Issue #689 (settled design) and #732 (the skill child) add `annotate_finding`
 and annotation read-back to `read_finding` / `list_findings`. Three calls
@@ -10,7 +10,9 @@ anchors to a verbatim quote of the finding body and is read back alongside
 it, so writing one discloses and extends the finding. That is exactly the
 ARCHITECTURE.md gate rule ("a command gates iff it would disclose, mutate,
 or destroy a finding the caller didn't author"), so `annotate_finding`
-(`action="annotate"`) gates on the parent finding id before any write, and
+(`action="annotate"`) gates on the parent finding id before any write,
+`delete_annotation` resolves the note's parent via `db.annotations.get_annotation`
+and gates on it the same way before deleting or echoing, and
 `read_finding` / `list_findings` surface annotations only for findings they
 already admit. A second, annotation-specific ownership check was rejected:
 it would re-derive the wall per script, the drift GH-0288 consolidated into
