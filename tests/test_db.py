@@ -111,9 +111,9 @@ def test_upgrade_does_not_overwrite_existing_embedding_model(conn):
     assert value == "some/other-model"
 
 
-def test_schema_version_pinned_at_ten():
-    # Schema 10 (#547) adds the per-conversation run_key; this bump is additive.
-    assert SCHEMA_VERSION == 10
+def test_schema_version_pinned_at_eleven():
+    # Schema 11 (#689) adds finding_annotations; this bump is additive.
+    assert SCHEMA_VERSION == 11
 
 
 def test_attach_disables_load_extension(conn):
@@ -140,6 +140,7 @@ def test_all_tables_exist(conn):
         "sessions",
         "findings",
         "finding_citations",
+        "finding_annotations",
         "chunks",
         "images",
         "document_images",

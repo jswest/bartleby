@@ -6,8 +6,8 @@ The flow, source-never-mutated throughout:
    corpus runs WAL mode, so a raw byte copy can be torn). VACUUM INTO writes a
    clean, fully-checkpointed snapshot from a consistent read of the source.
 2. Strip the session layer on the **copy**: delete ``findings``, ``sessions``,
-   ``finding_citations``; delete the ``source_kind='finding'`` chunks and their
-   ``chunks_vec`` rows; rebuild the FTS index; null any ``document_tags.chunk_id``
+   ``finding_citations``, ``finding_annotations``; delete the
+   ``source_kind='finding'`` chunks and their ``chunks_vec`` rows; rebuild the FTS index; null any ``document_tags.chunk_id``
    anchor that pointed at a now-stripped chunk (the document-level tag assignment
    survives).
 3. Gather the original ingested files, content-addressed by ``file_hash``.
@@ -66,7 +66,7 @@ def _vacuum_into(source_db: Path, dest_db: Path) -> None:
 
 
 def strip_session_layer(conn: apsw.Connection) -> None:
-    """Strip findings, sessions, and finding chunks from an opened copy.
+    """Strip findings, annotations, sessions, and finding chunks from an opened copy.
 
     Operates on the publish copy only. Drops the finding chunks (and their
     ``chunks_vec`` rows) via the typed ``delete_chunks_of_kind`` helper, nulls
@@ -88,11 +88,13 @@ def strip_session_layer(conn: apsw.Connection) -> None:
 
         delete_chunks_of_kind(conn, "finding")
 
-        # FK chains (finding_citations -> findings -> sessions, all ON DELETE
-        # CASCADE) mean deleting sessions is enough to clear findings and
-        # citations, but we delete each explicitly so the intent reads plainly
-        # and a future FK change can't silently leave rows behind.
+        # FK chains (finding_annotations/finding_citations -> findings ->
+        # sessions, all ON DELETE CASCADE) mean deleting sessions is enough to
+        # clear findings, citations, and annotations, but we delete each
+        # explicitly so the intent reads plainly and a future FK change can't
+        # silently leave rows behind.
         cur.execute("DELETE FROM finding_citations")
+        cur.execute("DELETE FROM finding_annotations")
         cur.execute("DELETE FROM findings")
         cur.execute("DELETE FROM sessions")
 

@@ -124,6 +124,11 @@ def published_corpus(tmp_path):
             "INSERT INTO finding_citations (finding_id, chunk_id) VALUES (?, ?)",
             (finding_id, doc_chunk_ids[0]),
         )
+        cur.execute(
+            "INSERT INTO finding_annotations (finding_id, body, anchor_exact, "
+            "chunk_id, is_human_author) VALUES (?, 'note', 'finding', ?, 1)",
+            (finding_id, doc_chunk_ids[0]),
+        )
 
         # A tag assigned to doc_a, anchored at the FINDING chunk. The
         # document-level assignment must survive; only the anchor is nulled.
@@ -185,6 +190,9 @@ def test_published_copy_is_findings_free(published_corpus, tmp_path):
         assert cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
         assert cur.execute(
             "SELECT COUNT(*) FROM finding_citations"
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM finding_annotations"
         ).fetchone()[0] == 0
         assert cur.execute(
             "SELECT COUNT(*) FROM chunks WHERE source_kind = 'finding'"
