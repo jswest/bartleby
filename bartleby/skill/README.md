@@ -46,8 +46,9 @@ The agent calls these scripts via `bartleby skill <name>`. They're package-inter
 | `save_finding` | Save a finding (markdown text + structural citations) into the database. |
 | `merge_findings` | Collapse a cluster of duplicate findings into one. The `--into` target survives (keeps its id); you author the consolidated body via `--body-file`; the `--from` sources are deleted. The curation counterpart to `merge_tags`. |
 | `delete_finding` | Retract a finding outright — its row, body chunks, and citations. Cited document chunks (evidence) are untouched. The curation counterpart to `delete_tag`. |
-| `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count. Paginated. The enumeration counterpart to `search --findings`. |
-| `read_finding` | Read one whole finding by id — full body, the finding's chunks, and resolved citations. Same shape as `save_finding`. |
+| `annotate_finding` | Attach a note to a finding without rewriting it — whole-finding or anchored to a verbatim quoted span, optionally pointing at a chunk. Memory-gated on the parent finding. |
+| `list_findings` | Browse prior findings (newest first): id, title, description, authoring session, created-at, citation count, annotation count. Paginated. The enumeration counterpart to `search --findings`. |
+| `read_finding` | Read one whole finding by id — full body, the finding's chunks, resolved citations, and annotations (oldest first). Same shape as `save_finding`. |
 | `edit_finding` | Update an existing finding's title, description, and/or body. Memory-gated like the other finding reads/writes. |
 | `save_date` | Backfill or correct a document's `authored_date` (the date-only counterpart to re-saving a summary; supports `--clear`). |
 | `extract` | Run a value-tag's stored regex over a set of chunks, storing the per-document values it captures. |

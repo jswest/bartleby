@@ -8,8 +8,9 @@ findings exist?" path. Newest first (``ORDER BY finding_id DESC``).
 
 Per finding: ``finding_id``, ``title``, ``description``, ``session_name``
 (the session that authored it), ``model`` / ``harness`` (the backend behind
-it, null when unrecorded), ``created_at``, and ``citation_count`` (how many
-chunks it cites). To read a whole finding, call
+it, null when unrecorded), ``created_at``, ``citation_count`` (how many
+chunks it cites), and ``annotation_count`` (notes layered on it — read them
+with ``read_finding``). To read a whole finding, call
 ``read_finding --finding-id finding:<N>``.
 
 Output (``finding_id`` is type-tagged, e.g. ``"finding:204"``):
@@ -21,14 +22,15 @@ Output (``finding_id`` is type-tagged, e.g. ``"finding:204"``):
         "model": str|null, "harness": str|null,
         "created_at": str,
         "citation_count": int,
+        "annotation_count": int,
       }, ...],
       "total": int,
       "offset": int, "limit": int,
       "hint": str|null         # set when more pages remain
     }
 
-With ``--brief`` each finding is trimmed to ``finding_id``, ``title``, and
-``citation_count`` — dropping ``description``, ``session_name``,
+With ``--brief`` each finding is trimmed to ``finding_id``, ``title``,
+``citation_count``, and ``annotation_count`` — dropping ``description``, ``session_name``,
 ``model``/``harness``, and ``created_at``. The envelope is unchanged.
 
 In a memory-off session the listing is scoped to findings *this* session
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 
+from bartleby.db.annotations import count_annotations
 from bartleby.skill_runner import build_arg_parser, run
 from bartleby.skill_scripts._common import (
     memory_enabled, nonneg_int, pagination_hint, positive_int,
@@ -55,7 +58,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--brief",
         action="store_true",
-        help="Skinniest tier: finding_id, title, citation_count only. Drops "
+        help="Skinniest tier: finding_id, title, citation_count, "
+             "annotation_count only. Drops "
              "description, session_name, model/harness, created_at.",
     )
     return p.parse_args(argv)
@@ -84,7 +88,8 @@ def work(*, conn, args, session_id) -> dict:
         f"{scope_sql} "
         "ORDER BY f.finding_id DESC LIMIT ? OFFSET ?",
         (*scope_params, args.limit, args.offset),
-    )
+    ).fetchall()
+    annotation_counts = count_annotations(conn, [r[0] for r in rows])
 
     if args.brief:
         findings = [
@@ -92,6 +97,7 @@ def work(*, conn, args, session_id) -> dict:
                 "finding_id": finding_id,
                 "title": title,
                 "citation_count": citation_count,
+                "annotation_count": annotation_counts[finding_id],
             }
             for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
         ]
@@ -106,6 +112,7 @@ def work(*, conn, args, session_id) -> dict:
                 "harness": harness,
                 "created_at": created_at,
                 "citation_count": citation_count,
+                "annotation_count": annotation_counts[finding_id],
             }
             for finding_id, title, description, session_name, model, harness, created_at, citation_count in rows
         ]

@@ -61,7 +61,7 @@ def test_list_findings_happy_path(seeded_project, capsys):
     assert first["created_at"] is not None
 
 
-def test_list_findings_brief_projects_three_fields(seeded_project, capsys):
+def test_list_findings_brief_projects_four_fields(seeded_project, capsys):
     project = seeded_project["project"]
     session_id = _active_session_id(project)
 
@@ -82,7 +82,7 @@ def test_list_findings_brief_projects_three_fields(seeded_project, capsys):
 
     assert out["findings"]
     for f in out["findings"]:
-        assert set(f) == {"finding_id", "title", "citation_count"}
+        assert set(f) == {"finding_id", "title", "citation_count", "annotation_count"}
     assert out["findings"][0]["citation_count"] == 1
     assert out["total"] == 1  # envelope unchanged
 

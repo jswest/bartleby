@@ -1,0 +1,210 @@
+"""Skill-side finding annotations (#732): annotate_finding, read_finding's
+``annotations``, list_findings' ``annotation_count``, and the memory wall."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from bartleby.db.annotations import count_annotations
+from bartleby.db.connection import open_db
+from bartleby.session import start_session
+from bartleby.skill_scripts import (
+    annotate_finding,
+    edit_finding,
+    list_findings,
+    read_finding,
+)
+from tests._skill_fixtures import (  # noqa: F401
+    mock_embed,
+    project_env,
+    seed_finding,
+    seed_finding_via_main,
+    seeded_project,
+    unprefix,
+)
+
+
+def _run(script, args, capsys) -> dict:
+    script.main(args)
+    return json.loads(capsys.readouterr().out)
+
+
+def _run_err(script, args, capsys) -> dict:
+    with pytest.raises(SystemExit) as exc:
+        script.main(args)
+    assert exc.value.code == 1
+    return json.loads(capsys.readouterr().out)
+
+
+def _annotate(project, finding_id, *extra) -> list[str]:
+    return ["--project", project, "--finding-id", finding_id, *extra]
+
+
+def _foreign_finding(project) -> int:
+    """A finding authored by another (memory-on) session."""
+    conn = open_db(project)
+    try:
+        conn.cursor().execute(
+            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
+            ("author", 1),
+        )
+        finding_id, _ = seed_finding(conn, conn.last_insert_rowid(), body="Claim one.")
+    finally:
+        conn.close()
+    return finding_id
+
+
+def test_annotate_whole_finding_and_read_back(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )
+    fid = saved["finding_id"]
+
+    out = _run(annotate_finding, _annotate(project, fid, "--body", "Caveat."), capsys)
+    assert out["annotation_id"].startswith("annotation:")
+    assert out["finding_id"] == fid
+    assert out["body"] == "Caveat."
+    assert out["anchor"] is None
+    assert out["chunk_id"] is None
+    assert out["is_human_author"] is False
+
+    read = _run(read_finding, ["--project", project, "--finding-id", fid], capsys)
+    assert read["body"] == saved["body"]  # the finding body is never touched
+    [note] = read["annotations"]
+    assert note["annotation_id"] == out["annotation_id"]
+    assert note["anchor"] is None
+    assert note["anchor_found"] is True
+    assert note["is_human_author"] is False
+    # Stamped with the authoring session (here, the same one that saved it).
+    assert note["session_id"] == read["session_id"]
+
+
+def test_annotate_anchored_with_chunk_and_body_file(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )
+    fid = saved["finding_id"]
+    a, _ = saved["_chunks"]
+    note_file = tmp_path / "note.md"
+    note_file.write_text("Wrong: costs $5 (see `x`).", encoding="utf-8")
+
+    out = _run(annotate_finding, _annotate(
+        project, fid, "--body-file", str(note_file),
+        "--quote", "Claim", "--quote-suffix", " two", "--chunk-id", f"chunk:{a}",
+    ), capsys)
+    assert out["body"] == "Wrong: costs $5 (see `x`)."
+    assert out["anchor"] == {"exact": "Claim", "prefix": None, "suffix": " two"}
+    assert out["chunk_id"] == f"chunk:{a}"
+
+    read = _run(read_finding, ["--project", project, "--finding-id", fid], capsys)
+    [note] = read["annotations"]
+    assert note["anchor"] == out["anchor"]
+    assert note["anchor_found"] is True
+    assert note["chunk_id"] == f"chunk:{a}"
+
+
+def test_annotate_anchor_not_found(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run_err(annotate_finding, _annotate(
+        project, fid, "--body", "x", "--quote", "not in the body",
+    ), capsys)
+    assert out["code"] == "ANCHOR_NOT_FOUND"
+
+
+@pytest.mark.parametrize("flag", ["--quote-prefix", "--quote-suffix"])
+def test_annotate_affix_requires_quote(seeded_project, tmp_path, capsys, flag):
+    project = seeded_project["project"]
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run_err(annotate_finding, _annotate(
+        project, fid, "--body", "x", flag, "Claim",
+    ), capsys)
+    assert out["code"] == "QUOTE_REQUIRED"
+
+
+def test_annotate_unknown_finding_and_chunk(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    out = _run_err(annotate_finding, _annotate(
+        project, "finding:9999", "--body", "x",
+    ), capsys)
+    assert out["code"] == "FINDING_NOT_FOUND"
+
+    fid = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run_err(annotate_finding, _annotate(
+        project, fid, "--body", "x", "--chunk-id", "chunk:99999",
+    ), capsys)
+    assert out["code"] == "UNKNOWN_CHUNK"
+
+
+def test_annotate_memory_off_foreign_refused_own_allowed(
+    seeded_project, tmp_path, capsys
+):
+    project = seeded_project["project"]
+    foreign = _foreign_finding(project)
+    start_session(project, memory_enabled=False)
+
+    out = _run_err(annotate_finding, _annotate(
+        project, f"finding:{foreign}", "--body", "x",
+    ), capsys)
+    assert out["code"] == "MEMORY_OFF"
+    conn = open_db(project)
+    try:
+        assert count_annotations(conn, [foreign]) == {foreign: 0}
+    finally:
+        conn.close()
+
+    own = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )["finding_id"]
+    out = _run(annotate_finding, _annotate(project, own, "--body", "mine"), capsys)
+    assert out["finding_id"] == own
+
+
+def test_read_finding_anchor_found_false_after_edit(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="T", description="D",
+    )
+    fid = saved["finding_id"]
+    a, _ = saved["_chunks"]
+    _run(annotate_finding, _annotate(
+        project, fid, "--body", "Wrong.", "--quote", "Claim two",
+    ), capsys)
+
+    new_body = tmp_path / "edited.md"
+    new_body.write_text(f"# Seed\n\nOnly claim one[^chunk:{a}].", encoding="utf-8")
+    _run(edit_finding, [
+        "--project", project, "--finding-id", fid, "--body-file", str(new_body),
+    ], capsys)
+
+    read = _run(read_finding, ["--project", project, "--finding-id", fid], capsys)
+    [note] = read["annotations"]
+    assert note["anchor"]["exact"] == "Claim two"
+    assert note["anchor_found"] is False
+
+
+def test_list_findings_annotation_count(seeded_project, tmp_path, capsys):
+    project = seeded_project["project"]
+    noted = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="Noted", description="D",
+    )["finding_id"]
+    bare = seed_finding_via_main(
+        seeded_project, tmp_path, capsys, title="Bare", description="D",
+    )["finding_id"]
+    for text in ("one", "two"):
+        _run(annotate_finding, _annotate(project, noted, "--body", text), capsys)
+
+    for extra in ([], ["--brief"]):
+        out = _run(list_findings, ["--project", project, *extra], capsys)
+        counts = {f["finding_id"]: f["annotation_count"] for f in out["findings"]}
+        assert counts == {noted: 2, bare: 0}
