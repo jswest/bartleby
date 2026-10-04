@@ -2,17 +2,17 @@
 
 Three subcommands:
 
-- ``read <finding-id>`` emits a terminal-friendly Markdown view of a finding to
+- ``read finding:<N>`` emits a terminal-friendly Markdown view of a finding to
   stdout, with citations resolved live against the current corpus and rewritten
   as sequential Markdown footnotes.  Compose with pagers/renderers::
 
-      bartleby finding read 22 | glow
-      bartleby finding read 22 | less
-      bartleby finding read 22 --render   # pretty-print via rich in-terminal
+      bartleby finding read finding:22 | glow
+      bartleby finding read finding:22 | less
+      bartleby finding read finding:22 --render   # pretty-print via rich in-terminal
 
   ``--json`` falls through to the existing ``read_finding`` JSON (scripting).
 
-- ``export <finding-id>`` reads a finding from a corpus and writes a
+- ``export finding:<N>`` reads a finding from a corpus and writes a
   self-describing ``.md``: a YAML front-matter block (title, description, and
   baked-in provenance — the source corpus, the original finding id, and the
   export date) followed by the finding body. The body's corpus ``[^chunk:N]``
