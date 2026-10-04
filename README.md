@@ -172,8 +172,8 @@ Run `bartleby serve` for a local web UI over the corpus and findings — see [`b
 ### 6. Share a single finding out of band
 
 ```
-bartleby finding read <finding-id>              # render to stdout as Markdown (--json, --render)
-bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
+bartleby finding read finding:<N>              # render to stdout as Markdown (--json, --render)
+bartleby finding export finding:<N>            # writes <slug>.md (or pass --out PATH)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 ```
 
@@ -282,8 +282,8 @@ bartleby project import <name> --from <source>     # Import a published corpus a
 Read, export, import, or annotate a single finding out of band.
 
 ```
-bartleby finding read <finding-id>              # render to stdout as Markdown (--json, --render)
-bartleby finding export <finding-id>            # writes <slug>.md (or pass --out PATH)
+bartleby finding read finding:<N>              # render to stdout as Markdown (--json, --render)
+bartleby finding export finding:<N>            # writes <slug>.md (or pass --out PATH)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 bartleby finding annotate finding:<N> --note "…" [--quote "<exact text>"] [--chunk-id chunk:<N>]
 bartleby finding annotations finding:<N>        # list the notes on a finding

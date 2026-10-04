@@ -389,3 +389,34 @@ def test_read_no_active_project_exits_1(capsys, project_env):
     with pytest.raises(SystemExit) as exc:
         finding_cmd.read(finding_id=1, project=None, json_out=False, render=False)
     assert exc.value.code == 1
+
+
+def test_read_cli_requires_prefixed_id(seeded_project, monkeypatch, capsys):
+    """`finding read` accepts `finding:<N>` and rejects a bare int at the CLI (#742)."""
+    import sys
+
+    from bartleby import cli
+
+    project = seeded_project["project"]
+    session_id = _active_session_id(project)
+    conn = open_db(project)
+    try:
+        cited = _doc_chunk_ids(conn, seeded_project["doc_a"])
+        finding_id, _ = seed_finding(conn, session_id, title="T", description="d",
+                                     body=f"Claim.[^chunk:{cited[0]}]",
+                                     cited_chunk_ids=cited[:1])
+    finally:
+        conn.close()
+
+    # A bare int is rejected at the argparse layer.
+    monkeypatch.setattr(sys, "argv",
+        ["bartleby", "finding", "read", str(finding_id), "--project", project])
+    with pytest.raises(SystemExit):
+        cli.main()
+
+    # The prefixed form is accepted and renders.
+    monkeypatch.setattr(sys, "argv",
+        ["bartleby", "finding", "read", f"finding:{finding_id}",
+         "--project", project])
+    cli.main()
+    assert "# T" in capsys.readouterr().out

@@ -109,11 +109,13 @@ def main():
         "finding", help="Read, export, import, or annotate a single finding"
     )
     finding_sub = finding_parser.add_subparsers(dest="finding_command")
+    from bartleby.skill_scripts._ids import prefixed_int
+
     frd = finding_sub.add_parser(
         "read",
         help="Emit a finding as human-readable Markdown to stdout (pipe to glow/less/bat)",
     )
-    frd.add_argument("finding_id", type=int, metavar="finding-id")
+    frd.add_argument("finding_id", type=prefixed_int("finding"), metavar="finding:<N>")
     frd.add_argument("--project", type=str, default=None)
     frd.add_argument(
         "--json", action="store_true", dest="json_out",
@@ -127,13 +129,12 @@ def main():
         "export",
         help="Write a self-describing .md (front-matter + provenance) for a finding",
     )
-    fex.add_argument("finding_id", type=int, metavar="finding-id")
+    fex.add_argument("finding_id", type=prefixed_int("finding"), metavar="finding:<N>")
     fex.add_argument("--project", type=str, default=None)
     fex.add_argument(
         "--out", type=str, default=None, metavar="PATH",
         help="Output path (default: <slugified-title>.md in the cwd).",
     )
-    from bartleby.skill_scripts._ids import prefixed_int
 
     fan = finding_sub.add_parser(
         "annotate",

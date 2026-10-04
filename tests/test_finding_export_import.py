@@ -245,3 +245,30 @@ def test_finding_to_finding_citation_inlines_title(
     artifact = out_path.read_text(encoding="utf-8")
     assert "[corpus: finding · Air quality gaps]" in artifact
     assert "[^" not in finding_cmd.parse_artifact(artifact)["body"]
+
+
+def test_export_cli_requires_prefixed_id(seeded_project, tmp_path, monkeypatch, capsys):
+    """`finding export` accepts `finding:<N>` and rejects a bare int (#742)."""
+    import sys
+
+    from bartleby import cli
+
+    project = seeded_project["project"]
+    fid = _bare(_save_a_finding(seeded_project, tmp_path, capsys)["finding_id"])
+    out_path = tmp_path / "out.md"
+
+    # A bare int is rejected at the argparse layer.
+    monkeypatch.setattr(sys, "argv",
+        ["bartleby", "finding", "export", str(fid), "--project", project,
+         "--out", str(out_path)])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert not out_path.exists()
+
+    # The prefixed form is accepted and writes the artifact.
+    monkeypatch.setattr(sys, "argv",
+        ["bartleby", "finding", "export", f"finding:{fid}", "--project", project,
+         "--out", str(out_path)])
+    cli.main()
+    capsys.readouterr()
+    assert out_path.exists()
