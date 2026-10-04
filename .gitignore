@@ -47,8 +47,10 @@ wheels/
 !.claude/agents/
 !.claude/hooks/
 !.claude/settings.json
-!.claude/skills/
+# No trailing slash: .claude/skills is a symlink (-> .agents/skills), not a dir.
+!.claude/skills
 !.claude/ship.toml
 .claude/scratch/
 # Machine-local press provenance — names an absolute drawer path; noise to clones.
-.claude/skills/*/.stamp
+# (.claude/skills is a symlink to .agents/skills, so stamps land there.)
+.agents/skills/*/.stamp

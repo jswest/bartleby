@@ -237,6 +237,8 @@ def test_no_stale_bare_id_flag_anywhere():
         if any(rel == p or rel.startswith(p) for p in _GREP_ALLOWLIST):
             continue
         path = _REPO_ROOT / rel
+        if path.is_symlink():
+            continue  # CLAUDE.md, .claude/skills — targets are scanned at their real paths
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, FileNotFoundError):
