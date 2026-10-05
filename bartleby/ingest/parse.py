@@ -108,7 +108,9 @@ def parse_all(
             continue
 
         persist_t = time.perf_counter()
-        document_id = writer.persist_parse(outcome.parsed)
+        document_id = writer.persist_parse(
+            outcome.parsed, source_path=str(req.path.resolve()),
+        )
         stages = None
         if timings and outcome.parse_stages is not None:
             # Chunk INSERTs fold into `embed`, per #162 — they land here, just

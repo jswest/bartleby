@@ -9,7 +9,8 @@ The flow, source-never-mutated throughout:
    ``finding_citations``, ``finding_annotations``; delete the
    ``source_kind='finding'`` chunks and their ``chunks_vec`` rows; rebuild the FTS index; null any ``document_tags.chunk_id``
    anchor that pointed at a now-stripped chunk (the document-level tag assignment
-   survives).
+   survives). Null ``documents.source_path`` so the local filesystem layout
+   never leaves the machine (#686).
 3. Gather the original ingested files, content-addressed by ``file_hash``.
 4. Upload the ``.db`` and the files to the S3 URL.
 
@@ -72,7 +73,9 @@ def strip_session_layer(conn: apsw.Connection) -> None:
     ``chunks_vec`` rows) via the typed ``delete_chunks_of_kind`` helper, nulls
     ``document_tags.chunk_id`` anchors that pointed at them (the document-level
     assignment survives), clears the session layer, and rebuilds the FTS index
-    over the surviving chunks through ``rebuild_fts``.
+    over the surviving chunks through ``rebuild_fts``. Also nulls every
+    ``documents.source_path`` (#686): it reveals local filesystem layout, so an
+    imported corpus reads as "unrecorded" provenance instead.
     """
     with conn:
         cur = conn.cursor()
@@ -97,6 +100,7 @@ def strip_session_layer(conn: apsw.Connection) -> None:
         cur.execute("DELETE FROM finding_annotations")
         cur.execute("DELETE FROM findings")
         cur.execute("DELETE FROM sessions")
+        cur.execute("UPDATE documents SET source_path = NULL")
 
         rebuild_fts(conn)
 
@@ -166,6 +170,9 @@ def publish_project(name: str, to_url: str, *, client=None) -> dict:
         conn = apsw.Connection(str(copy_db))
         try:
             _attach(conn)
+            # Zero freed cells so the stripped findings/sessions/source paths
+            # don't survive as residue in the published file's free space.
+            conn.cursor().execute("PRAGMA secure_delete = ON")
             strip_session_layer(conn)
             files = gather_files(conn)
         finally:

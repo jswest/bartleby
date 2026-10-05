@@ -1,4 +1,4 @@
-"""`bartleby project` — create / list / use / info / delete / upgrade."""
+"""`bartleby project` — create / list / use / info / delete / rename / upgrade."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import sys
 
 import apsw
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Confirm
 from rich.table import Table
 
@@ -18,9 +19,11 @@ from bartleby.project import (
     create_project,
     delete_project,
     get_active_project,
+    get_document_sources,
     get_project_dir,
     get_project_info,
     list_projects,
+    rename_project,
     set_active_project,
     validate_project_name,
 )
@@ -68,7 +71,10 @@ def use(*, name: str) -> None:
     _console.print(f"Active project set to: [bold]{name}[/bold]")
 
 
-def info(*, name: str | None, verify: bool = False) -> None:
+_TOP_SOURCE_DIRS = 5
+
+
+def info(*, name: str | None, verify: bool = False, sources: bool = False) -> None:
     name = name or get_active_project()
     if not name:
         console.error(
@@ -118,10 +124,50 @@ def info(*, name: str | None, verify: bool = False) -> None:
                     "Failed units",
                     f"[yellow]{f['total']} incomplete{capped_note}[/yellow]",
                 )
+            r = i["ingest_runs"]
+            if r["count"]:
+                last = r["last_finished"] or "[yellow]in progress / interrupted[/yellow]"
+                table.add_row(
+                    "Ingest runs",
+                    f"{r['count']}  (first started {r['first_started']}, "
+                    f"last finished {last})",
+                )
+            # The unrecorded (NULL) bucket is always shown, pinned last, so it
+            # can't fall into "… and N more" on a mostly-pre-v12 corpus.
+            dirs = [(d, n) for d, n in i["source_dirs"] if d is not None]
+            unrecorded = sum(n for d, n in i["source_dirs"] if d is None)
+            lines = [f"{n}  {escape(d)}" for d, n in dirs[:_TOP_SOURCE_DIRS]]
+            if len(dirs) > _TOP_SOURCE_DIRS:
+                lines.append(f"… and {len(dirs) - _TOP_SOURCE_DIRS} more")
+            if unrecorded:
+                lines.append(f"{unrecorded}  unrecorded (pre-v12)")
+            if lines:
+                table.add_row("Sources", "\n".join(lines))
         _console.print(table)
+
+    if sources and i is not None and i["has_db"]:
+        _print_sources(i["name"])
 
     if verify:
         _verify(name)
+
+
+def _print_sources(name: str) -> None:
+    """Per-document provenance (#686): one row per top-level document."""
+    table = Table(title="Sources")
+    table.add_column("ID", justify="right")
+    table.add_column("File name")
+    table.add_column("Source path")
+    table.add_column("Ingested at")
+    for d in get_document_sources(name):
+        table.add_row(
+            # Escape: a path like "memo [draft].pdf" would otherwise be eaten
+            # as Rich markup.
+            str(d["document_id"]), escape(d["file_name"]),
+            escape(d["source_path"] or "—"),
+            d["created_at"],
+        )
+    _console.print(table)
 
 
 def _verify(name: str) -> None:
@@ -150,6 +196,24 @@ def _verify(name: str) -> None:
 
     if not all(r.passed for r in results):
         sys.exit(1)
+
+
+def rename(*, new: str, old: str | None) -> None:
+    old = old or get_active_project()
+    if not old:
+        console.error(
+            "No active project. Specify one: "
+            "`bartleby project rename <new> --project <old>`"
+        )
+        sys.exit(1)
+    try:
+        moved_active = rename_project(old, new)
+    except (ValueError, OSError, apsw.Error) as e:
+        console.error(str(e))
+        sys.exit(1)
+    _console.print(f"[bold green]Renamed project '{old}' → '{new}'[/bold green]")
+    if moved_active:
+        _console.print(f"Active project set to: [bold]{new}[/bold]")
 
 
 def upgrade(*, name: str) -> None:

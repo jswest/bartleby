@@ -67,9 +67,19 @@ def main():
         action="store_true",
         help="Run read-only corpus integrity checks; exit non-zero on any failure",
     )
+    pi.add_argument(
+        "--sources",
+        action="store_true",
+        help="Also list each document's original source path and ingest time",
+    )
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
     pd.add_argument("--yes", action="store_true")
+    pren = project_sub.add_parser(
+        "rename", help="Rename a project (the active one unless --project)"
+    )
+    pren.add_argument("new_name", type=str)
+    pren.add_argument("--project", type=str, default=None)
     pup = project_sub.add_parser(
         "upgrade",
         help="Apply additive schema upgrades to bring a project up to date",
@@ -536,9 +546,11 @@ def _project(args, parser):
     elif args.project_command == "use":
         project_cmd.use(name=args.name)
     elif args.project_command == "info":
-        project_cmd.info(name=args.name, verify=args.verify)
+        project_cmd.info(name=args.name, verify=args.verify, sources=args.sources)
     elif args.project_command == "delete":
         project_cmd.delete(name=args.name, yes=args.yes)
+    elif args.project_command == "rename":
+        project_cmd.rename(new=args.new_name, old=args.project)
     elif args.project_command == "upgrade":
         project_cmd.upgrade(name=args.name)
     elif args.project_command == "publish":
