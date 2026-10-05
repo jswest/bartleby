@@ -14,9 +14,7 @@ was upkeep. Agents wrote a test for every flag, error code and branch, so every
 rename or refactor had to update them. An audit of all 80 test files found roughly
 25–30% outright padding. Most of the rest were end-to-end checks whose value had
 never been shown. Only about 50 tests guarded something we know matters. We don't
-do TDD, and policing agents to keep tests short isn't worth the effort. The
-`simplify-refactor` pass added an agent round-trip to every commit for clarity
-edits that review already catches.
+do TDD, and policing agents to keep tests short isn't worth the effort.
 
 **1. The per-commit gate is `uv run pytest` → commit.** The
 `.claude/agents/simplify-refactor.md` agent is deleted, and `gate_agent` is gone
@@ -44,6 +42,11 @@ unchanged.
 - repo tooling checks (`test_guard_main_write.py`, `test_skill_drift.py`).
 
 Everything else is deleted, along with orphaned fixtures and helpers and the tests
-for one-off `scripts/` backfills.
+for one-off `scripts/` backfills. The suite went from 1,334 collected tests to 108
+(79 test functions), grouped by what they guard: `test_memory_wall.py`,
+`test_partial_writes.py`, `test_schema_upgrade.py`, `test_share.py`,
+`test_chunks_chokepoint.py`, `test_skill_regressions.py`,
+`test_ingest_regressions.py`, `test_runtime_regressions.py`, and the tooling
+checks.
 
 Process and tests only. No product code path changes and no `SCHEMA_VERSION` bump.
