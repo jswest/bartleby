@@ -25,6 +25,7 @@ _NOISY_LOGGERS = (
     "docling_core",
     "docling_ibm_models",
     "safetensors",
+    "pdfminer",
 )
 
 
