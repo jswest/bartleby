@@ -5,12 +5,15 @@ plus an ``archive/`` of ingested originals. The active project is tracked in
 the user config.
 """
 
+import os
 import re
 import shutil
 from pathlib import Path
 
+import apsw
+
 from bartleby.config import load_config, projects_dir, save_config_field
-from bartleby.db.connection import init_db, open_db, project_db_path
+from bartleby.db.connection import _attach, init_db, open_db, project_db_path
 from bartleby.db.schema import ALLOWED_SOURCE_KINDS
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -70,6 +73,51 @@ def delete_project(name: str):
 
     if get_active_project() == name:
         save_config_field("active_project", None)
+
+
+def rename_project(old: str, new: str):
+    """Rename project ``old`` to ``new``: directory, archive paths, active pointer.
+
+    ``documents.file_path`` / ``images.file_path`` hold absolute archive paths
+    that embed the project name, so after moving the directory their prefix is
+    rewritten in one transaction. If that rewrite fails, the directory is moved
+    back and the error re-raised, leaving the project as it was.
+    """
+    validate_project_name(old)
+    validate_project_name(new)
+    if old == new:
+        raise ValueError(f"Project is already named '{old}'.")
+    old_dir, new_dir = get_project_dir(old), get_project_dir(new)
+    if not old_dir.exists():
+        raise FileNotFoundError(f"Project '{old}' not found.")
+    if new_dir.exists():
+        raise FileExistsError(f"Project '{new}' already exists.")
+
+    old_dir.rename(new_dir)
+    try:
+        db_path = project_db_path(new)
+        if db_path.exists():
+            old_prefix = str(old_dir / "archive") + os.sep
+            new_prefix = str(new_dir / "archive") + os.sep
+            conn = apsw.Connection(str(db_path))
+            try:
+                _attach(conn)
+                with conn:
+                    for table in ("documents", "images"):
+                        conn.cursor().execute(
+                            f"UPDATE {table} SET file_path = ? || substr(file_path, ?) "
+                            "WHERE substr(file_path, 1, ?) = ?",
+                            (new_prefix, len(old_prefix) + 1,
+                             len(old_prefix), old_prefix),
+                        )
+            finally:
+                conn.close()
+    except BaseException:
+        new_dir.rename(old_dir)
+        raise
+
+    if get_active_project() == old:
+        save_config_field("active_project", new)
 
 
 def list_projects() -> list[dict]:
