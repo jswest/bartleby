@@ -229,7 +229,12 @@ A plain tag answers *"which documents are X?"*; a **value-tag** answers *"what i
 - **One value per (document, tag).** A later unambiguous extraction overwrites the prior value.
 - **Manual override:** when the regex can't reach it (odd formatting, a value you read by eye), `assign_tag --tag <name> --value <v> [--chunk-id <id>]` records it directly (cast per the tag's `value_type`).
 - **Read** values via `list_documents --tag <name>` (each row gains a `tag_values` chip) or directly from `read_tags` (which shows the tag's method). Cite a value through its `chunk_id`, never directly — same "reached through a chunk" rule as everything else.
-- **Out of scope here:** extraction from structured/tabular content (do a structured read + `jq`), LLM-based extraction (the method is a deterministic regex), and cross-document roll-up tables.
+- **Roll up** (sum/count across a slice) with `list_documents --tag <name>`, narrowed with `--in-documents` / `--file-like` / `--authored-after` / `--authored-before` — not a second `--tag`, which ORs and widens the slice. Then total `tag_values.<name>.value` with `jq`; stored numbers are plain numeric text, so `tonumber` works. Documents with no value come back `null`: skip them and report how many. Pass `--limit` at least as large as `total` (default 200), or it covers only the first page. Cite the total via its per-document `chunk_id`s; a value with a null `chunk_id` (a manual, unanchored `assign_tag --value`) can't be cited — anchor it with `--chunk-id` or exclude it and say so:
+  ```bash
+  bartleby skill list_documents --tag invoice_total --limit 1000 --returning document_id,tag_values \
+    | jq '.total as $t | [.documents[].tag_values.invoice_total | select(.value != null)] | {sum: (map(.value | tonumber) | add), with_value: length, skipped: ($t - length), chunk_ids: map(.chunk_id)}'
+  ```
+- **Out of scope here:** extraction from structured/tabular content (do a structured read + `jq`) and LLM-based extraction (the method is a deterministic regex).
 
 ## Memory rules
 
