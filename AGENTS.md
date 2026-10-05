@@ -38,9 +38,10 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
   block means you're on the wrong branch. Issue work happens in a **sibling worktree**
   (`../bartleby-issue-<N>-<slug>`) — never nested in the repo, never `git checkout -b`
   on `main`.
-- **Pre-commit gates, every commit, in order:** `uv run pytest` (must pass) →
-  `simplify-refactor` agent over the touched files → apply what's worth taking →
-  re-run `uv run pytest` → commit.
+- **Pre-commit gate, every commit:** `uv run pytest` (must pass) → commit.
+- **Tests only for real bugs.** Do not write tests for new features, flags,
+  refactors or error messages. Write a test only when fixing an observed bug, and
+  make it reproduce that bug. Name the issue or commit in the test's docstring.
 - **Use `/ship #<N>`** for the full issue→PR loop. Claude opens the PR with a
   `Closes #<N>` line; **a human merges** — never merge yourself.
 - **Use `/release`** to cut a release — a deliberate, post-merge act on `main`,
@@ -57,4 +58,4 @@ skill scripts an agent over that DB. Two surfaces, one DB: the `bartleby` CLI
 ## Tooling
 
 - **`uv`** for dependencies (not pip/venv); run code with `uv run python`.
-- Tests: **`uv run pytest`** (the whole suite).
+- Tests: **`uv run pytest`** (the whole suite — a bug-regression guard suite, not coverage).
