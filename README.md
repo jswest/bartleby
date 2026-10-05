@@ -268,14 +268,16 @@ Manage project workspaces. Each project gets its own database and document archi
 bartleby project create <name>                     # Create and activate a new project
 bartleby project list                              # List all projects
 bartleby project use <name>                        # Switch active project
-bartleby project info [name]                       # Show project details (--verify for integrity checks)
+bartleby project info [name]                       # Show project details (--sources per-doc origins, --verify integrity checks)
 bartleby project delete <name>                     # Delete a project and all its data (--yes to skip prompt)
 bartleby project upgrade <name>                    # Apply additive schema upgrades to an existing DB
 bartleby project publish <name> --to <s3-url>      # Publish a findings-free copy (+ originals) to S3
 bartleby project import <name> --from <source>     # Import a published corpus as a new local project
 ```
 
-`publish` strips findings and sessions from a copy of the corpus before uploading the `.db` and archived originals to an S3 prefix. `import` pulls one back down (`s3://…`, a local directory, or `file://…`) as a brand-new project — refusing on a schema or embedding-model mismatch — optionally dropping tags (`--without-tags`) or overwriting a same-named project (`--yes`, which drops its local findings).
+`info` also shows the corpus's ingest runs (count, first start, last finish, or "in progress / interrupted") and where its documents came from: the top source directories with a doc count each. `--sources` adds one row per document with its original path and ingest time. The original path is recorded at ingest as of schema v12; documents ingested earlier, or imported from a published corpus, show as "unrecorded (pre-v12)".
+
+`publish` strips findings and sessions (and each document's original source path, which would reveal your local filesystem layout) from a copy of the corpus before uploading the `.db` and archived originals to an S3 prefix. `import` pulls one back down (`s3://…`, a local directory, or `file://…`) as a brand-new project — refusing on a schema or embedding-model mismatch — optionally dropping tags (`--without-tags`) or overwriting a same-named project (`--yes`, which drops its local findings).
 
 ### `bartleby finding`
 

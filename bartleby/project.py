@@ -7,6 +7,7 @@ the user config.
 
 import re
 import shutil
+from collections import Counter
 from pathlib import Path
 
 from bartleby.config import load_config, projects_dir, save_config_field
@@ -112,6 +113,8 @@ def get_project_info(name: str) -> dict:
         "finding_count": 0,
         "chunk_counts": {kind: 0 for kind in ALLOWED_SOURCE_KINDS},
         "failed_ingests": {"total": 0, "capped": 0},
+        "ingest_runs": {"count": 0, "first_started": None, "last_finished": None},
+        "source_dirs": [],
     }
 
     if not db_path.exists():
@@ -150,7 +153,49 @@ def get_project_info(name: str) -> dict:
                 (MAX_INGEST_ATTEMPTS,),
             ).fetchone()[0],
         }
+
+        # Ingest provenance (#686). last_finished is the newest run's own
+        # finished_at — NULL there means that run is in progress or was cut off.
+        count, first_started = cur.execute(
+            "SELECT COUNT(*), MIN(started_at) FROM ingests"
+        ).fetchone()
+        last = cur.execute(
+            "SELECT finished_at FROM ingests ORDER BY run_id DESC LIMIT 1"
+        ).fetchone()
+        info["ingest_runs"] = {
+            "count": count,
+            "first_started": first_started,
+            "last_finished": last[0] if last else None,
+        }
+        # Docs per source directory, top-level rows only (#254 sections share
+        # their container's path). A NULL source_path groups under None.
+        info["source_dirs"] = Counter(
+            str(Path(sp).parent) if sp else None
+            for (sp,) in cur.execute(
+                "SELECT source_path FROM documents "
+                "WHERE parent_document_id IS NULL"
+            )
+        ).most_common()
     finally:
         conn.close()
 
     return info
+
+
+def get_document_sources(name: str) -> list[dict]:
+    """One row per top-level document (#254 sections excluded) with where it
+    came from (#686), sorted by source_path then file_name; NULL paths last."""
+    validate_project_name(name)
+    conn = open_db(name)
+    try:
+        rows = conn.cursor().execute(
+            "SELECT document_id, file_name, source_path, created_at "
+            "FROM documents WHERE parent_document_id IS NULL "
+            "ORDER BY source_path IS NULL, source_path, file_name"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"document_id": d, "file_name": f, "source_path": s, "created_at": c}
+        for d, f, s, c in rows
+    ]

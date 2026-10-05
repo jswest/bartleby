@@ -319,6 +319,7 @@ class Writer:
         file_hash: str,
         file_name: str,
         file_path: str,
+        source_path: str | None,
         page_count: int | None,
         token_count: int,
         anchor_id: str | None = None,
@@ -335,15 +336,18 @@ class Writer:
         """
         self.conn.cursor().execute(
             "INSERT INTO documents "
-            "(file_hash, file_name, file_path, page_count, token_count, "
-            " ingest_run_id, anchor_id, section_title, section_order) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (file_hash, file_name, file_path, page_count, token_count,
-             self.run_id, anchor_id, section_title, section_order),
+            "(file_hash, file_name, file_path, source_path, page_count, "
+            " token_count, ingest_run_id, anchor_id, section_title, "
+            " section_order) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (file_hash, file_name, file_path, source_path, page_count,
+             token_count, self.run_id, anchor_id, section_title, section_order),
         )
         return self.conn.last_insert_rowid()
 
-    def persist_parse(self, parsed: ParsedDocument) -> int:
+    def persist_parse(
+        self, parsed: ParsedDocument, *, source_path: str | None = None,
+    ) -> int:
         """Commit a parsed document — row, text chunks, and image rows — atomically.
 
         Image rows land *uncaptioned* (``analysis_json`` NULL); captioning is a
@@ -362,6 +366,10 @@ class Writer:
         the one transaction. Persisting the container last means a crash mid-split
         commits nothing, and resume (which keys on the container's file_hash)
         re-parses the file cleanly. Returns the container's document_id.
+
+        ``source_path`` (#686) is the absolute path of the file handed to
+        ``scribe``, stamped on the row and on every #254 section row. A
+        byte-identical file already persisted keeps its first-seen path.
         """
         with self.conn:
             self._clear_failure(parsed.file_hash, "parse")
@@ -377,7 +385,8 @@ class Writer:
             for section in parsed.sections:
                 section_id = self._insert_document_row(
                     file_hash=section.file_hash, file_name=parsed.file_name,
-                    file_path=str(parsed.archive_path), page_count=None,
+                    file_path=str(parsed.archive_path),
+                    source_path=source_path, page_count=None,
                     token_count=section.token_count,
                     anchor_id=section.anchor_id,
                     section_title=section.section_title,
@@ -392,7 +401,8 @@ class Writer:
 
             document_id = self._insert_document_row(
                 file_hash=parsed.file_hash, file_name=parsed.file_name,
-                file_path=str(parsed.archive_path), page_count=parsed.page_count,
+                file_path=str(parsed.archive_path), source_path=source_path,
+                page_count=parsed.page_count,
                 token_count=parsed.token_count,
             )
             if section_ids:
