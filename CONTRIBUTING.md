@@ -35,7 +35,6 @@ the tooling encodes the conventions so you don't have to keep them all in your h
 > pressed copy drifts from the drawer, and skips when the drawer is absent (a clone /
 > CI). `release` stays repo-local.
 | `hooks/guard-main-write.sh` | A safety rail that refuses commits/pushes on `main`. |
-| `agents/simplify-refactor.md` | A subagent that does a quality/simplification pass over changed code. |
 | `agents/git-workflow-manager.md` | A subagent that turns a pile of changes into clean, atomic commits. |
 | `settings.json` | Wires the hook in. |
 
@@ -123,10 +122,7 @@ untested code:
   edit under `bartleby/web/` (that tree is all Svelte/vite, no Python), a shell
   script, a `.txt` asset — append a `skip-tests` token (`/ship #<N> skip-tests`).
   Claude honors it only when the branch diff touches no `*.py` or `pyproject.toml`
-  file — otherwise it runs the tests anyway and tells you why. (One caveat: a
-  *structural* `bartleby/web/` change (moving `src/`, dropping `package.json`) can
-  still break the Python suite via `tests/test_serve.py`, which checks the packaged
-  UI layout — don't `skip-tests` a web restructure.)
+  file — otherwise it runs the tests anyway and tells you why.
 
 Either way, Claude re-checks at every gate, so a docs PR that grows a code change
 mid-stream starts running tests from that point. When tests are genuinely skipped,
@@ -180,9 +176,9 @@ unattended except for the plan gate and the final merge.
 
 Repo-specific facts live in `.claude/ship.toml` (committed; `signet` never touches
 it). Key fields: `base_branch`, `test_cmd` / `test_source_globs` / `docs_only_globs`,
-`gate_agent` (the per-commit quality pass), and the `live_data_note` redline (injected
-verbatim into the implementation guidance — share it in git so a fresh clone gets the
-same redline). On first run with no `.toml`, `/ship` auto-detects and proposes a
+and the `guardrails` redline (the live-data rule plus the tests-only-for-real-bugs
+rule, injected verbatim into every player prompt — share it in git so a fresh clone
+gets the same redline). On first run with no `.toml`, `/ship` auto-detects and proposes a
 config; `/ship config` or `/ship --reconfigure` re-runs it on demand.
 
 `/ship` also runs a **signet self-check** on startup: it reads
@@ -190,15 +186,10 @@ config; `/ship config` or `/ship --reconfigure` re-runs it on demand.
 Drift → stop and prompt to re-press. Drawer absent (clone, CI) → skip silently.
 `--no-signet-check` bypasses it.
 
-### The helper agents
+### The helper agent
 
-Two subagents do focused jobs so the main thread stays on the problem:
-
-- **`simplify-refactor`** — a quality pass: hunts duplication, needless abstraction,
-  and bloat in the code you just touched. It's about clarity, not correctness; it's
-  part of every commit's gate above.
-- **`git-workflow-manager`** — groups changes into small, clearly-messaged,
-  single-concern commits when a change has gotten tangled.
+- **`git-workflow-manager`** — a subagent that groups changes into small,
+  clearly-messaged, single-concern commits when a change has gotten tangled.
 
 ## Working agreements
 
@@ -230,8 +221,19 @@ work most:
 uv run pytest
 ```
 
-That's the whole suite. The per-commit gate above runs it before and after every
-change; run it yourself anytime.
+That's the whole suite, and it's the only per-commit gate: `uv run pytest` must
+pass, then commit. Run it yourself anytime.
+
+The suite is a **bug-regression guard suite**, not a coverage net: a handful of
+tests that enforce the `ARCHITECTURE.md` load-bearing invariants, plus regression
+tests for real past bugs. The rule for adding to it:
+
+> Do not write tests for new features, flags, refactors or error messages. Write a
+> test only when fixing an observed bug, and make it reproduce that bug. Name the
+> issue or commit in the test's docstring.
+
+Features ship with no new tests. (Why: see
+[the GH-0745 decision](./docs/decisions/GH-0745-bug-regression-guard-suite-0001.md).)
 
 ## Cutting a release
 
@@ -248,7 +250,7 @@ the README under [Pinned release](./README.md#pinned-release).
 ## A note for non-Claude contributors
 
 None of this requires Claude. The loop is just good hygiene: branch in a worktree,
-keep commits atomic and tested, run `uv run pytest` before you commit, open a PR that
+keep commits atomic, run `uv run pytest` before you commit, open a PR that
 closes the issue, and let someone else merge it. `/ship` automates the bookkeeping;
 it doesn't replace your judgment. The machine-readable companion to this file is
 [`CLAUDE.md`](./CLAUDE.md) — the same conventions in terse, imperative form, which

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 
 import pytest
 
@@ -11,12 +12,12 @@ from bartleby.db.chunks import (
     ChunkInput,
     insert_document_chunks,
     insert_finding_chunks,
-    insert_image_chunks,
     insert_summary_chunks,
 )
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.integrity import check_tri_table_sync
+from bartleby.skill_scripts import search as search_script
 
 
 def _emb(seed: float = 0.0) -> list[float]:
@@ -46,6 +47,14 @@ def mock_embed(monkeypatch):
         "bartleby.ingest.chunk.chunk_markdown_string",
         lambda md: [ChunkRow(text=md, section_heading=None, content_type=None)],
     )
+
+
+@pytest.fixture
+def stub_embed(monkeypatch):
+    """Replace search's query embedding (the `bartleby embed` subprocess) with a
+    fixed in-memory vector — tests using it verify modes and shape, not order."""
+    vec = struct.pack(f"{EMBEDDING_DIM}f", *[0.001] * EMBEDDING_DIM)
+    monkeypatch.setattr(search_script, "_embed_query", lambda query: vec)
 
 
 def seed_finding(conn, session_id, *, title="A finding", description="hook",
@@ -197,115 +206,3 @@ def seeded_project(project_env):
         "summary_a": summary_a,
         "summary_a_chunk_ids": summary_a_chunk_ids,
     }
-
-
-@pytest.fixture
-def dated_corpus(project_env):
-    """A corpus whose filenames encode dates, for `scribe backfill-dates` (#536).
-
-    Wave-1 shared fixture: later authored-date sub-issues reuse it. Every
-    document's `file_name` is `<key>__YYYY-MM-DD__slug.md` so a single named-
-    capture regex (`(?P<date>\\d{4}-\\d{2}-\\d{2})`) matches all of them. The
-    documents exercise every backfill branch:
-
-    - ``summary_doc``   — has a *real* summary (model='test') with a NULL date;
-                          backfill should UPDATE the date on it.
-    - ``stub_doc``      — has NO summary row; backfill should INSERT a stub.
-    - ``dated_doc``     — has a real summary that ALREADY carries a date; backfill
-                          leaves it (idempotent) unless --overwrite.
-    - ``nomatch_doc``   — `file_name` has no date; backfill should not touch it.
-    - ``bad_date_doc``  — `file_name` matches the regex but the captured value is
-                          an impossible calendar date (2024-13-40); counted as
-                          invalid, never written.
-    - ``parent_doc`` / ``section_doc`` — a #254 anchor-split pair sharing one
-                          `file_name`; both should get the parent's date (the
-                          section via a stub).
-
-    Returns the project name and every document id under those keys.
-    """
-    conn = open_db(project_env)
-    try:
-        cur = conn.cursor()
-
-        def _doc(file_hash, file_name, *, parent=None):
-            cur.execute(
-                "INSERT INTO documents "
-                "(file_hash, file_name, file_path, page_count, token_count, "
-                " parent_document_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (file_hash, file_name, f"/corpus/{file_name}", 1, 100, parent),
-            )
-            doc_id = conn.last_insert_rowid()
-            insert_document_chunks(conn, doc_id, [
-                ChunkInput(text=f"body of {file_name}", embedding=_emb(),
-                           chunk_index=0),
-            ])
-            return doc_id
-
-        def _summary(doc_id, *, authored_date, model="test"):
-            cur.execute(
-                "INSERT INTO summaries "
-                "(document_id, title, description, text, model, authored_date) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (doc_id, "T", "D", "real summary text", model, authored_date),
-            )
-            return conn.last_insert_rowid()
-
-        summary_doc = _doc("d1", "A001__2021-03-15__alpha.md")
-        _summary(summary_doc, authored_date=None)
-
-        stub_doc = _doc("d2", "B002__2022-07-04__beta.md")
-
-        dated_doc = _doc("d3", "C003__2023-01-09__gamma.md")
-        _summary(dated_doc, authored_date="2099-12-31")
-
-        nomatch_doc = _doc("d4", "D004__no-date-here__delta.md")
-
-        bad_date_doc = _doc("d5", "E005__2024-13-40__epsilon.md")
-
-        # #254 anchor-split pair: a section row shares the parent's file_name.
-        parent_doc = _doc("d6", "F006__2020-05-20__zeta.md")
-        section_doc = _doc("d6-sec", "F006__2020-05-20__zeta.md", parent=parent_doc)
-    finally:
-        conn.close()
-
-    return {
-        "project": project_env,
-        "summary_doc": summary_doc,
-        "stub_doc": stub_doc,
-        "dated_doc": dated_doc,
-        "nomatch_doc": nomatch_doc,
-        "bad_date_doc": bad_date_doc,
-        "parent_doc": parent_doc,
-        "section_doc": section_doc,
-    }
-
-
-def seed_image(conn, document_id: int, *, file_hash: str, file_path: str,
-               description: str = "A test image scene.",
-               ocr_text: str = "WELCOME",
-               page_number: int | None = 1,
-               image_index_on_page: int = 1) -> int:
-    """Helper for image-scope tests: insert an image, link it to a doc, chunk it."""
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO images "
-        "(file_hash, file_path, width, height, analysis_json, analysis_model) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (file_hash, file_path, 800, 600,
-         '{"kind":"scene","text":"' + ocr_text + '","description":"' + description + '","notes":""}',
-         "fake-vlm"),
-    )
-    image_id = conn.last_insert_rowid()
-    cur.execute(
-        "INSERT INTO document_images "
-        "(document_id, image_id, page_number, image_index_on_page) "
-        "VALUES (?, ?, ?, ?)",
-        (document_id, image_id, page_number, image_index_on_page),
-    )
-    insert_image_chunks(conn, image_id, [
-        ChunkInput(text=ocr_text, embedding=_emb(2.0), chunk_index=0,
-                   content_type="image_ocr"),
-        ChunkInput(text=description, embedding=_emb(2.1), chunk_index=1,
-                   content_type="image_description"),
-    ])
-    return image_id
