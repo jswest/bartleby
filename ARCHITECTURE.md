@@ -96,7 +96,7 @@ When a document exceeds `max_summarize_tokens`, the summary's `text` field gets 
 - Dependency management: `uv` (not pip/venv). Run with `uv run python`.
 - **Skill/CLI flag naming (issue #573, supersedes #111)**: *name the value you accept*.
   - A flag that takes a single **id** ends in **`-id`** (`--document-id`, `--finding-id`, `--chunk-id`); a flag that takes a name/key/path/predicate stays **bare** (`--project`, `--run`, `--tag`, `--file-like`, `--heading-like`, `--from`, `--out`).
-  - The enforceable invariant — guarded by `tests/test_skill_flag_conventions.py` across both surfaces — is: **a flag's name ends in `-id` IFF its argparse `dest` ends in `_id`**.
+  - The enforceable invariant, across both surfaces, is: **a flag's name ends in `-id` IFF its argparse `dest` ends in `_id`**.
   - Plural/relational id flags whose `dest` ends in `_ids` or another stem stay bare on purpose: `--documents` (`dest=document_ids`, a comma-list), `--chunks` (`dest=chunk_ids`), `--from` (`dest=from_ids`), `--into` (`dest=into`), `--around-chunk` (`dest=around_chunk`).
   - **Scope vs target are deliberately distinct**: `--in-documents` is a *scope filter* (narrows `search`/`scan`/`describe_corpus`/`list_documents`) while `--documents` is a *target set* (`assign_tag`/`unassign_tag`).
   - **Merge verbs agree**: destination is `--into`, source is `--from`, on both `merge_findings` and `merge_tags`.

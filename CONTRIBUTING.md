@@ -122,10 +122,7 @@ untested code:
   edit under `bartleby/web/` (that tree is all Svelte/vite, no Python), a shell
   script, a `.txt` asset — append a `skip-tests` token (`/ship #<N> skip-tests`).
   Claude honors it only when the branch diff touches no `*.py` or `pyproject.toml`
-  file — otherwise it runs the tests anyway and tells you why. (One caveat: a
-  *structural* `bartleby/web/` change (moving `src/`, dropping `package.json`) can
-  still break the Python suite via `tests/test_serve.py`, which checks the packaged
-  UI layout — don't `skip-tests` a web restructure.)
+  file — otherwise it runs the tests anyway and tells you why.
 
 Either way, Claude re-checks at every gate, so a docs PR that grows a code change
 mid-stream starts running tests from that point. When tests are genuinely skipped,
