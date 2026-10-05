@@ -319,8 +319,8 @@ the container is idle.
 This is a **cross-kernel** limitation, **not** a concurrency one. Same-kernel
 concurrent access *is* supported and tested — multiple host research sessions, or
 host `serve` + a host session, are fine (`busy_timeout` + `BEGIN IMMEDIATE`
-serialize writers; `tests/test_skill_concurrent_writes.py` lands six concurrent
-writers with zero BusyError). The breakage is **strictly** the container (Linux
+serialize writers; the #562 concurrent-write section of
+`tests/test_skill_regressions.py` lands concurrent writers with zero BusyError). The breakage is **strictly** the container (Linux
 guest) and the host (macOS) touching the same corpus *at once*.
 
 Why: Bartleby opens corpus DBs in **WAL mode**, whose write-ahead index lives in a
