@@ -14,7 +14,6 @@ import pytest
 
 from bartleby.db.chunks import ChunkInput
 from bartleby.db.chunks import insert_document_chunks
-from bartleby.db.chunks import insert_summary_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.skill_scripts import edit_finding
@@ -24,38 +23,20 @@ from bartleby.skill_scripts import save_finding
 from bartleby.skill_scripts import save_summary
 from bartleby.skill_scripts import scan
 from bartleby.skill_scripts import search
-from bartleby.skill_scripts import search as search_script
 from bartleby.skill_scripts._common import SkillError
 from bartleby.skill_scripts._common import reject_malformed_citations
 import bartleby.project
 import bartleby.session as session_mod
 
-from tests._skill_fixtures import _emb  # noqa: F401
-from tests._skill_fixtures import assert_chunk_tables_consistent  # noqa: F401
-from tests._skill_fixtures import dated_corpus  # noqa: F401
+from tests._skill_fixtures import _emb
 from tests._skill_fixtures import mock_embed  # noqa: F401
 from tests._skill_fixtures import project_env  # noqa: F401
-from tests._skill_fixtures import seed_finding  # noqa: F401
 from tests._skill_fixtures import seeded_project  # noqa: F401
+from tests._skill_fixtures import stub_embed  # noqa: F401
 
 
 # ---------- search: #55 scoped semantic search, #465 source deleted
 # mid-search, #472 --returning typo on zero hits ----------
-
-
-@pytest.fixture
-def stub_embed(monkeypatch):
-    """Replace the subprocess call to `bartleby embed` with an in-memory stub."""
-    def _stub(query: str) -> bytes:
-        # Just return a vector that's deterministic per-query; not actually
-        # used to compute semantic order in our tests (we only verify modes
-        # and shape).
-        return struct.pack(f"{EMBEDDING_DIM}f", *[0.001] * EMBEDDING_DIM)
-    monkeypatch.setattr(search_script, "_embed_query", _stub)
-
-
-def _run(argv):
-    search_script.main(argv)
 
 
 @pytest.mark.usefixtures("stub_embed")
@@ -67,14 +48,12 @@ def test_search_semantic_scope_survives_global_nearest_elsewhere(
     scoped to doc_a must still return doc_a's chunks. The old post-filter
     (fetch k globally-nearest, then drop out-of-scope rows) starved to [] here;
     pushing the scope into the index fixes it."""
-    from bartleby.db.chunks import ChunkInput, insert_document_chunks
-
     # Seed a decoy document with MORE near-query chunks than the over-fetch
     # window, so every chunk in the global top-`overfetch` is out of scope and a
     # post-filter to doc_a would wipe the result set to empty.
     limit = 1  # mirror work()'s overfetch calc for this query's --limit
     overfetch = max(
-        limit * search_script.OVERFETCH_MULTIPLIER, search_script.OVERFETCH_FLOOR
+        limit * search.OVERFETCH_MULTIPLIER, search.OVERFETCH_FLOOR
     )
     n_decoys = overfetch + 5
     conn = open_db(seeded_project["project"])
@@ -103,10 +82,10 @@ def test_search_semantic_scope_survives_global_nearest_elsewhere(
     near_decoys = struct.pack(
         f"{EMBEDDING_DIM}f", *[1.05 + 0.001 * j for j in range(EMBEDDING_DIM)]
     )
-    monkeypatch.setattr(search_script, "_embed_query", lambda q: near_decoys)
+    monkeypatch.setattr(search, "_embed_query", lambda q: near_decoys)
 
     # Premise: unscoped, the global nearest hit is NOT in doc_a.
-    _run([
+    search.main([
         "--project", seeded_project["project"],
         "--semantic", "--documents", "--limit", str(limit),
         "anything",
@@ -115,7 +94,7 @@ def test_search_semantic_scope_survives_global_nearest_elsewhere(
     assert unscoped["results"][0]["source_id"] != f"document:{seeded_project['doc_a']}"
 
     # Scoped to doc_a, the in-scope chunks must come back — not [].
-    _run([
+    search.main([
         "--project", seeded_project["project"],
         "--semantic", "--documents", "--limit", str(limit),
         "--in-documents", f"document:{seeded_project['doc_a']}",
@@ -133,7 +112,7 @@ def test_search_returning_unknown_field_errors_on_zero_hits(seeded_project, caps
     """A typo'd --returning must error even when the query matches nothing,
     rather than coming back as a silent empty result set."""
     with pytest.raises(SystemExit) as exc:
-        _run([
+        search.main([
             "--project", seeded_project["project"], "--full-text",
             "zzzznomatchzzz", "--returning", "chunk_id,nope",
         ])
@@ -148,7 +127,6 @@ def test_search_completes_when_source_deleted_underneath(seeded_project, capsys)
     source row deleted by a concurrent session between fetch and name resolution
     — must degrade that one hit's source_name to "" rather than aborting the
     whole search with KeyError → INTERNAL_ERROR (issue #465)."""
-    from bartleby.db.chunks import ChunkInput, insert_document_chunks
     conn = open_db(seeded_project["project"])
     try:
         cur = conn.cursor()
@@ -170,7 +148,7 @@ def test_search_completes_when_source_deleted_underneath(seeded_project, capsys)
 
     # Default, brief, and --returning all read source_name — each must survive.
     for extra in ([], ["--brief"], ["--returning", "chunk_id,source_name"]):
-        _run([
+        search.main([
             "--project", seeded_project["project"],
             "--full-text", "ghostword", *extra,
         ])
@@ -203,154 +181,54 @@ def test_read_chunks_returning_unknown_field_errors_on_zero_rows(
 # ---------- list_documents: #472 --returning typo on zero documents ----------
 
 
-def _run_list_documents(capsys, argv):
-    with pytest.raises(SystemExit) as exc:
-        list_documents.main(argv)
-    return exc.value.code, capsys.readouterr()
-
-
 def test_list_documents_returning_unknown_field_errors_on_zero_documents(
     seeded_project, capsys
 ):
     """A typo'd --returning must error even when the filter matches no documents,
     rather than coming back as a silent empty list."""
-    code, captured = _run_list_documents(capsys, [
-        "--project", seeded_project["project"],
-        "--file-like", "zzzznomatchzzz",
-        "--returning", "document_id,bogus",
-    ])
-    assert code == 1
-    out = json.loads(captured.out)
+    with pytest.raises(SystemExit) as exc:
+        list_documents.main([
+            "--project", seeded_project["project"],
+            "--file-like", "zzzznomatchzzz",
+            "--returning", "document_id,bogus",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
     assert out["code"] == "UNKNOWN_RETURNING_FIELD"
 
 
 # ---------- scan: #653 --body-matches + --count-by, #472 --returning typo on zero matches ----------
 
 
-MARKER = "I will divest my interests in"
-
-
-LONG_MARKER = (
-    MARKER + " ACME CORP within ninety days of confirmation. "
-    + "This disclosure is provided pursuant to applicable ethics regulations. " * 3
-)
-
-
-def _run_scan(corpus, args):
-    scan.main(["--project", corpus["project"], *args])
-
-
-@pytest.fixture
-def scan_corpus(project_env):  # noqa: F811
-    """Three templated filings sharing a marker phrase, plus distractors and a
-    summary chunk that also contains the marker (to prove scan is docs-only)."""
-    conn = open_db(project_env)
-    try:
-        cur = conn.cursor()
-
-        def _doc(file_hash, file_name):
-            cur.execute(
-                "INSERT INTO documents (file_hash, file_name, file_path, page_count, token_count) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (file_hash, file_name, f"/tmp/{file_name}", 2, 100),
-            )
-            return conn.last_insert_rowid()
-
-        d1 = _doc("ha", "filing_a.txt")
-        d2 = _doc("hb", "filing_b.txt")
-        d3 = _doc("hc", "filing_c.txt")
-
-        d1_ids = insert_document_chunks(conn, d1, [
-            ChunkInput(text="SECTION 2 - ACME CORP", embedding=_emb(0.0),
-                       chunk_index=0, section_heading="SECTION 2",
-                       page_number=1, content_type="sec_text"),
-            ChunkInput(text=LONG_MARKER, embedding=_emb(0.1),
-                       chunk_index=1, page_number=1, content_type="sec_text"),
-            ChunkInput(text="Certification: I have nothing further to report.",
-                       embedding=_emb(0.2), chunk_index=2, page_number=2),
-            ChunkInput(text=MARKER + " BETA LLC promptly.", embedding=_emb(0.3),
-                       chunk_index=3, page_number=2),
-        ])
-        d2_ids = insert_document_chunks(conn, d2, [
-            ChunkInput(text=MARKER + " GAMMA INC.", embedding=_emb(1.0),
-                       chunk_index=0, page_number=1),
-            ChunkInput(text="Some unrelated text about divest and interests scattered here.",
-                       embedding=_emb(1.1), chunk_index=1, page_number=1),
-        ])
-        insert_document_chunks(conn, d3, [
-            ChunkInput(text="Pure boilerplate certification with no marker.",
-                       embedding=_emb(2.0), chunk_index=0, page_number=1),
-        ])
-
-        # A summary chunk that also contains the marker — scan must ignore it.
-        cur.execute(
-            "INSERT INTO summaries (document_id, title, description, text, model) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (d1, "Filing A", "desc", "summary body", "test"),
-        )
-        summary_id = conn.last_insert_rowid()
-        summary_ids = insert_summary_chunks(conn, summary_id, [
-            ChunkInput(text="Summary: " + MARKER + " ACME CORP.", embedding=_emb(3.0),
-                       chunk_index=0),
-        ])
-
-        # A finding chunk that also contains the marker — scan is docs-only, so
-        # this prior-session finding must never surface as a scan match either.
-        cur.execute("INSERT INTO sessions (name) VALUES (?)", ("prior",))
-        session_id = conn.last_insert_rowid()
-        _, finding_chunk_ids = seed_finding(
-            conn, session_id,
-            title="Prior finding",
-            body="Finding note: " + MARKER + " ACME CORP per the record.",
-        )
-
-        # A tag carried by d2 alone, so --tag can prove it narrows the slice.
-        cur.execute("INSERT INTO tags (name, description) VALUES (?, ?)",
-                    ("senate", "senate filings"))
-        tag_id = conn.last_insert_rowid()
-        cur.execute("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)",
-                    (d2, tag_id))
-    finally:
-        conn.close()
-
-    return {
-        "project": project_env,
-        "d1": d1, "d2": d2, "d3": d3,
-        "long_chunk_id": d1_ids[1],
-        "distractor_chunk_id": d2_ids[1],
-        "summary_chunk_id": summary_ids[0],
-        "finding_chunk_id": finding_chunk_ids[0],
-    }
-
-
-def test_scan_returning_unknown_field_errors_on_zero_matches(scan_corpus, capsys):
+def test_scan_returning_unknown_field_errors_on_zero_matches(seeded_project, capsys):
     """The whitelist check must fire even when the query matches no rows — else a
     typo'd field reads as an empty result instead of a broken flag."""
     with pytest.raises(SystemExit) as exc:
-        _run_scan(scan_corpus, ["zzzznomatchzzz", "--returning", "chunk_id,bogus"])
+        scan.main(["--project", seeded_project["project"], "zzzznomatchzzz",
+                   "--returning", "chunk_id,bogus"])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "UNKNOWN_RETURNING_FIELD"
 
 
 def test_scan_count_by_document_returning_unknown_field_errors_on_zero_matches(
-    scan_corpus, capsys
+    seeded_project, capsys
 ):
     with pytest.raises(SystemExit) as exc:
-        _run_scan(scan_corpus, ["zzzznomatchzzz", "--count-by", "document",
-                           "--returning", "text"])
+        scan.main(["--project", seeded_project["project"], "zzzznomatchzzz",
+                   "--count-by", "document", "--returning", "text"])
     assert exc.value.code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["code"] == "UNKNOWN_RETURNING_FIELD"
 
 
-def test_scan_body_matches_rejects_count_by(scan_corpus, capsys):
+def test_scan_body_matches_rejects_count_by(seeded_project, capsys):
     """--body-matches filters per-chunk matches; --count-by returns an aggregate
     histogram that can't carry that filter, so the combination is rejected rather
     than silently ignored (the #653 × #641 seam)."""
     with pytest.raises(SystemExit) as exc:
-        _run_scan(scan_corpus, [MARKER, "--body-matches", "/GAMMA/",
-                           "--count-by", "document"])
+        scan.main(["--project", seeded_project["project"], "alpha",
+                   "--body-matches", "/GAMMA/", "--count-by", "document"])
     assert exc.value.code == 1
     assert json.loads(capsys.readouterr().out)["code"] == "USAGE_ERROR"
 
@@ -694,33 +572,27 @@ def highcard_project(project_env):  # noqa: F811
     }
 
 
-def _run_list(project, extra_args):
-    list_documents.main(["--project", project, *extra_args])
-
-
-def _run_scan_file_like_highcard(project, extra_args):
-    scan.main(["--project", project, *extra_args])
-
-
-def _run_search(project, extra_args):
-    search.main(["--project", project, *extra_args])
-
-
 def test_file_like_highcard_list_documents(highcard_project, capsys):
-    """list_documents --file-like with >32,766 matches must not crash."""
-    _run_list(highcard_project["project"], ["--file-like", _PATTERN, "--limit", "10"])
+    """list_documents --file-like with >32,766 matches must not crash, and the
+    non-matching document must not appear."""
+    list_documents.main([
+        "--project", highcard_project["project"],
+        "--file-like", _PATTERN, "--limit", str(_HIGHCARD_COUNT + 1),
+    ])
     out = json.loads(capsys.readouterr().out)
     assert out["total"] == _HIGHCARD_COUNT
-    assert len(out["documents"]) == 10
+    assert len(out["documents"]) == _HIGHCARD_COUNT
     assert out["filters"]["file_like"] == [_PATTERN]
+    returned_ids = [int(d["id"].split(":")[1]) for d in out["documents"]]
+    assert highcard_project["other_id"] not in returned_ids
 
 
 def test_file_like_highcard_scan(highcard_project, capsys):
     """scan --file-like with >32,766 matches must not crash."""
-    _run_scan_file_like_highcard(
-        highcard_project["project"],
-        [_MARKER, "--file-like", _PATTERN, "--limit", "5"],
-    )
+    scan.main([
+        "--project", highcard_project["project"],
+        _MARKER, "--file-like", _PATTERN, "--limit", "5",
+    ])
     out = json.loads(capsys.readouterr().out)
     # Exactly one doc has the marker chunk — the scope must not widen.
     assert out["total"] == 1
@@ -729,27 +601,16 @@ def test_file_like_highcard_scan(highcard_project, capsys):
 
 def test_file_like_highcard_search(highcard_project, capsys):
     """search --file-like with >32,766 matches must not crash."""
-    _run_search(
-        highcard_project["project"],
-        [_MARKER, "--file-like", _PATTERN, "--limit", "5", "--full-text"],
-    )
+    search.main([
+        "--project", highcard_project["project"],
+        _MARKER, "--file-like", _PATTERN, "--limit", "5", "--full-text",
+    ])
     out = json.loads(capsys.readouterr().out)
     assert out["filters"]["file_like"] == [_PATTERN]
     # Exactly one doc has the marker chunk; the non-matching doc must be absent.
     assert len(out["results"]) >= 1
     result_source_ids = [r["source_id"] for r in out["results"]]
     assert f"document:{highcard_project['other_id']}" not in result_source_ids
-
-
-def test_file_like_highcard_excludes_nonmatching(highcard_project, capsys):
-    """The non-matching document must not appear when --file-like is active."""
-    _run_list(
-        highcard_project["project"],
-        ["--file-like", _PATTERN, "--limit", str(_HIGHCARD_COUNT + 1)],
-    )
-    out = json.loads(capsys.readouterr().out)
-    returned_ids = [int(d["id"].split(":")[1]) for d in out["documents"]]
-    assert highcard_project["other_id"] not in returned_ids
 
 
 # ---------- write_active_session_id: #501 atomic publish, #553 concurrent-writer race ----------

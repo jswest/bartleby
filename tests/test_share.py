@@ -19,12 +19,9 @@ import pytest
 import bartleby.project
 from bartleby.db.chunks import ChunkInput, insert_document_chunks, insert_finding_chunks
 from bartleby.db.connection import open_db, project_db_path
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.share import publish as publish_mod
 
-
-def _emb(seed: float = 0.0) -> list[float]:
-    return [seed + 0.001 * j for j in range(EMBEDDING_DIM)]
+from tests._skill_fixtures import _emb
 
 
 class FakeS3Client:
@@ -45,8 +42,7 @@ class FakeS3Client:
 def published_corpus(tmp_path):
     """A temp corpus with originals, a finding, and a finding-anchored tag.
 
-    Returns a dict with the project name, the archive paths, the finding chunk
-    id, the document ids, and the surviving-tag bookkeeping the asserts need.
+    Returns the finding chunk id, the one value the asserts need.
     """
     bartleby.project.create_project("pub")
     archive = bartleby.project.get_project_dir("pub") / "archive"
@@ -76,7 +72,6 @@ def published_corpus(tmp_path):
             "VALUES (?, ?, ?, ?, ?)",
             (originals["beta"][0], "beta.pdf", str(originals["beta"][1]), 1, 100),
         )
-        doc_b = conn.last_insert_rowid()
 
         doc_chunk_ids = insert_document_chunks(conn, doc_a, [
             ChunkInput(text="alpha chunk zero", embedding=_emb(0.0), chunk_index=0),
@@ -113,23 +108,15 @@ def published_corpus(tmp_path):
         cur.execute(
             "INSERT INTO tags (name, description) VALUES ('topic', 'a topic tag')"
         )
-        tag_id = conn.last_insert_rowid()
         cur.execute(
             "INSERT INTO document_tags (document_id, tag_id, value, chunk_id) "
             "VALUES (?, ?, 'climate', ?)",
-            (doc_a, tag_id, finding_chunk_id),
+            (doc_a, conn.last_insert_rowid(), finding_chunk_id),
         )
     finally:
         conn.close()
 
-    return {
-        "project": "pub",
-        "doc_a": doc_a,
-        "doc_b": doc_b,
-        "tag_id": tag_id,
-        "finding_chunk_id": finding_chunk_id,
-        "originals": originals,
-    }
+    return finding_chunk_id
 
 
 def _open_copy(db_bytes: bytes, tmp_path: Path) -> apsw.Connection:
@@ -146,14 +133,11 @@ def _open_copy(db_bytes: bytes, tmp_path: Path) -> apsw.Connection:
 def test_source_db_byte_identical_after_publish(published_corpus):
     src = project_db_path("pub")
     before = src.read_bytes()
-    before_digest = hashlib.sha256(before).hexdigest()
 
     publish_mod.publish_project("pub", "s3://bucket/corpora/pub",
                                 client=FakeS3Client())
 
-    after = src.read_bytes()
-    assert hashlib.sha256(after).hexdigest() == before_digest
-    assert after == before
+    assert src.read_bytes() == before
 
 
 def test_published_copy_is_findings_free(published_corpus, tmp_path):
@@ -177,9 +161,9 @@ def test_published_copy_is_findings_free(published_corpus, tmp_path):
         ).fetchone()[0] == 0
 
         # The stripped finding chunk's vec row is gone too.
-        fc = published_corpus["finding_chunk_id"]
+        finding_chunk_id = published_corpus
         assert cur.execute(
-            "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (fc,)
+            "SELECT COUNT(*) FROM chunks_vec WHERE rowid = ?", (finding_chunk_id,)
         ).fetchone()[0] == 0
 
         # Document chunks (and their vec rows) survive untouched.

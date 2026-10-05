@@ -5,7 +5,6 @@ findings or agent notes (ARCHITECTURE.md invariant).
 from __future__ import annotations
 
 import json
-import struct
 
 import pytest
 
@@ -28,38 +27,30 @@ from bartleby.skill_scripts import read_finding
 from bartleby.skill_scripts import save_finding
 from bartleby.skill_scripts import search as search_script
 
-from tests._skill_fixtures import assert_chunk_tables_consistent  # noqa: F401
-from tests._skill_fixtures import dated_corpus  # noqa: F401
 from tests._skill_fixtures import mock_embed  # noqa: F401
 from tests._skill_fixtures import project_env  # noqa: F401
-from tests._skill_fixtures import seed_finding  # noqa: F401
-from tests._skill_fixtures import seed_finding_via_main  # noqa: F401
+from tests._skill_fixtures import seed_finding
+from tests._skill_fixtures import seed_finding_via_main
 from tests._skill_fixtures import seeded_project  # noqa: F401
-from tests._skill_fixtures import unprefix  # noqa: F401
+from tests._skill_fixtures import stub_embed  # noqa: F401
+from tests._skill_fixtures import unprefix
+
+
+def _other_session(conn, name: str = "author") -> int:
+    """Insert another (memory-on) session and return its id."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)", (name, 1),
+    )
+    return conn.last_insert_rowid()
 
 
 # ---------- skill_search ----------
 
 
-@pytest.fixture
-def stub_embed(monkeypatch):
-    """Replace the subprocess call to `bartleby embed` with an in-memory stub."""
-    def _stub(query: str) -> bytes:
-        # Just return a vector that's deterministic per-query; not actually
-        # used to compute semantic order in our tests (we only verify modes
-        # and shape).
-        return struct.pack(f"{EMBEDDING_DIM}f", *[0.001] * EMBEDDING_DIM)
-    monkeypatch.setattr(search_script, "_embed_query", _stub)
-
-
-def _run(argv):
-    search_script.main(argv)
-
-
 @pytest.mark.usefixtures("stub_embed")
 def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
     # Start a no-memory session and mark it active.
-    from bartleby.session import start_session
     active = start_session(seeded_project["project"], memory_enabled=False)
 
     # Seed a finding owned by the *active* no-memory session itself. search.py
@@ -81,7 +72,7 @@ def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
     finally:
         conn.close()
 
-    _run([
+    search_script.main([
         "--project", seeded_project["project"],
         "--full-text", "--findings",
         "pm25",
@@ -98,19 +89,12 @@ def test_search_findings_excluded_under_no_memory(seeded_project, capsys):
 
 def test_list_findings_memory_off_scopes_to_own_session(seeded_project, capsys):
     """Memory-off lists only the active session's findings, hiding others'."""
-    from bartleby.session import start_session
-
     project = seeded_project["project"]
     # A finding authored by some *other* session.
     conn = open_db(project)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("author", 1),
-        )
-        author = conn.last_insert_rowid()
-        seed_finding(conn, session_id=author, title="hidden", description="x")
+        seed_finding(conn, session_id=_other_session(conn), title="hidden",
+                     description="x")
     finally:
         conn.close()
 
@@ -145,14 +129,6 @@ def _seed_finding_chunk(conn, *, session_id: int, body: str = "finding body") ->
         conn, session_id=session_id, title="secret finding", body=body,
     )
     return chunk_id
-
-
-def _other_session(conn, name: str = "author") -> int:
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)", (name, 1),
-    )
-    return conn.last_insert_rowid()
 
 
 def test_read_chunks_memory_off_drops_foreign_finding_chunk(seeded_project, capsys):
@@ -200,58 +176,37 @@ def test_read_chunks_around_memory_off_foreign_finding_walled(seeded_project, ca
 # ---------- skill_read_finding ----------
 
 
-def _run_read_finding(capsys, argv):
-    with pytest.raises(SystemExit) as exc:
-        read_finding.main(argv)
-    return exc.value.code, capsys.readouterr()
-
-
 def test_read_finding_memory_off_other_session(seeded_project, capsys):
     """A memory-off session cannot read a finding authored by another session."""
-    from bartleby.session import start_session
-
     project = seeded_project["project"]
     conn = open_db(project)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("author", 1),
-        )
-        author = conn.last_insert_rowid()
-        finding_id, _ = seed_finding(conn, session_id=author)
+        finding_id, _ = seed_finding(conn, session_id=_other_session(conn))
     finally:
         conn.close()
 
     start_session(project, memory_enabled=False)
 
-    code, captured = _run_read_finding(capsys, [
-        "--project", project, "--finding-id", f"finding:{finding_id}",
-    ])
-    assert code == 1
-    out = json.loads(captured.out)
+    with pytest.raises(SystemExit) as exc:
+        read_finding.main([
+            "--project", project, "--finding-id", f"finding:{finding_id}",
+        ])
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
     assert out["code"] == "MEMORY_OFF"
 
 
 # ---------- skill_edit_finding ----------
 
 
-def _seed_finding(seeded_project, tmp_path, capsys, *, body_suffix: str = "") -> dict:
-    """Seed the baseline finding these edit tests assert against ("Original …")."""
-    return seed_finding_via_main(
-        seeded_project, tmp_path, capsys,
-        title="Original title", description="Original description.",
-        body_suffix=body_suffix,
-    )
-
-
 def test_edit_finding_memory_off_other_session(seeded_project, tmp_path, capsys):
     """A memory-off session cannot edit (and thereby read back) a finding
     authored by another session — the response echoes the body, so an ungated
     --title-only edit would be a read-by-write bypass of the memory wall."""
-    from bartleby.session import start_session
-
-    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys,
+        title="Original title", description="Original description.",
+    )
     finding_id = saved["finding_id"]
     fid = unprefix(finding_id)
 
@@ -324,13 +279,7 @@ def test_merge_memory_off_foreign_source_rejected(seeded_project, tmp_path, caps
 
     conn = open_db(project)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("author", 1),
-        )
-        author = conn.last_insert_rowid()
-        foreign_src, _ = seed_finding(conn, author)
+        foreign_src, _ = seed_finding(conn, _other_session(conn))
     finally:
         conn.close()
 
@@ -383,13 +332,7 @@ def test_delete_finding_memory_off_other_session(seeded_project, capsys):
     project = seeded_project["project"]
     conn = open_db(project)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("author", 1),
-        )
-        author = conn.last_insert_rowid()
-        finding_id, _ = seed_finding(conn, author)
+        finding_id, _ = seed_finding(conn, _other_session(conn))
     finally:
         conn.close()
 
@@ -416,11 +359,7 @@ BODY = "alpha beta. gamma beta. delta beta"
 def finding(seeded_project):  # noqa: F811
     conn = open_db(seeded_project["project"])
     try:
-        conn.cursor().execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES ('s1', 1)"
-        )
-        sid = conn.last_insert_rowid()
-        fid, chunk_ids = seed_finding(conn, sid, body=BODY)
+        fid, chunk_ids = seed_finding(conn, _other_session(conn, "s1"), body=BODY)
         yield conn, fid, chunk_ids[0]
     finally:
         conn.close()
@@ -431,8 +370,7 @@ def test_walled_session_hides_foreign_agent_notes(finding):
     cur = conn.cursor()
     cur.execute("INSERT INTO sessions (name, memory_enabled) VALUES ('me', 0)")
     me = conn.last_insert_rowid()
-    cur.execute("INSERT INTO sessions (name, memory_enabled) VALUES ('them', 1)")
-    them = conn.last_insert_rowid()
+    them = _other_session(conn, "them")
     insert_annotation(conn, finding_id=fid, body="human", is_human_author=True)
     insert_annotation(conn, finding_id=fid, body="mine", is_human_author=False,
                       session_id=me)
@@ -467,11 +405,7 @@ def _foreign_finding(project) -> int:
     """A finding authored by another (memory-on) session."""
     conn = open_db(project)
     try:
-        conn.cursor().execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES (?, ?)",
-            ("author", 1),
-        )
-        finding_id, _ = seed_finding(conn, conn.last_insert_rowid(), body="Claim one.")
+        finding_id, _ = seed_finding(conn, _other_session(conn), body="Claim one.")
     finally:
         conn.close()
     return finding_id
@@ -545,10 +479,7 @@ def test_memory_off_read_hides_foreign_agent_notes(seeded_project, tmp_path, cap
     _run_annotations_skill(annotate_finding, _annotate(project, fid, "--body", "mine"), capsys)
     conn = open_db(project)
     try:
-        conn.cursor().execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES ('other', 1)"
-        )
-        other = conn.last_insert_rowid()
+        other = _other_session(conn, "other")
         insert_annotation(conn, finding_id=unprefix(fid), body="theirs",
                           is_human_author=False, session_id=other)
         insert_annotation(conn, finding_id=unprefix(fid), body="human",
@@ -573,10 +504,7 @@ def test_memory_off_delete_annotation_cannot_reach_foreign_agent_note(
     )["finding_id"]
     conn = open_db(project)
     try:
-        conn.cursor().execute(
-            "INSERT INTO sessions (name, memory_enabled) VALUES ('other', 1)"
-        )
-        other = conn.last_insert_rowid()
+        other = _other_session(conn, "other")
         theirs = insert_annotation(conn, finding_id=unprefix(fid), body="theirs",
                                    is_human_author=False, session_id=other)
         human = insert_annotation(conn, finding_id=unprefix(fid), body="human",

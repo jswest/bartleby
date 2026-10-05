@@ -13,17 +13,14 @@ import pytest
 from bartleby.db.chunks import ChunkInput
 from bartleby.db.chunks import insert_finding_chunks
 from bartleby.db.connection import open_db
-from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.db.schema import SCHEMA_VERSION
 import bartleby.config
 import bartleby.project
 
+from tests._skill_fixtures import _emb
+
 
 # ---------- project ----------
-
-
-def _emb(seed: float = 0.0) -> list[float]:
-    return [seed + i * 0.001 for i in range(EMBEDDING_DIM)]
 
 
 def _strip_db_to_v4(db_path) -> None:
@@ -387,26 +384,25 @@ def _schema_source(version: int, ddl: str = "CREATE TABLE meta (k TEXT);") -> st
     return SCHEMA_TEMPLATE.format(version=version, ddl=ddl)
 
 
-def test_no_drift_when_nothing_changed():
-    src = _schema_source(7)
-    assert release.check_drift(src, src) is None
-
-
-def test_no_drift_when_ddl_changed_and_version_bumped():
-    old = _schema_source(7, "CREATE TABLE a (x);")
-    new = _schema_source(8, "CREATE TABLE a (x); CREATE TABLE b (y);")
-    assert release.check_drift(old, new) is None
-
-
-def test_drift_when_ddl_changed_but_version_static():
-    old = _schema_source(7, "CREATE TABLE a (x);")
-    new = _schema_source(7, "CREATE TABLE a (x); CREATE TABLE b (y);")
+@pytest.mark.parametrize(
+    ("old", "new", "drifts"),
+    [
+        pytest.param(_schema_source(7), _schema_source(7), False,
+                     id="nothing_changed"),
+        pytest.param(_schema_source(7, "CREATE TABLE a (x);"),
+                     _schema_source(8, "CREATE TABLE a (x); CREATE TABLE b (y);"),
+                     False, id="ddl_changed_and_version_bumped"),
+        pytest.param(_schema_source(7, "CREATE TABLE a (x);"),
+                     _schema_source(7, "CREATE TABLE a (x); CREATE TABLE b (y);"),
+                     True, id="ddl_changed_but_version_static"),
+        pytest.param(_schema_source(7), _schema_source(8), False,
+                     id="version_bump_without_ddl_change"),
+    ],
+)
+def test_check_drift(old, new, drifts):
     problem = release.check_drift(old, new)
-    assert problem is not None
-    assert "SCHEMA_VERSION" in problem
-
-
-def test_version_bump_without_ddl_change_is_allowed():
-    old = _schema_source(7)
-    new = _schema_source(8)
-    assert release.check_drift(old, new) is None
+    if drifts:
+        assert problem is not None
+        assert "SCHEMA_VERSION" in problem
+    else:
+        assert problem is None

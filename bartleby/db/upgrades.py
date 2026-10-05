@@ -11,8 +11,9 @@ pinned. This chain is the one-shot gate.
 
 Note: the DDL here intentionally duplicates `db/schema.py` — fresh DBs run
 the latter, existing DBs walk the former. The regression gate that keeps
-them in sync is `tests/test_project.py::test_upgrade_chain_walks_*`, which
-strips and re-applies the chain end-to-end.
+them in sync is
+`tests/test_schema_upgrade.py::test_upgrade_chain_walks_from_v4_through_current`,
+which strips and re-applies the chain end-to-end.
 
 The #164–#171 window cohort (v8 in `meta` but missing `ingests`/`ingest_run_id`)
 is re-ingest-only and never a target of this chain — see `docs/decisions/GH-0352`.

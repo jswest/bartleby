@@ -22,11 +22,9 @@ from `.claude/ship.toml`. The pressed `ship` skill never read `gate_agent`, so n
 drawer change or re-press was needed. `/ship`'s correctness and simplicity critics
 are unchanged; they are advisory review, not a gate.
 
-**2. Tests exist only to stop real bugs coming back.** Do not write tests for new
-features, flags, refactors or error messages. Write a test only when fixing an
-observed bug, and make it reproduce that bug. Name the issue or commit in the
-test's docstring. Features ship with no new tests. The rule lives in `AGENTS.md`,
-`CONTRIBUTING.md`, and the `guardrails` key of `.claude/ship.toml`, which the
+**2. Tests exist only to stop real bugs coming back** (see `AGENTS.md` for the
+rule's wording). It lives in `AGENTS.md`, `CONTRIBUTING.md`, and the
+`guardrails` key of `.claude/ship.toml`, which the
 pressed skill injects verbatim into every player prompt. That key was renamed from
 `live_data_note`, which the skill never read; the live-data redline text is
 unchanged.
@@ -42,8 +40,8 @@ unchanged.
 - repo tooling checks (`test_guard_main_write.py`, `test_skill_drift.py`).
 
 Everything else is deleted, along with orphaned fixtures and helpers and the tests
-for one-off `scripts/` backfills. The suite went from 1,334 collected tests to 108
-(79 test functions), grouped by what they guard: `test_memory_wall.py`,
+for one-off `scripts/` backfills. The suite went from 1,334 collected tests to 106
+(74 test functions), grouped by what they guard: `test_memory_wall.py`,
 `test_partial_writes.py`, `test_schema_upgrade.py`, `test_share.py`,
 `test_chunks_chokepoint.py`, `test_skill_regressions.py`,
 `test_ingest_regressions.py`, `test_runtime_regressions.py`, and the tooling

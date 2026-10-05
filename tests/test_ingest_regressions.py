@@ -19,6 +19,7 @@ from bartleby.ingest import classify
 from bartleby.ingest import ocr
 from bartleby.ingest import parsers
 from bartleby.ingest import pdfplumber as pp
+from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
 from bartleby.providers.base import VlmDescription
 import bartleby.config
 import bartleby.project
@@ -182,14 +183,12 @@ def test_persist_parse_reuses_existing_file_hash(
     """persist_parse on a file_hash already in documents returns the existing id
     rather than tripping the UNIQUE constraint — the write-site guard behind
     _classify's dedup (#225)."""
-    from bartleby.commands import scribe as scribe_module
-
     txt = _write_txt(tmp_path / "doc.txt", "A document body with real words to chunk.")
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
     conn = open_db("test_proj")
     try:
-        writer = scribe_module.Writer(conn)
+        writer = scribe.Writer(conn)
         parsed = parsers._parse_document(
             txt, ".txt", _parse_config(archive_root),
             file_hash="dup", file_name="doc.txt",
@@ -207,13 +206,11 @@ def test_parse_document_rejects_html_saved_as_pdf(tmp_path):
     """A `.pdf` that is really an HTML error page is rejected at dispatch with a
     clear reason, before either PDF backend touches it (#235). The error rides
     the existing parse-failure path into failed_ingests via _parse_request."""
-    from bartleby.ingest.pdfplumber import NotAPdfError
-
     src = tmp_path / "ViewDoc.pdf"
     src.write_bytes(b"\r\n\r\n<!DOCTYPE html><html><body>portal error</body></html>")
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
-    with pytest.raises(NotAPdfError) as exc:
+    with pytest.raises(pp.NotAPdfError) as exc:
         parsers._parse_document(
             src, ".pdf", _parse_config(archive_root),
             file_hash="h", file_name="ViewDoc.pdf",
@@ -228,15 +225,13 @@ def test_parse_image_routes_routes_sub_minimum_warning_off_the_console(
     """The observed #227 corruptor: a sub-minimum image notice must go to
     ``on_warn`` (routed to the parent), never the console — this code runs in a
     spawn worker with no Live display, so a console write would stomp the bar."""
-    from bartleby.commands import scribe as scribe_module
-
     # Force every prepared image below the VLM minimum so the skip branch fires.
     monkeypatch.setattr(
         parsers.image_pipeline, "is_below_vlm_minimum", lambda *a, **k: True
     )
     # A worker must never touch the console; fail loudly if it tries.
     monkeypatch.setattr(
-        scribe_module.console, "warn",
+        scribe.console, "warn",
         lambda *a, **k: pytest.fail("worker-side parse called console.warn"),
     )
 
@@ -318,7 +313,6 @@ def test_scribe_resumes_missing_caption_without_reparsing(
     )
 
     # Count real pdfplumber parses to prove the second run doesn't re-parse.
-    import bartleby.ingest.pdfplumber as pp
     real_convert = pp.convert
     parses = {"n": 0}
 
@@ -393,8 +387,6 @@ def test_scribe_caps_caption_retries_and_stops_calling_vlm(
     """A deterministically-failing caption is retried up to the cap, recorded,
     then never sent to the VLM again — so a poison image can't loop forever and
     can't silently read as done."""
-    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
-
     monkeypatch.setattr(
         "bartleby.commands.scribe.load_config", _vision_pdf_config,
     )
@@ -449,8 +441,6 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
     never re-parsed again — the parse stage now honours MAX_INGEST_ATTEMPTS like
     caption/summary, so a corrupt file can't loop the most expensive stage
     forever and can't silently read as done (#307)."""
-    from bartleby.ingest.writer import MAX_INGEST_ATTEMPTS
-
     monkeypatch.setattr(
         "bartleby.commands.scribe.load_config", _text_pdf_config,
     )
@@ -502,7 +492,7 @@ def test_scribe_caps_parse_retries_and_stops_reparsing(
         conn.close()
 
 
-# ---------- pdfplumber: #309 OCR→VLM fallback, #235 HTML-as-PDF ----------
+# ---------- pdfplumber: #309 OCR→VLM fallback ----------
 
 
 def _mixed_sparse_and_text_pdf(path) -> None:
@@ -548,22 +538,6 @@ def test_convert_degrades_to_vlm_when_ocr_raises(tmp_path, monkeypatch):
     # Non-sparse page is untouched by the OCR failure — still chunks as text.
     assert text_page.content_type == "text"
     assert "plenty of text" in text_page.text.lower()
-
-
-def test_reject_if_html_rejects_html_saved_as_pdf(tmp_path):
-    # The exact NY DPS portal shape from #235: leading CRLF then an HTML page,
-    # saved with a `.pdf` extension by a failed download.
-    src = tmp_path / "ViewDoc.pdf"
-    src.write_bytes(
-        b"\r\n\r\n<!DOCTYPE html>\n<html><body>"
-        b"Either the document does not exists or some problem occured."
-        b"</body></html>"
-    )
-    with pytest.raises(pp.NotAPdfError) as exc:
-        pp.reject_if_html(src)
-    # Actionable reason, not pdfminer's cryptic "No /Root object!".
-    assert "HTML page" in str(exc.value)
-    assert "No /Root object" not in str(exc.value)
 
 
 # ---------- ocr: #309 legible error when tesseract is missing ----------

@@ -15,6 +15,8 @@ from bartleby.db.chunks import insert_finding_chunks
 from bartleby.db.connection import open_db
 from bartleby.db.schema import EMBEDDING_DIM
 from bartleby.ingest import parsers
+from bartleby.ingest.writer import ParsedDocument
+from bartleby.ingest.writer import ParsedImage
 from bartleby.ingest.writer import Writer
 from bartleby.skill_runner import run
 from bartleby.skill_scripts import _tags as tags_helpers
@@ -24,15 +26,14 @@ from bartleby.skill_scripts import merge_tags
 from bartleby.skill_scripts import save_finding
 from bartleby.skill_scripts import save_summary
 from bartleby.skill_scripts import unassign_tag
-import bartleby.config
-import bartleby.project
 
-from tests._skill_fixtures import assert_chunk_tables_consistent  # noqa: F401
+from tests._skill_fixtures import _emb
+from tests._skill_fixtures import assert_chunk_tables_consistent
 from tests._skill_fixtures import mock_embed  # noqa: F401
 from tests._skill_fixtures import project_env  # noqa: F401
-from tests._skill_fixtures import seed_finding_via_main  # noqa: F401
+from tests._skill_fixtures import seed_finding_via_main
 from tests._skill_fixtures import seeded_project  # noqa: F401
-from tests._skill_fixtures import unprefix  # noqa: F401
+from tests._skill_fixtures import unprefix
 
 
 # ---------- skill_save_finding ----------
@@ -107,15 +108,6 @@ def test_save_finding_failure_mid_write_leaves_no_trace(
 # ---------- skill_edit_finding ----------
 
 
-def _seed_finding(seeded_project, tmp_path, capsys, *, body_suffix: str = "") -> dict:
-    """Seed the baseline finding these edit tests assert against ("Original …")."""
-    return seed_finding_via_main(
-        seeded_project, tmp_path, capsys,
-        title="Original title", description="Original description.",
-        body_suffix=body_suffix,
-    )
-
-
 def test_edit_finding_failure_mid_write_leaves_finding_intact(
     seeded_project, tmp_path, capsys, monkeypatch
 ):
@@ -126,7 +118,10 @@ def test_edit_finding_failure_mid_write_leaves_finding_intact(
     independently, leaving the new body saved with zero chunks and stale
     citations. The failure is injected at ``chunks._pack_embedding`` — during
     the chunk insert, after the UPDATE — so it's a true mid-write rollback."""
-    saved = _seed_finding(seeded_project, tmp_path, capsys)
+    saved = seed_finding_via_main(
+        seeded_project, tmp_path, capsys,
+        title="Original title", description="Original description.",
+    )
     finding_id = saved["finding_id"]
     fid = unprefix(finding_id)
     a, b = saved["_chunks"]
@@ -298,31 +293,6 @@ def test_save_summary_failed_replace_preserves_prior_summary_and_chunks(
 # ---------- skill_tags ----------
 
 
-@pytest.fixture
-def stub_embed(monkeypatch):
-    """Make BGE embeddings deterministic without loading the real model.
-
-    We map description text → vector via a tiny hash so that similar inputs
-    produce similar vectors (just enough to drive the conflict check).
-    """
-    def _stub(texts: list[str]) -> list[list[float]]:
-        out = []
-        for t in texts:
-            # Bag-of-words → fingerprint vector. Same words → same vector,
-            # which is what the similarity check needs.
-            vec = [0.0] * EMBEDDING_DIM
-            for word in t.lower().split():
-                idx = (sum(ord(c) for c in word)) % EMBEDDING_DIM
-                vec[idx] += 1.0
-            # L2 normalize so dot product = cosine.
-            norm = sum(v * v for v in vec) ** 0.5 or 1.0
-            out.append([v / norm for v in vec])
-        return out
-    # find_similar_tag imports embed_texts lazily from its source module
-    # (#371), so patch it there rather than on _tags.
-    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", _stub)
-
-
 def _fail_on_sql(monkeypatch, needle: str) -> None:
     """Make every connection the runner opens raise on the first SQL statement
     whose text contains ``needle`` (issue #340 atomicity injection).
@@ -372,7 +342,6 @@ def _assignment_count(project, document_id, tag_id) -> int:
         conn.close()
 
 
-@pytest.mark.usefixtures("stub_embed")
 def test_merge_tags_failure_mid_write_leaves_both_tags_untouched(
     seeded_project, capsys, monkeypatch
 ):
@@ -425,7 +394,6 @@ def test_merge_tags_failure_mid_write_leaves_both_tags_untouched(
         conn.close()
 
 
-@pytest.mark.usefixtures("stub_embed")
 def test_assign_tag_failure_mid_batch_assigns_nothing(
     seeded_project, capsys, monkeypatch
 ):
@@ -465,7 +433,6 @@ def test_assign_tag_failure_mid_batch_assigns_nothing(
     ) == 0
 
 
-@pytest.mark.usefixtures("stub_embed")
 def test_unassign_tag_failure_mid_batch_removes_nothing(
     seeded_project, capsys, monkeypatch
 ):
@@ -518,10 +485,6 @@ def _parse_args(argv):
     p = argparse.ArgumentParser()
     p.add_argument("--project", default=None)
     return p.parse_args(argv)
-
-
-def _emb() -> list[float]:
-    return [0.01 * i for i in range(EMBEDDING_DIM)]
 
 
 def _audit_rows(project, tool_name) -> int:
@@ -608,31 +571,7 @@ def test_mutating_work_that_raises_rolls_back_every_table_but_keeps_audit(
 # ---------- scribe ----------
 
 
-def _emb_scribe(seed: float, n: int) -> list[list[float]]:
-    return [
-        [seed + 0.0001 * i for _ in range(EMBEDDING_DIM)] for i in range(n)
-    ]
-
-
-@pytest.fixture
-def isolated_project(monkeypatch):
-    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
-    projects = bartleby.config.projects_dir()
-    projects.mkdir(parents=True, exist_ok=True)
-
-    # Pin ingest to the inline parse path. These end-to-end tests mock embedder /
-    # converters / providers, and those monkeypatches don't cross into spawned
-    # parse-pool workers — so force max_workers=1 (parse in-process) at the
-    # resolver, which holds even for tests that swap in their own load_config.
-    monkeypatch.setattr(
-        "bartleby.ingest.resolve._resolve_max_workers", lambda *a, **k: 1,
-    )
-
-    bartleby.project.create_project("test_proj")
-    yield projects
-
-
-def test_persist_parse_rolls_back_on_mid_unit_failure(isolated_project, tmp_path):
+def test_persist_parse_rolls_back_on_mid_unit_failure(project_env, tmp_path):
     """persist_parse is one transaction: a failure *after* the documents INSERT
     leaves no trace in documents/chunks/images.
 
@@ -645,10 +584,7 @@ def test_persist_parse_rolls_back_on_mid_unit_failure(isolated_project, tmp_path
     the suite while silently committing a partial parse that reads as complete
     (load-bearing under #254, which writes N+1 documents rows per file).
     """
-    from bartleby.db.chunks import ChunkInput
-    from bartleby.ingest.writer import ParsedDocument, ParsedImage, Writer
-
-    good, bad = _emb_scribe(0.0, 1)[0], [0.1] * (EMBEDDING_DIM + 1)
+    good, bad = _emb(), [0.1] * (EMBEDDING_DIM + 1)
     parsed = ParsedDocument(
         file_hash="atomic", file_name="atomic.pdf",
         archive_path=tmp_path / "atomic.pdf", page_count=1, token_count=2,
@@ -664,7 +600,7 @@ def test_persist_parse_rolls_back_on_mid_unit_failure(isolated_project, tmp_path
         )],
     )
 
-    conn = open_db("test_proj")
+    conn = open_db(project_env)
     try:
         writer = Writer(conn)
         with pytest.raises(ValueError, match="dims"):
@@ -702,30 +638,16 @@ _ANCHORED_FILING = b"""<?xml version="1.0"?>
 """
 
 
-@pytest.fixture
-def edgar_project(monkeypatch):
-    """An isolated SQLite project plus a stub embedder, for the persist tests."""
-    # Namespace isolation is suite-wide via conftest's _isolate_bartleby_home.
-    def fake_embed(texts):
-        return [[0.01 * (i + 1)] * EMBEDDING_DIM for i in range(len(texts))]
-    monkeypatch.setattr("bartleby.ingest.embed.embed_texts", fake_embed)
-
-    bartleby.project.create_project("edgar_proj")
-    return "edgar_proj"
-
-
 def _write(tmp_path, name, content: bytes):
     p = tmp_path / name
     p.write_bytes(content)
     return p
 
 
-def test_persist_parse_split_is_atomic(edgar_project, tmp_path):
+def test_persist_parse_split_is_atomic(project_env, tmp_path):
     """A failure mid-split rolls back the whole unit — no container, no section
     rows, no chunks — so resume (keyed on the container's file_hash) re-parses
     cleanly. The split writes N+1 rows in one transaction (#254/#358)."""
-    from bartleby.db.chunks import ChunkInput
-
     src = _write(tmp_path, "filing.htm", _ANCHORED_FILING)
     parsed = parsers._parse_html_sec2md(
         src, file_hash="container-hash", file_name="filing.htm",
@@ -737,7 +659,7 @@ def test_persist_parse_split_is_atomic(edgar_project, tmp_path):
     )
     parsed.sections[-1].document_chunks.append(bad)
 
-    conn = open_db(edgar_project)
+    conn = open_db(project_env)
     try:
         writer = Writer(conn)
         with pytest.raises(ValueError, match="dims"):
