@@ -229,7 +229,12 @@ A plain tag answers *"which documents are X?"*; a **value-tag** answers *"what i
 - **One value per (document, tag).** A later unambiguous extraction overwrites the prior value.
 - **Manual override:** when the regex can't reach it (odd formatting, a value you read by eye), `assign_tag --tag <name> --value <v> [--chunk-id <id>]` records it directly (cast per the tag's `value_type`).
 - **Read** values via `list_documents --tag <name>` (each row gains a `tag_values` chip) or directly from `read_tags` (which shows the tag's method). Cite a value through its `chunk_id`, never directly — same "reached through a chunk" rule as everything else.
-- **Out of scope here:** extraction from structured/tabular content (do a structured read + `jq`), LLM-based extraction (the method is a deterministic regex), and cross-document roll-up tables.
+- **Roll up** (sum/count/group across a slice) with `list_documents --tag <name>` plus the usual scope flags, then total `tag_values.<name>.value` with `jq` — there is no aggregation script. Stored numbers are normalized, so `tonumber` works. Documents with no value come back `null`: skip them and say how many. Pass `--limit` at least as large as `total` (default 200), or the roll-up silently covers only the first page. Cite the total through the per-document `chunk_id`s, never as a bare number:
+  ```bash
+  bartleby skill list_documents --tag invoice_total --limit 1000 --returning document_id,tag_values \
+    | jq '[.documents[].tag_values.invoice_total | select(.value != null)] | {sum: (map(.value | tonumber) | add), with_value: length, chunk_ids: map(.chunk_id)}'
+  ```
+- **Out of scope here:** extraction from structured/tabular content (do a structured read + `jq`) and LLM-based extraction (the method is a deterministic regex).
 
 ## Memory rules
 
