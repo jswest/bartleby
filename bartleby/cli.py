@@ -70,6 +70,11 @@ def main():
     pd = project_sub.add_parser("delete", help="Delete a project")
     pd.add_argument("name", type=str)
     pd.add_argument("--yes", action="store_true")
+    pren = project_sub.add_parser(
+        "rename", help="Rename a project (the active one unless --project)"
+    )
+    pren.add_argument("new_name", type=str)
+    pren.add_argument("--project", type=str, default=None)
     pup = project_sub.add_parser(
         "upgrade",
         help="Apply additive schema upgrades to bring a project up to date",
@@ -539,6 +544,8 @@ def _project(args, parser):
         project_cmd.info(name=args.name, verify=args.verify)
     elif args.project_command == "delete":
         project_cmd.delete(name=args.name, yes=args.yes)
+    elif args.project_command == "rename":
+        project_cmd.rename(new=args.new_name, old=args.project)
     elif args.project_command == "upgrade":
         project_cmd.upgrade(name=args.name)
     elif args.project_command == "publish":

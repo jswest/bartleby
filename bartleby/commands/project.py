@@ -1,4 +1,4 @@
-"""`bartleby project` — create / list / use / info / delete / upgrade."""
+"""`bartleby project` — create / list / use / info / delete / rename / upgrade."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from bartleby.project import (
     get_project_dir,
     get_project_info,
     list_projects,
+    rename_project,
     set_active_project,
     validate_project_name,
 )
@@ -150,6 +151,25 @@ def _verify(name: str) -> None:
 
     if not all(r.passed for r in results):
         sys.exit(1)
+
+
+def rename(*, new: str, old: str | None) -> None:
+    old = old or get_active_project()
+    if not old:
+        console.error(
+            "No active project. Specify one: "
+            "`bartleby project rename <new> --project <old>`"
+        )
+        sys.exit(1)
+    was_active = get_active_project() == old
+    try:
+        rename_project(old, new)
+    except (ValueError, OSError, apsw.Error) as e:
+        console.error(str(e))
+        sys.exit(1)
+    _console.print(f"[bold green]Renamed project '{old}' → '{new}'[/bold green]")
+    if was_active:
+        _console.print(f"Active project set to: [bold]{new}[/bold]")
 
 
 def upgrade(*, name: str) -> None:
