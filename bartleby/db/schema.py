@@ -17,7 +17,7 @@ invariant and the rest of the project's load-bearing rules.
 # without those structures. That cohort is RE-INGEST-ONLY — it shares a version
 # number with released v8 but not its DDL, so no upgrade step can repair it in
 # place. Released v0.8.x DBs are unaffected; they already have the full v8 shape.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 EMBEDDING_DIM = 768
 
@@ -54,7 +54,11 @@ CREATE TABLE documents (
     parent_document_id INTEGER REFERENCES documents(document_id),
     anchor_id TEXT,
     section_title TEXT,
-    section_order INTEGER
+    section_order INTEGER,
+    -- v12 (#686): the absolute, resolved path of the file handed to `scribe`
+    -- (file_path is the archive copy). NULL = ingested before it was recorded,
+    -- or scrubbed by `project publish`. #254 sections share their container's.
+    source_path TEXT
 );
 
 CREATE TABLE summaries (

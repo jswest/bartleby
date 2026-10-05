@@ -187,6 +187,15 @@ def _upgrade_v10_to_v11(conn: apsw.Connection) -> None:
     )
 
 
+def _upgrade_v11_to_v12(conn: apsw.Connection) -> None:
+    # Schema v12 records where each document came from (#686): `documents`
+    # gains a nullable `source_path`. Purely additive — every pre-upgrade row
+    # keeps it NULL (a truthful "ingested before this was recorded"), so
+    # existing corpora run `bartleby project upgrade` rather than re-ingest.
+    # Keep this DDL in lockstep with db/schema.py.
+    conn.cursor().execute("ALTER TABLE documents ADD COLUMN source_path TEXT")
+
+
 _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     4: _upgrade_v4_to_v5,
     5: _upgrade_v5_to_v6,
@@ -195,6 +204,7 @@ _UPGRADES: dict[int, Callable[[apsw.Connection], None]] = {
     8: _upgrade_v8_to_v9,
     9: _upgrade_v9_to_v10,
     10: _upgrade_v10_to_v11,
+    11: _upgrade_v11_to_v12,
 }
 
 

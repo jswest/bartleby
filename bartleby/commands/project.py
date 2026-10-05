@@ -6,6 +6,7 @@ import sys
 
 import apsw
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Confirm
 from rich.table import Table
 
@@ -18,6 +19,7 @@ from bartleby.project import (
     create_project,
     delete_project,
     get_active_project,
+    get_document_sources,
     get_project_dir,
     get_project_info,
     list_projects,
@@ -69,7 +71,10 @@ def use(*, name: str) -> None:
     _console.print(f"Active project set to: [bold]{name}[/bold]")
 
 
-def info(*, name: str | None, verify: bool = False) -> None:
+_TOP_SOURCE_DIRS = 5
+
+
+def info(*, name: str | None, verify: bool = False, sources: bool = False) -> None:
     name = name or get_active_project()
     if not name:
         console.error(
@@ -119,10 +124,48 @@ def info(*, name: str | None, verify: bool = False) -> None:
                     "Failed units",
                     f"[yellow]{f['total']} incomplete{capped_note}[/yellow]",
                 )
+            r = i["ingest_runs"]
+            if r["count"]:
+                last = r["last_finished"] or "[yellow]in progress / interrupted[/yellow]"
+                table.add_row(
+                    "Ingest runs",
+                    f"{r['count']}  (first started {r['first_started']}, "
+                    f"last finished {last})",
+                )
+            dirs = i["source_dirs"]
+            if dirs:
+                lines = [
+                    f"{n}  {escape(d) if d is not None else 'unrecorded (pre-v12)'}"
+                    for d, n in dirs[:_TOP_SOURCE_DIRS]
+                ]
+                if len(dirs) > _TOP_SOURCE_DIRS:
+                    lines.append(f"… and {len(dirs) - _TOP_SOURCE_DIRS} more")
+                table.add_row("Sources", "\n".join(lines))
         _console.print(table)
+
+    if sources and i is not None and i["has_db"]:
+        _print_sources(i["name"])
 
     if verify:
         _verify(name)
+
+
+def _print_sources(name: str) -> None:
+    """Per-document provenance (#686): one row per top-level document."""
+    table = Table(title="Sources")
+    table.add_column("ID", justify="right")
+    table.add_column("File name")
+    table.add_column("Source path")
+    table.add_column("Ingested at")
+    for d in get_document_sources(name):
+        table.add_row(
+            # Escape: a path like "memo [draft].pdf" would otherwise be eaten
+            # as Rich markup.
+            str(d["document_id"]), escape(d["file_name"]),
+            escape(d["source_path"] or "—"),
+            d["created_at"],
+        )
+    _console.print(table)
 
 
 def _verify(name: str) -> None:
