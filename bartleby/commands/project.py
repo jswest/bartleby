@@ -132,14 +132,16 @@ def info(*, name: str | None, verify: bool = False, sources: bool = False) -> No
                     f"{r['count']}  (first started {r['first_started']}, "
                     f"last finished {last})",
                 )
-            dirs = i["source_dirs"]
-            if dirs:
-                lines = [
-                    f"{n}  {escape(d) if d is not None else 'unrecorded (pre-v12)'}"
-                    for d, n in dirs[:_TOP_SOURCE_DIRS]
-                ]
-                if len(dirs) > _TOP_SOURCE_DIRS:
-                    lines.append(f"… and {len(dirs) - _TOP_SOURCE_DIRS} more")
+            # The unrecorded (NULL) bucket is always shown, pinned last, so it
+            # can't fall into "… and N more" on a mostly-pre-v12 corpus.
+            dirs = [(d, n) for d, n in i["source_dirs"] if d is not None]
+            unrecorded = sum(n for d, n in i["source_dirs"] if d is None)
+            lines = [f"{n}  {escape(d)}" for d, n in dirs[:_TOP_SOURCE_DIRS]]
+            if len(dirs) > _TOP_SOURCE_DIRS:
+                lines.append(f"… and {len(dirs) - _TOP_SOURCE_DIRS} more")
+            if unrecorded:
+                lines.append(f"{unrecorded}  unrecorded (pre-v12)")
+            if lines:
                 table.add_row("Sources", "\n".join(lines))
         _console.print(table)
 
@@ -204,14 +206,13 @@ def rename(*, new: str, old: str | None) -> None:
             "`bartleby project rename <new> --project <old>`"
         )
         sys.exit(1)
-    was_active = get_active_project() == old
     try:
-        rename_project(old, new)
+        moved_active = rename_project(old, new)
     except (ValueError, OSError, apsw.Error) as e:
         console.error(str(e))
         sys.exit(1)
     _console.print(f"[bold green]Renamed project '{old}' → '{new}'[/bold green]")
-    if was_active:
+    if moved_active:
         _console.print(f"Active project set to: [bold]{new}[/bold]")
 
 

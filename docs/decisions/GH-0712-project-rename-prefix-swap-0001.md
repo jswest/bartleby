@@ -9,8 +9,13 @@ path that starts with `<projects>/<old>/archive/` to `<projects>/<new>/archive/`
 one transaction. If the rewrite fails, it moves the directory back. Three choices
 here aren't obvious. (1) The prefix match uses `substr(file_path, 1, n) = ?`, not
 `LIKE`, because project names can contain `_`, which `LIKE` treats as a wildcard.
-The prefix also ends in a separator, so `archive2/…` can't match. Rows outside the
-project's own archive are left alone. (2) The DB is opened with a raw
+The prefix also ends in a separator, so `archive2/…` can't match. After the
+rewrite, any row still outside the new prefix aborts the transaction and the
+directory moves back. Such a row was stored under a different spelling of
+`BARTLEBY_HOME`, such as a symlink or an env override, or belongs to a project
+someone already moved by hand. Without the abort, rename would print success while
+leaving those paths dangling, the silent breakage #712 exists to prevent
+(director's triage, from the critic's sandbox repro). (2) The DB is opened with a raw
 `apsw.Connection` + `_attach`, the same way `share/import_.py` does it, not with
 `open_db`. `open_db` refuses a DB whose stamped schema version doesn't match, but
 the rewrite touches only two long-standing columns. That means a stale corpus can

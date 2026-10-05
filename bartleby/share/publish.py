@@ -170,6 +170,9 @@ def publish_project(name: str, to_url: str, *, client=None) -> dict:
         conn = apsw.Connection(str(copy_db))
         try:
             _attach(conn)
+            # Zero freed cells so the stripped findings/sessions/source paths
+            # don't survive as residue in the published file's free space.
+            conn.cursor().execute("PRAGMA secure_delete = ON")
             strip_session_layer(conn)
             files = gather_files(conn)
         finally:

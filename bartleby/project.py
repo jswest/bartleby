@@ -76,13 +76,14 @@ def delete_project(name: str):
         save_config_field("active_project", None)
 
 
-def rename_project(old: str, new: str):
+def rename_project(old: str, new: str) -> bool:
     """Rename project ``old`` to ``new``: directory, archive paths, active pointer.
 
     ``documents.file_path`` / ``images.file_path`` hold absolute archive paths
     that embed the project name, so after moving the directory their prefix is
     rewritten in one transaction. If that rewrite fails, the directory is moved
-    back and the error re-raised, leaving the project as it was.
+    back and the error re-raised, leaving the project as it was. Returns
+    whether the active-project pointer moved with it.
     """
     validate_project_name(old)
     validate_project_name(new)
@@ -98,27 +99,54 @@ def rename_project(old: str, new: str):
     try:
         db_path = project_db_path(new)
         if db_path.exists():
-            old_prefix = str(old_dir / "archive") + os.sep
-            new_prefix = str(new_dir / "archive") + os.sep
-            conn = apsw.Connection(str(db_path))
-            try:
-                _attach(conn)
-                with conn:
-                    for table in ("documents", "images"):
-                        conn.cursor().execute(
-                            f"UPDATE {table} SET file_path = ? || substr(file_path, ?) "
-                            "WHERE substr(file_path, 1, ?) = ?",
-                            (new_prefix, len(old_prefix) + 1,
-                             len(old_prefix), old_prefix),
-                        )
-            finally:
-                conn.close()
+            _swap_archive_prefix(
+                db_path,
+                str(old_dir / "archive") + os.sep,
+                str(new_dir / "archive") + os.sep,
+            )
     except BaseException:
         new_dir.rename(old_dir)
         raise
 
-    if get_active_project() == old:
-        save_config_field("active_project", new)
+    if get_active_project() != old:
+        return False
+    save_config_field("active_project", new)
+    return True
+
+
+def _swap_archive_prefix(db_path: Path, old_prefix: str, new_prefix: str) -> None:
+    """Rewrite ``old_prefix`` → ``new_prefix`` on every archive ``file_path``.
+
+    Raises (rolling the transaction back) if any row is left outside
+    ``new_prefix`` — e.g. stored under a different spelling of
+    ``BARTLEBY_HOME`` (symlink, env override) — so a rename never reports
+    success while leaving archive paths dangling.
+    """
+    conn = apsw.Connection(str(db_path))
+    try:
+        _attach(conn)
+        with conn:
+            cur = conn.cursor()
+            stray = 0
+            for table in ("documents", "images"):
+                cur.execute(
+                    f"UPDATE {table} SET file_path = ? || substr(file_path, ?) "
+                    "WHERE substr(file_path, 1, ?) = ?",
+                    (new_prefix, len(old_prefix) + 1, len(old_prefix), old_prefix),
+                )
+                stray += cur.execute(
+                    f"SELECT COUNT(*) FROM {table} "
+                    "WHERE substr(file_path, 1, ?) != ?",
+                    (len(new_prefix), new_prefix),
+                ).fetchone()[0]
+            if stray:
+                raise ValueError(
+                    f"{stray} archive path(s) don't start with {old_prefix} "
+                    "(stored under a different BARTLEBY_HOME spelling, or the "
+                    "project was moved by hand); nothing was renamed."
+                )
+    finally:
+        conn.close()
 
 
 def list_projects() -> list[dict]:
