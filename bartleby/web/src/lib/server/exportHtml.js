@@ -38,15 +38,7 @@ exportMarked.use({
 });
 
 // ---------------------------------------------------------------------------
-// Fonts. `bartleby serve` syncs this app's `static/` tree verbatim alongside
-// `src/` (commands/serve.py's `_sync_web`), and `bartleby finding export
-// --html` (GH-0752) reuses that same synced tree through a node entry point —
-// but the two run with different working directories (serve `os.chdir()`s
-// into it; the CLI's node subprocess does not). `import.meta.url` locates this
-// module's own file instead, which sits at a fixed depth under the synced
-// tree (`src/lib/server/exportHtml.js`) in both cases, so three `..` up from
-// here is always the tree's root regardless of cwd or which consumer loaded
-// the module.
+// Fonts, located from this module's path so it doesn't depend on cwd (GH-0752).
 const FONTS_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..', '..', '..', 'static', 'fonts'

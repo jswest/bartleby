@@ -518,61 +518,28 @@ def _export_html(*, finding_id: int, project: str, out: str | None) -> None:
     for one finding (GH-0752), via a small node entry point.
 
     Reuses ``buildFindingExportHtml`` (``bartleby/web/src/lib/server/
-    exportHtml.js``) instead of a second, Python-side builder — same reasoning
-    as GH-0690's web button, now reachable from the CLI too. The node side is
-    reached the same way ``serve`` reaches it: ``_sync_web`` copies/symlinks
-    the UI into ``~/.bartleby/serve`` (running its one-time ``npm install`` if
-    needed — no separate install for this path), and ``BARTLEBY_PROJECT``
-    picks the corpus the same way ``serve --project`` does.
-
-    The output path is resolved to an absolute path *before* the node
-    subprocess runs (whose cwd is the synced UI directory, not the caller's),
-    so "no --out" still means "next to where the .md export would go" rather
-    than inside ``~/.bartleby/serve``.
+    exportHtml.js``) instead of a second, Python-side builder, so the node side
+    owns the file name and the missing-finding case. Python only resolves the
+    target (``--out``, or the cwd as a directory) to an absolute path; node
+    writes there and prints the path it wrote.
     """
-    from bartleby.commands.serve import (
-        WEB_SRC,
-        _is_source_checkout,
-        _needs_install,
-        _require_node,
-        _sync_web,
-    )
-    from bartleby.config import bartleby_dir
+    from bartleby.commands.serve import _require_node, prepare_web
 
     _require_node()
-
-    conn = _open_or_exit(project)
-    try:
-        row = conn.cursor().execute(
-            "SELECT title FROM findings WHERE finding_id = ?", (finding_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        console.error(f"No finding with id {finding_id} in this corpus.")
-        sys.exit(1)
-    title = row[0]
-
-    out_path = (Path(out) if out else Path(f"{_slug(title)}.html")).resolve()
-
-    serve_dir = bartleby_dir() / "serve"
-    _sync_web(WEB_SRC, serve_dir, symlink_src=_is_source_checkout())
-    if _needs_install(serve_dir):
-        console.info("Installing npm dependencies (one-time)…")
-        subprocess.run(["npm", "install"], cwd=serve_dir, check=True)
-
-    entry = serve_dir / "scripts" / "export-finding-html.js"
-    env = dict(os.environ, BARTLEBY_PROJECT=project)
+    _open_or_exit(project).close()  # missing DB / stale schema: same error as .md
+    target = Path(out).resolve() if out else Path.cwd()
+    entry = prepare_web() / "scripts" / "export-finding-html.js"
     result = subprocess.run(
-        ["node", str(entry), str(finding_id), str(out_path)],
-        cwd=serve_dir, env=env,
+        ["node", str(entry), str(finding_id), str(target)],
+        env=dict(os.environ, BARTLEBY_PROJECT=project),
+        stdout=subprocess.PIPE, text=True,
     )
     if result.returncode != 0:
         sys.exit(1)
 
     _console.print(
         f"[bold green]Exported finding #{finding_id}[/bold green] "
-        f"from [cyan]{project}[/cyan] to [cyan]{out_path}[/cyan]"
+        f"from [cyan]{project}[/cyan] to [cyan]{result.stdout.strip()}[/cyan]"
     )
 
 
