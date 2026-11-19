@@ -4,13 +4,16 @@ BARTLEBY_HOME. Each section names the issue it guards.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import sys
 
 import pytest
 
 from bartleby import config
+from bartleby.providers.base import DocumentSummary, VlmDescription
 import bartleby.commands.ready as ready
 
 
@@ -106,6 +109,64 @@ def test_anthropic_pre_4_5_models_keep_temperature_and_skip_effort(monkeypatch, 
     fake = _summarize_with_effort(monkeypatch, model=model, effort="high")
     assert fake.last_call["temperature"] == 0.0
     assert "output_config" not in fake.last_call
+
+
+# ---------- wsjpt: #755 one Jpt built per call leaked sockets ----------
+
+
+class _FakeWsjptJpt:
+    """Stand-in for wsjpt.Jpt: counts constructions, does no I/O."""
+
+    construct_count = 0
+
+    def __init__(self, pydantic_model, model_config=None, custom_instructions=None):
+        _FakeWsjptJpt.construct_count += 1
+        self._pydantic_model = pydantic_model
+
+    def parse(self, input_text=None, binary_files=None):
+        if self._pydantic_model is DocumentSummary:
+            return DocumentSummary(title="T", description="D", text="Body")
+        return VlmDescription(description="desc", notes="")
+
+
+def _install_fake_wsjpt(monkeypatch):
+    _FakeWsjptJpt.construct_count = 0
+    fake_module = SimpleNamespace(Jpt=_FakeWsjptJpt, ModelConfig=lambda **kw: kw)
+    monkeypatch.setitem(sys.modules, "wsjpt", fake_module)
+
+
+def test_wsjpt_jpt_built_once_and_reused_across_calls(monkeypatch):
+    # #755: WsjptProvider built a fresh Jpt (and its genai.Client, i.e. open
+    # sockets) on every summarize/classify/analyze_image call. Thousands of
+    # caption calls in one scribe run piled up past the fd limit until the
+    # process hit EMFILE. A Jpt for a given (schema, model, instructions) must
+    # be built once and reused.
+    _install_fake_wsjpt(monkeypatch)
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    provider = WsjptProvider()
+    for _ in range(5):
+        provider.summarize("doc text", model="fast", temperature=0.0)
+    for _ in range(5):
+        provider.analyze_image(b"bytes", model="fast", temperature=0.0)
+
+    assert _FakeWsjptJpt.construct_count == 2  # one per (schema, model, instructions)
+
+
+def test_wsjpt_jpt_shared_safely_across_threads(monkeypatch):
+    # Caption and summarize both run calls through a 4-thread pool; concurrent
+    # calls for the same key must not race into building more than one Jpt.
+    _install_fake_wsjpt(monkeypatch)
+    from bartleby.providers.wsjpt import WsjptProvider
+
+    provider = WsjptProvider()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(
+            lambda _: provider.summarize("doc text", model="fast", temperature=0.0),
+            range(20),
+        ))
+
+    assert _FakeWsjptJpt.construct_count == 1
 
 
 # ---------- ready: #206 stale ready-marker ----------
