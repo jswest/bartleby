@@ -25,27 +25,58 @@ isn't byte-identical to the source, in three ways:
 
 So matching runs **rendered text against rendered text**. The passage goes
 through the same `render` as the source: `marked.parse` for markdown, an
-escaped `<pre>` for text. Then both sides are compared as lowercased word
-sequences (`[\p{L}\p{N}]+`), which ignores whitespace and punctuation. The
-joined needle isn't padded at its ends, so a fragment first word matches the
-tail of a word and a fragment last word matches its head. If the whole chunk
-doesn't match, leading lines are dropped one at a time, at most six (one per
-heading level), to peel off the heading path. The first hit wins. No match
-means no highlight, and the pane opens at the top as before. A chunk whose
-text docling reorders (table serializations, for example) won't match, and
-that's accepted.
+escaped `<pre>` for text. Both sides are read with `textNodes(root,
+{ forMatch: true })`, which puts a `\n` between text nodes split by a `<br>`
+or a block boundary (otherwise `one<br>two` reads as "onetwo"), and skips text
+inside raw-text elements (`<style>`, `<textarea>`, `<title>`, `<script>`,
+`<noscript>`, …), where a `<mark>` would re-parse as literal text.
+
+`locatePassage` then compares them as word sequences (`[\p{L}\p{N}]+`),
+ignoring whitespace, punctuation and case. It's one case-insensitive regex
+built from the passage's words (`w1[^\p{L}\p{N}]+w2…`, flags `iu`), run over
+the source text. That has two consequences. Nothing is materialised per
+source word. On a 20 MB source the match takes a few milliseconds, where the
+old word array took about 0.4 s and hundreds of MB of heap on each click. The
+whole highlight, including parsing and serialising the body, takes about 70 ms
+in Chromium, so there's no size cap. And the offsets are the
+source's own: lowercasing first would shift them, because `İ` lowercases to
+two code units. The regex isn't anchored at its ends, so a fragment first word
+matches the tail of a word and a fragment last word matches its head. If the
+whole chunk doesn't match, leading lines are dropped one at a time, at most
+six (one per heading level), to peel off the heading path. The first hit wins.
+
+**Every attempt needs at least 5 words and at least half the chunk's words.**
+Without that floor, the fallback dropped lines until even a one-word remainder
+matched. A chunk `H1\nH2\nH3\n5` highlighted a stray "5", and a fragment
+`he` matched inside "The". A short needle recurs by chance and the first
+occurrence wins, so a short match is likely the wrong place. Five words, with
+the end words possibly fragments, leaves at least three exact interior words.
+The half-the-chunk rule keeps dropping limited to what it's for, peeling a
+short heading path off a long body. If peeling would leave less than half the
+chunk, the remainder isn't the cited passage any more. Failing either rule
+means no highlight, and the pane opens at the top as before. A missed
+highlight is far better than a confidently wrong one. A chunk whose text
+docling reorders (table serializations, for example) won't match, and that's
+accepted.
 
 **Inserting the mark.** For markdown the mark has to survive rendering, so it
 goes in *after* rendering. `markPassage` (in `viewerDoc.js`) parses the rendered
-body into a `<template>`, walks its text nodes, and wraps the matched span in
-`<mark class="cite">`. The span can cross elements, so there is one mark per
-text node it touches. Whitespace-only nodes are skipped, because a `<mark>`
+body into a `<template>`, walks its text nodes with `textNodes`, and wraps the
+matched span in `<mark class="cite">`. The span can cross elements, so there
+is one mark per text node it touches. Whitespace-only nodes are skipped, because a `<mark>`
 between table rows would be foster-parented out of the table. The `.txt`
 literal-escape path from GH-0680 is unchanged: the mark wraps text nodes of
 the already-escaped `<pre>`, so nothing is ever interpreted. The finding page
 renders the source client-side, so this needs only the browser's DOM.
 `wrapViewerDocument`'s signature is unchanged, and the HTML export doesn't
 highlight.
+
+`textNodes` is shared with the finding page's annotation highlighting (#734),
+which uses it in its default plain mode: no separators and no filter. That
+mode's `text` is exactly the body's `textContent`, which is what
+`Range.toString()` and the annotation round-trip's offsets are measured
+against. Separators or skipped nodes there would make the live text differ
+from the round-trip text, and every annotation highlight would silently drop.
 
 **Scrolling without a script: `scroll-initial-target: nearest`** (CSS Scroll
 Snap 2, Chromium 133+). It's set on a zero-size `inline-block` `.cite-anchor`

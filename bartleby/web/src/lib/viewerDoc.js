@@ -62,39 +62,73 @@ export function wrapViewerDocument(inner) {
 // made every <pre> one, so a .txt source never scrolled; pre-wrap and
 // overflow-wrap already keep its lines inside the pane).
 
-const WORD = /[\p{L}\p{N}]+/gu;
-const wordKey = (words) => words.map((m) => m[0].toLowerCase()).join(" ");
+// A root's text nodes, each with its offset into their concatenation. Plain
+// (the default), `text` is exactly the root's textContent / Range.toString(),
+// which the finding page's annotation offsets depend on. With `forMatch`, the
+// passage matcher's view instead: text inside raw-text elements (<style>,
+// <textarea>, <title>, …) is skipped, since a <mark> there re-parses as
+// literal text, and a "\n" is put between nodes split by a <br> or a block
+// boundary, so `one<br>two` reads as two words rather than "onetwo". That
+// "\n" belongs to no node, so no mark ever covers it.
+const RAW_TEXT = new Set(["script", "style", "textarea", "title", "noscript", "xmp", "iframe", "noembed", "noframes", "plaintext"]);
+const BLOCK = /^(address|article|aside|blockquote|caption|dd|details|div|dl|dt|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)$/;
+export function textNodes(root, { forMatch = false } = {}) {
+  const walker = forMatch
+    ? document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (RAW_TEXT.has(n.localName) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      })
+    : document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const blockOf = (n) => {
+    while ((n = n.parentNode) && n !== root && !BLOCK.test(n.localName));
+    return n;
+  };
+  const nodes = [];
+  let text = "";
+  let gap = false;
+  let block = null;
+  while (walker.nextNode()) {
+    const n = walker.currentNode;
+    if (n.nodeType !== Node.TEXT_NODE) {
+      if (n.localName === "br") gap = true;
+      continue;
+    }
+    if (forMatch) {
+      const b = blockOf(n);
+      if (gap || b !== block) text += text && "\n";
+      gap = false;
+      block = b;
+    }
+    nodes.push({ node: n, start: text.length });
+    text += n.data;
+  }
+  return { nodes, text };
+}
 
 // [from, to) of `passage` in `text`, or null. Chunk text isn't byte-identical
 // to the source (CRLF is folded at ingest, and line breaks and spacing
-// differ), so both sides are compared as word sequences, ignoring whitespace
-// and punctuation. The .txt chunker cuts at character offsets, so a chunk's
-// first and last words may be fragments: the search isn't padded at the ends,
-// so the first word can match a word's tail and the last word its head.
-// Docling prefixes each chunk with its heading path, one line per heading,
-// and those headings aren't contiguous in the source, so if the whole chunk
-// doesn't match, leading lines are dropped one at a time (at most six, one
-// per heading level).
-function locatePassage(text, passage) {
-  const hay = [...text.matchAll(WORD)];
-  const hayKey = wordKey(hay);
-  const starts = []; // offset of each hay word in hayKey
-  let pos = 0;
-  for (const m of hay) {
-    starts.push(pos);
-    pos += m[0].toLowerCase().length + 1;
-  }
-  // hayKey offset → text offset, via the word it falls in.
-  const toText = (at) => {
-    const i = starts.findLastIndex((st) => st <= at);
-    return hay[i].index + (at - starts[i]);
-  };
-  const lines = passage.split("\n");
+// differ), so both sides are compared as word sequences, ignoring whitespace,
+// punctuation and case. That's one regex over `text`, built from the passage's
+// words, so nothing is materialised per source word and the offsets are the
+// source's own (lowercasing first would shift them: `İ` → `i̇`). The .txt
+// chunker cuts at character offsets, so a chunk's first and last words may be
+// fragments: the regex isn't anchored at its ends, so the first word can
+// match a word's tail and the last word its head. Docling prefixes each chunk
+// with its heading path, one line per heading, and those headings aren't
+// contiguous in the source, so if the whole chunk doesn't match, leading lines
+// are dropped one at a time (at most six, one per heading level). Every
+// attempt needs at least MIN_WORDS words and at least half the chunk's words:
+// a shorter needle recurs by chance, the first occurrence wins, and a wrong
+// highlight is worse than none.
+const WORD = /[\p{L}\p{N}]+/gu;
+const MIN_WORDS = 5;
+export function locatePassage(text, passage) {
+  const lines = passage.split("\n").map((l) => l.match(WORD)).filter(Boolean);
+  const min = Math.max(MIN_WORDS, Math.ceil(lines.flat().length / 2));
   for (let drop = 0; drop < lines.length && drop <= 6; drop++) {
-    const need = wordKey([...lines.slice(drop).join("\n").matchAll(WORD)]);
-    if (!need) break;
-    const at = hayKey.indexOf(need);
-    if (at >= 0) return [toText(at), toText(at + need.length - 1) + 1];
+    const words = lines.slice(drop).flat();
+    if (words.length < min) break;
+    const m = new RegExp(words.join("[^\\p{L}\\p{N}]+"), "iu").exec(text);
+    if (m) return [m.index, m.index + m[0].length];
   }
   return null;
 }
@@ -110,15 +144,9 @@ function locatePassage(text, passage) {
 export function markPassage(html, passageHtml) {
   const tpl = document.createElement("template");
   tpl.innerHTML = passageHtml;
-  const passage = tpl.content.textContent;
+  const passage = textNodes(tpl.content, { forMatch: true }).text;
   tpl.innerHTML = html;
-  const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
-  const nodes = [];
-  let text = "";
-  while (walker.nextNode()) {
-    nodes.push({ node: walker.currentNode, start: text.length });
-    text += walker.currentNode.data;
-  }
+  const { nodes, text } = textNodes(tpl.content, { forMatch: true });
   const span = locatePassage(text, passage);
   if (!span) return html;
   const [from, to] = span;
