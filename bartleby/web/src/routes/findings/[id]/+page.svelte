@@ -502,7 +502,7 @@
   </article>
 
   <aside class="viewer">
-    <SourceViewer fileName={active?.file_name} src={activeUrl} />
+    <SourceViewer fileName={active?.file_name} src={activeUrl} passage={active?.text} />
   </aside>
 </div>
 

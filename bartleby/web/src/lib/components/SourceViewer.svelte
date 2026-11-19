@@ -1,7 +1,8 @@
 <script>
   import { marked } from "marked";
   import { escapeHtml } from "$lib/format.js";
-  import { wrapViewerDocument, RE_MARKDOWN, RE_TEXT, RE_PDF } from "$lib/viewerDoc.js";
+  import { browser } from "$app/environment";
+  import { wrapViewerDocument, markPassage, RE_MARKDOWN, RE_TEXT, RE_PDF } from "$lib/viewerDoc.js";
 
   // The right-hand source pane, shared by /findings/[id] and /documents/[id].
   // Dispatches on file type: markdown renders to a sandboxed iframe (below),
@@ -10,10 +11,12 @@
   // viewer, everything else is a sandboxed raw-file iframe. `src` is the /files
   // URL; `sourceText` is pre-loaded source text (SSR path) — when absent for a
   // markdown/text file, the text is fetched from `src`. With no `src` (and no
-  // sourceText) the empty placeholder shows.
+  // sourceText) the empty placeholder shows. `passage` (a cited chunk's text)
+  // is highlighted in an inline source, which opens scrolled to it (GH-0754).
   export let fileName = null;
   export let src = null;
   export let sourceText = null;
+  export let passage = null;
 
   $: isMarkdown = RE_MARKDOWN.test(fileName ?? "");
   // Plain text stays literal — never routed through marked. marked runs with
@@ -65,12 +68,9 @@
   // *only* control that stops passive remote subresource loads — a
   // tracking-pixel <img> in untrusted source markdown, which DOMPurify keeps,
   // would otherwise beacon the host's IP on view.
-  $: srcdoc =
-    text == null
-      ? null
-      : isMarkdown
-        ? wrapViewerDocument(marked.parse(text))
-        : wrapViewerDocument(`<pre>${escapeHtml(text)}</pre>`);
+  $: render = (s) => (isMarkdown ? marked.parse(s) : `<pre>${escapeHtml(s)}</pre>`);
+  $: inner = text == null ? null : render(text);
+  $: srcdoc = inner == null ? null : wrapViewerDocument(passage && browser ? markPassage(inner, render(passage)) : inner);
 </script>
 
 {#if isInline}
