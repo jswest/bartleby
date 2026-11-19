@@ -55,14 +55,11 @@ class WsjptProvider:
         self._api_key = os.environ.get("GEMINI_API_KEY") or None
         # Each Jpt.__init__ builds a fresh genai.Client (open sockets); building
         # one per call piled up past the OS fd limit on long scribe runs (#755).
-        # Cache and reuse one Jpt per (schema, model, instructions) — the same
-        # precedent as the Anthropic/OpenAI/Ollama providers building one client
-        # in __init__. Safe to share across the caption/summarize thread pools:
-        # bartleby's schemas never declare AutoTag fields, so the only per-call
-        # instance state wsjpt mutates (last_parse_duration, last_retry_count,
-        # AutoTag pools) is either unused by bartleby or never touched; the
-        # actual async work already serializes onto wsjpt's single background
-        # event loop (wsjpt._background_loop) regardless of how many Jpts exist.
+        # Cache one Jpt per (schema, model, instructions), as the other providers
+        # build one client in __init__. Shared across the caption/summarize pools:
+        # calls interleave on wsjpt's single background loop, and the only
+        # per-call instance state (last_parse_duration, last_retry_count) is
+        # never read by bartleby (it can mislabel wsjpt's own history rows).
         self._jpt_cache: dict[tuple, object] = {}
         self._jpt_cache_lock = threading.Lock()
 
@@ -112,18 +109,14 @@ class WsjptProvider:
         custom_instructions: str | None,
     ):
         key = (schema, model, custom_instructions)
-        jpt = self._jpt_cache.get(key)
-        if jpt is not None:
-            return jpt
         with self._jpt_cache_lock:
             jpt = self._jpt_cache.get(key)
             if jpt is None:
-                jpt = self._Jpt(
+                jpt = self._jpt_cache[key] = self._Jpt(
                     schema,
                     model_config=self._model_config(model),
                     custom_instructions=custom_instructions,
                 )
-                self._jpt_cache[key] = jpt
             return jpt
 
     def _model_config(self, model: str):

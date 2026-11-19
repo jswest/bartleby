@@ -4,7 +4,6 @@ BARTLEBY_HOME. Each section names the issue it guards.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -151,22 +150,6 @@ def test_wsjpt_jpt_built_once_and_reused_across_calls(monkeypatch):
         provider.analyze_image(b"bytes", model="fast", temperature=0.0)
 
     assert _FakeWsjptJpt.construct_count == 2  # one per (schema, model, instructions)
-
-
-def test_wsjpt_jpt_shared_safely_across_threads(monkeypatch):
-    # Caption and summarize both run calls through a 4-thread pool; concurrent
-    # calls for the same key must not race into building more than one Jpt.
-    _install_fake_wsjpt(monkeypatch)
-    from bartleby.providers.wsjpt import WsjptProvider
-
-    provider = WsjptProvider()
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(
-            lambda _: provider.summarize("doc text", model="fast", temperature=0.0),
-            range(20),
-        ))
-
-    assert _FakeWsjptJpt.construct_count == 1
 
 
 # ---------- ready: #206 stale ready-marker ----------

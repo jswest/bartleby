@@ -24,13 +24,14 @@ source (`jpt.py`, `_background_loop.py`), not just assumed:
 - `Jpt.parse()` runs its async work via `wsjpt._background_loop.run_sync`,
   which submits every coroutine — from every `Jpt` instance, in the whole
   process — onto one lazily-started, module-global background event loop
-  thread. Concurrent `parse()` calls from bartleby's thread pool were already
-  serializing onto that single loop before this change; sharing a `Jpt`
-  instance adds no new concurrency surface beyond what wsjpt already imposes.
+  thread. Concurrent `parse()` calls from bartleby's thread pool interleave as
+  coroutines on that one loop (they don't serialize), and the shared
+  `genai` async client stays bound to it — safe for concurrent requests.
 - `Jpt` does carry per-call mutable instance state (`last_parse_duration`,
   `last_retry_count`, and a set of `_auto_tag_*` dicts mutated during
   AutoTag-field processing). Bartleby never reads `last_parse_duration` or
-  `last_retry_count`, so races on those are inert. The `_auto_tag_*` state is
+  `last_retry_count`, so races on those are inert for bartleby — though wsjpt's
+  own `parse_history` rows can record another call's duration/retry count. The `_auto_tag_*` state is
   only touched when the parsed Pydantic model declares AutoTag-annotated
   fields (`wsjpt.autotag.discover_auto_tag_fields`); bartleby's schemas
   (`DocumentSummary`, `VlmDescription`, and the tag-classification schemas in

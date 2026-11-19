@@ -81,5 +81,6 @@ bartleby = [
     "web/vite.config.js",
     "web/src/**/*",
     "web/static/**/*",
+    "web/scripts/**/*",
     "skill/*",
 ]
