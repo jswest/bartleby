@@ -36,7 +36,9 @@ Three subcommands:
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -511,14 +513,56 @@ def delete_annotation_cmd(*, annotation_id: int, project: str | None) -> None:
     print(f"Deleted annotation:{annotation_id}")
 
 
-def export(*, finding_id: int, project: str | None, out: str | None) -> None:
-    """Emit a self-describing ``.md`` artifact for one finding.
+def _export_html(*, finding_id: int, project: str, out: str | None) -> None:
+    """Write the self-contained HTML ``serve``'s "Save as HTML" button saves
+    for one finding (GH-0752), via a small node entry point.
+
+    Reuses ``buildFindingExportHtml`` (``bartleby/web/src/lib/server/
+    exportHtml.js``) instead of a second, Python-side builder, so the node side
+    owns the file name and the missing-finding case. Python only resolves the
+    target (``--out``, or the cwd as a directory) to an absolute path; node
+    writes there and prints the path it wrote.
+    """
+    from bartleby.commands.serve import _require_node, prepare_web
+
+    _require_node()
+    _open_or_exit(project).close()  # missing DB / stale schema: same error as .md
+    if out and out.endswith(("/", os.sep)) and not Path(out).is_dir():
+        # resolve() drops the trailing slash, so node would write a file there.
+        console.error(f"--out directory does not exist: {out}")
+        sys.exit(1)
+    target = Path(out).resolve() if out else Path.cwd()
+    entry = prepare_web() / "scripts" / "export-finding-html.js"
+    result = subprocess.run(
+        ["node", str(entry), str(finding_id), str(target)],
+        env=dict(os.environ, BARTLEBY_PROJECT=project),
+        stdout=subprocess.PIPE, text=True,
+    )
+    if result.returncode != 0:
+        sys.exit(1)
+
+    _console.print(
+        f"[bold green]Exported finding #{finding_id}[/bold green] "
+        f"from [cyan]{project}[/cyan] to [cyan]{result.stdout.strip()}[/cyan]"
+    )
+
+
+def export(
+    *, finding_id: int, project: str | None, out: str | None, html: bool = False,
+) -> None:
+    """Emit a self-describing ``.md`` artifact for one finding, or ``--html``.
 
     The artifact carries everything ``import`` needs to stand alone: YAML
     front-matter (title/description + provenance) and the body with corpus
     citations rewritten inline as inert ``[corpus: …]`` markers.
+
+    ``--html`` (GH-0752) writes the same self-contained file ``serve``'s
+    "Save as HTML" button saves instead — see ``_export_html``.
     """
     corpus = _corpus_name(project)
+    if html:
+        _export_html(finding_id=finding_id, project=corpus, out=out)
+        return
     conn = _open_or_exit(corpus)
     try:
         finding = _read_finding_for_export(conn, finding_id)

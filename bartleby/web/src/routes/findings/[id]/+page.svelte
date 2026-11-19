@@ -10,6 +10,7 @@
   import { browser } from "$app/environment";
   import { CHUNK_ICON } from "$lib/icons.js";
   import { slugify } from "$lib/format.js";
+  import { textNodes } from "$lib/viewerDoc.js";
 
   export let data;
 
@@ -120,17 +121,9 @@
   const annotationRanges = new Map();
 
   // The body's text nodes with their offsets into the concatenated text —
-  // the same string Range.toString() yields over the body.
-  function bodyText() {
-    const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    let text = "";
-    while (walker.nextNode()) {
-      nodes.push({ node: walker.currentNode, start: text.length });
-      text += walker.currentNode.data;
-    }
-    return { nodes, text };
-  }
+  // the same string Range.toString() yields over the body. Plain mode (no
+  // forMatch): annotation offsets need exactly that string.
+  const bodyText = () => textNodes(bodyEl);
 
   function rangeAt(nodes, from, to) {
     const point = (pos, isEnd) => {
@@ -502,7 +495,7 @@
   </article>
 
   <aside class="viewer">
-    <SourceViewer fileName={active?.file_name} src={activeUrl} />
+    <SourceViewer fileName={active?.file_name} src={activeUrl} passage={active?.text} />
   </aside>
 </div>
 

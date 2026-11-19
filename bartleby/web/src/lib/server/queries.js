@@ -44,6 +44,7 @@ export function getFinding(findingId) {
 // can render a link straight to the archived PDF at the right page.
 // Image chunks pull their page from document_images (image can appear on
 // different pages in different documents — take the lowest-doc, lowest-page).
+// `text` is the chunk's own text, which the source pane highlights (GH-0754).
 // source_kind/source_id ride along unchanged from `chunks` — the live finding
 // view ignores them, but the HTML export (GH-0690) needs source_kind to
 // dispatch embedding (PDF/text/markdown/image) and source_id as the image_id
@@ -51,7 +52,7 @@ export function getFinding(findingId) {
 function getCitations(findingId) {
   const { db } = getDb();
   const rows = db.prepare(`
-    SELECT fc.chunk_id, c.source_kind, c.source_id, c.page_number
+    SELECT fc.chunk_id, c.source_kind, c.source_id, c.page_number, c.text
     FROM finding_citations fc
     JOIN chunks c USING (chunk_id)
     WHERE fc.finding_id = ?
@@ -63,6 +64,7 @@ function getCitations(findingId) {
     chunk_id: r.chunk_id,
     source_kind: r.source_kind,
     source_id: r.source_id,
+    text: r.text,
     ...resolved[i]
   }));
 }

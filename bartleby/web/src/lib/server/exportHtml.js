@@ -10,6 +10,7 @@
 // is a hand-copied snapshot of app.css rather than a shared import.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
 import { getFinding, getDocumentFilePath, getImageFilePath } from './queries.js';
@@ -37,12 +38,11 @@ exportMarked.use({
 });
 
 // ---------------------------------------------------------------------------
-// Fonts. `bartleby serve` always runs the vite DEV server out of
-// ~/.bartleby/serve (commands/serve.py's _sync_web copies/symlinks this app's
-// `static/` tree verbatim alongside `src/`, then `os.chdir`s there before
-// exec) — so `static/fonts/` is a stable process.cwd()-relative path in the
-// one way this app is actually run.
-const FONTS_DIR = path.join(process.cwd(), 'static', 'fonts');
+// Fonts, located from this module's path so it doesn't depend on cwd (GH-0752).
+const FONTS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..', '..', '..', 'static', 'fonts'
+);
 
 // Mirrors fonts.css's six @font-face declarations exactly (family, weight
 // range, style) — only the `src` changes, from a `/fonts/...` URL to a base64
