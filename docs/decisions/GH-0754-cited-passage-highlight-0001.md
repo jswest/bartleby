@@ -38,7 +38,11 @@ the source text. That has two consequences. Nothing is materialised per
 source word. On a 20 MB source the match takes a few milliseconds, where the
 old word array took about 0.4 s and hundreds of MB of heap on each click. The
 whole highlight, including parsing and serialising the body, takes about 70 ms
-in Chromium, so there's no size cap. And the offsets are the
+in Chromium, so there's no size cap. The cost is source length × passage
+length when a passage nearly matches everywhere and then misses. A
+repetitive table chunk that misses its zero-filled source can block for about a
+second, which is accepted. A regex too long for V8 to compile returns no
+highlight. And the offsets are the
 source's own: lowercasing first would shift them, because `İ` lowercases to
 two code units. The regex isn't anchored at its ends, so a fragment first word
 matches the tail of a word and a fragment last word matches its head. If the

@@ -527,6 +527,10 @@ def _export_html(*, finding_id: int, project: str, out: str | None) -> None:
 
     _require_node()
     _open_or_exit(project).close()  # missing DB / stale schema: same error as .md
+    if out and out.endswith(("/", os.sep)) and not Path(out).is_dir():
+        # resolve() drops the trailing slash, so node would write a file there.
+        console.error(f"--out directory does not exist: {out}")
+        sys.exit(1)
     target = Path(out).resolve() if out else Path.cwd()
     entry = prepare_web() / "scripts" / "export-finding-html.js"
     result = subprocess.run(

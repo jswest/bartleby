@@ -127,7 +127,12 @@ export function locatePassage(text, passage) {
   for (let drop = 0; drop < lines.length && drop <= 6; drop++) {
     const words = lines.slice(drop).flat();
     if (words.length < min) break;
-    const m = new RegExp(words.join("[^\\p{L}\\p{N}]+"), "iu").exec(text);
+    let m;
+    try {
+      m = new RegExp(words.join("[^\\p{L}\\p{N}]+"), "iu").exec(text);
+    } catch {
+      return null; // a very long passage can overflow V8's regex compiler
+    }
     if (m) return [m.index, m.index + m[0].length];
   }
   return null;
