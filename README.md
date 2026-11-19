@@ -174,6 +174,7 @@ Run `bartleby serve` for a local web UI over the corpus and findings — see [`b
 ```
 bartleby finding read finding:<N>              # render to stdout as Markdown (--json, --render)
 bartleby finding export finding:<N>            # writes <slug>.md (or pass --out PATH)
+bartleby finding export finding:<N> --html      # writes <slug>.html instead (needs node + npm)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 ```
 
@@ -289,6 +290,7 @@ Read, export, import, or annotate a single finding out of band.
 ```
 bartleby finding read finding:<N>              # render to stdout as Markdown (--json, --render)
 bartleby finding export finding:<N>            # writes <slug>.md (or pass --out PATH)
+bartleby finding export finding:<N> --html      # writes <slug>.html instead (needs node + npm)
 bartleby finding import path/to/finding.md      # into the active project (or --project)
 bartleby finding annotate finding:<N> --note "…" [--quote "<exact text>"] [--chunk-id chunk:<N>]
 bartleby finding annotations finding:<N>        # list the notes on a finding
@@ -296,11 +298,11 @@ bartleby finding delete-annotation annotation:<N>
 ```
 
 - `finding read` is the read-only, terminal-facing companion: it renders one finding to stdout as Markdown — title, provenance subtitle, and the body with citations resolved *live against the current corpus* into numbered footnotes (`† file · p.N`, `‡ source no longer available`, `§` for external refs). Pipe it to a pager (`| less`, `| glow`) or pass `--render` to pretty-print in place; `--json` emits the raw finding. It resolves live rather than baking inert markers, so it's for reading here, not sharing elsewhere.
-- `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus.
+- `finding export` writes a self-describing Markdown artifact: YAML front matter (title, description, source corpus, original finding id, export date) followed by the body, with corpus citations rewritten as inert `[corpus: <file> · p.<N>]` markers so it stands alone without the corpus. `--html` writes the fully rendered artifact instead — the same self-contained file `serve`'s **Save as HTML** button saves for that finding, fonts and cited sources embedded, no server or network needed to open it. It needs `node`/`npm` on `PATH` (the same one-time sync and install `serve` does) and fails with `serve`'s own message when they're missing.
 - `finding annotate` leaves a human note on a finding — on the whole finding, or pinned to an exact stretch of its text with `--quote` (add `--quote-prefix` / `--quote-suffix` when the phrase repeats), optionally pointing at a chunk with `--chunk-id`. Use it to record that an assertion is wrong without rewriting the finding; `finding read` renders anchored notes as `[✎N]` markers plus a trailing *Annotations* section, and `finding export` carries the section along. Agents see the same notes through `read_finding`, where a human note outranks the finding text.
 - `finding import` parses such an artifact into a project through the normal finding write path, prepending the provenance as a header line. Imported citations stay inert — never re-resolved to local chunk ids — and the finding then renders like any other local one.
 
-Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use the **Save as HTML** button in [`bartleby serve`](#bartleby-serve) instead.
+Together, `export`/`import` are the lightweight, no-S3 alternative to `bartleby project publish`/`import` for handing off one finding. For a fully *rendered* hand-off — the web view itself, with fonts and cited sources embedded in one HTML file — use `finding export --html`, or the **Save as HTML** button in [`bartleby serve`](#bartleby-serve); both write the identical file.
 
 ### `bartleby scribe`
 

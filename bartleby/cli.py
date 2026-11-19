@@ -143,7 +143,12 @@ def main():
     fex.add_argument("--project", type=str, default=None)
     fex.add_argument(
         "--out", type=str, default=None, metavar="PATH",
-        help="Output path (default: <slugified-title>.md in the cwd).",
+        help="Output path (default: <slugified-title>.md, or .html with --html, in the cwd).",
+    )
+    fex.add_argument(
+        "--html", action="store_true",
+        help="Write the same self-contained HTML the serve 'Save as HTML' "
+             "button saves, instead of the .md artifact. Needs node + npm.",
     )
 
     fan = finding_sub.add_parser(
@@ -577,6 +582,7 @@ def _finding(args, parser):
     elif args.finding_command == "export":
         finding_cmd.export(
             finding_id=args.finding_id, project=args.project, out=args.out,
+            html=args.html,
         )
     elif args.finding_command == "annotate":
         finding_cmd.annotate(

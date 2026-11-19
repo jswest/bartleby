@@ -10,6 +10,7 @@
 // is a hand-copied snapshot of app.css rather than a shared import.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Marked } from 'marked';
 import DOMPurify from 'isomorphic-dompurify';
 import { getFinding, getDocumentFilePath, getImageFilePath } from './queries.js';
@@ -37,12 +38,19 @@ exportMarked.use({
 });
 
 // ---------------------------------------------------------------------------
-// Fonts. `bartleby serve` always runs the vite DEV server out of
-// ~/.bartleby/serve (commands/serve.py's _sync_web copies/symlinks this app's
-// `static/` tree verbatim alongside `src/`, then `os.chdir`s there before
-// exec) — so `static/fonts/` is a stable process.cwd()-relative path in the
-// one way this app is actually run.
-const FONTS_DIR = path.join(process.cwd(), 'static', 'fonts');
+// Fonts. `bartleby serve` syncs this app's `static/` tree verbatim alongside
+// `src/` (commands/serve.py's `_sync_web`), and `bartleby finding export
+// --html` (GH-0752) reuses that same synced tree through a node entry point —
+// but the two run with different working directories (serve `os.chdir()`s
+// into it; the CLI's node subprocess does not). `import.meta.url` locates this
+// module's own file instead, which sits at a fixed depth under the synced
+// tree (`src/lib/server/exportHtml.js`) in both cases, so three `..` up from
+// here is always the tree's root regardless of cwd or which consumer loaded
+// the module.
+const FONTS_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..', '..', '..', 'static', 'fonts'
+);
 
 // Mirrors fonts.css's six @font-face declarations exactly (family, weight
 // range, style) — only the `src` changes, from a `/fonts/...` URL to a base64
